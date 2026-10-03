@@ -725,6 +725,47 @@ describe('V2RiskGate', () => {
         target: 1,
       }),
     ).toThrow(/no rearm for AAPL at qty 0/);
+
+    const replace = gate().approveStopReplace({
+      book: primary,
+      held,
+      clientOrderId: 's1',
+      stop: 21,
+      target: 18,
+    });
+    expect(replace).toEqual({
+      kind: 'replace_stop',
+      approvalId: 'replace_stop:s1:4',
+      clientOrderId: 's1',
+      bookId: 'debate/primary',
+      bookVariant: 'primary',
+      venue: 'alpaca',
+      instrument: 'AAPL',
+      side: 'buy',
+      size: 4,
+      entryClientOrderId: 'c0',
+      stop: 21,
+      target: 18,
+    });
+    expect(isRiskApproved(replace)).toBe(true);
+    expect(
+      gate().approveStopReplace({
+        book: primary,
+        held: { ...held, qty: 4 },
+        clientOrderId: 's2',
+        stop: 19,
+        target: 22,
+      }),
+    ).toMatchObject({ side: 'sell', size: 4 });
+    expect(() =>
+      gate().approveStopReplace({
+        book: primary,
+        held: { ...held, qty: 0 },
+        clientOrderId: 's3',
+        stop: 1,
+        target: 1,
+      }),
+    ).toThrow(/no stop replace for AAPL at qty 0/);
   });
 
   it('never approves a copy or a look-alike', () => {

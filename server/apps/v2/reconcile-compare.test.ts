@@ -1,20 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import type { BrokerOpenOrder } from '../../../contracts/index.js';
-import { compareVenue, type VenueView } from './reconcile-compare.js';
+import {
+  compareVenue,
+  type HeldProtection,
+  rearmable,
+  type StoreView,
+} from './reconcile-compare.js';
 
 function view(
   positions: Record<string, number>,
   openOrders: readonly BrokerOpenOrder[] = [],
   cashGbp = 1_000,
-): VenueView {
-  return { positions: new Map(Object.entries(positions)), openOrders, cashGbp };
+  protection: Record<string, HeldProtection> = {},
+): StoreView {
+  return {
+    positions: new Map(Object.entries(positions)),
+    openOrders,
+    cashGbp,
+    protection: new Map(Object.entries(protection)),
+  };
 }
 
 const stop = (
   instrument: string,
   clientOrderId = `stop-${instrument}`,
   protects: BrokerOpenOrder['protects'] = 'long',
-): BrokerOpenOrder => ({ clientOrderId, instrument, protects });
+  sized: Pick<BrokerOpenOrder, 'qty' | 'stopPrice'> = { qty: null, stopPrice: null },
+): BrokerOpenOrder => ({ clientOrderId, instrument, protects, ...sized });
 
 describe('compareVenue', () => {
   it('finds nothing when positions, orders and cash agree', () => {
@@ -229,5 +241,210 @@ describe('compareVenue', () => {
       'order_unknown_to_store',
       'cash',
     ]);
+  });
+});
+
+describe('compareVenue: the protective stop against the position (#1990)', () => {
+  const NO_CASH = 'not_compared' as const;
+  const sized = (qty: number | null, stopPrice: number | null = null) => ({ qty, stopPrice });
+  const aapl = (stops: readonly number[], entryOrderIds: readonly string[] = ['entry-aapl']) => ({
+    AAPL: { entryOrderIds, stops },
+  });
+  const store = (qty: number, stops: readonly number[] = []) =>
+    view({ AAPL: qty }, [], 1_000, aapl(stops));
+  const broker = (qty: number, ...orders: BrokerOpenOrder[]) => view({ AAPL: qty }, orders);
+
+  it('is clean when the closing-side stops cover the position and sit at a held entry stop', () => {
+    expect(
+      compareVenue(
+        store(151, [60, 61]),
+        broker(
+          151,
+          stop('AAPL', 'leg-a', 'long', sized(100, 60.02)),
+          stop('AAPL', 'leg-b', 'long', sized(51, 61)),
+        ),
+        NO_CASH,
+      ),
+    ).toEqual([]);
+  });
+
+  it('names a stop left at the pre-split 101 shares after a 3:2 forward split, and its stale price', () => {
+    expect(
+      compareVenue(
+        store(151, [60]),
+        broker(151, stop('AAPL', 'leg', 'long', sized(101, 90))),
+        NO_CASH,
+      ),
+    ).toEqual([
+      { kind: 'protective_qty', instrument: 'AAPL', order_id: null, store: 151, broker: 101 },
+      { kind: 'protective_price', instrument: 'AAPL', order_id: 'leg', store: 60, broker: 90 },
+    ]);
+  });
+
+  it('names a stop that would oversell into a short after a 1:2 reverse split', () => {
+    expect(
+      compareVenue(
+        store(50, [180]),
+        broker(50, stop('AAPL', 'leg', 'long', sized(101, 90))),
+        NO_CASH,
+      ),
+    ).toEqual([
+      { kind: 'protective_qty', instrument: 'AAPL', order_id: null, store: 50, broker: 101 },
+      { kind: 'protective_price', instrument: 'AAPL', order_id: 'leg', store: 180, broker: 90 },
+    ]);
+  });
+
+  it('compares a short against its buy stops only, by absolute qty', () => {
+    const short = view({ AAPL: -30 }, [], 1_000, aapl([]));
+    const orders = [
+      stop('AAPL', 'buy-stop', 'short', sized(30)),
+      stop('AAPL', 'sell-stop', 'long', sized(7)),
+    ];
+    expect(compareVenue(short, view({ AAPL: -30 }, orders), NO_CASH)).toEqual([]);
+    expect(
+      compareVenue(
+        short,
+        view({ AAPL: -30 }, [orders[0] as BrokerOpenOrder, stop('AAPL', 'x', 'short', sized(1))]),
+        NO_CASH,
+      ),
+    ).toEqual([
+      { kind: 'protective_qty', instrument: 'AAPL', order_id: null, store: 30, broker: 31 },
+    ]);
+  });
+
+  it('accepts a stop two ticks from the held stop and names one past it', () => {
+    const at = (price: number) =>
+      compareVenue(
+        store(10, [60]),
+        broker(10, stop('AAPL', 'leg', 'long', sized(10, price))),
+        NO_CASH,
+      );
+    expect(at(59.98)).toEqual([]);
+    expect(at(60.02)).toEqual([]);
+    expect(at(60.03)).toMatchObject([{ kind: 'protective_price', broker: 60.03 }]);
+    expect(at(59.97)).toMatchObject([{ kind: 'protective_price', broker: 59.97 }]);
+    const penny = (price: number) =>
+      compareVenue(
+        store(10, [0.5]),
+        broker(10, stop('AAPL', 'leg', 'long', sized(10, price))),
+        NO_CASH,
+      );
+    expect(penny(0.5002)).toEqual([]);
+    expect(penny(0.5003)).toMatchObject([{ kind: 'protective_price' }]);
+  });
+
+  it('checks the position even when another name has an entry working', () => {
+    const other = stop('MSFT', 'entry-msft', null, sized(null));
+    expect(
+      compareVenue(
+        view({ AAPL: 151 }, [other], 1_000, aapl([60])),
+        broker(151, other, stop('AAPL', 'leg', 'long', sized(101, 60))),
+        NO_CASH,
+      ),
+    ).toEqual([
+      { kind: 'protective_qty', instrument: 'AAPL', order_id: null, store: 151, broker: 101 },
+    ]);
+  });
+
+  it('skips the qty when any stop on the name has none reported, and a price with no held protection', () => {
+    expect(
+      compareVenue(
+        store(151, [60]),
+        broker(
+          151,
+          stop('AAPL', 'leg-a', 'long', sized(null, 60)),
+          stop('AAPL', 'leg-b', 'long', sized(50, 60)),
+        ),
+        NO_CASH,
+      ),
+    ).toEqual([]);
+    expect(
+      compareVenue(
+        view({ AAPL: 151 }),
+        broker(151, stop('AAPL', 'leg', 'long', sized(151, 90))),
+        NO_CASH,
+      ),
+    ).toEqual([]);
+  });
+
+  it('skips a qty or price the venue reader does not report, and a price with no held entry stop', () => {
+    expect(
+      compareVenue(
+        store(151, [60]),
+        broker(151, stop('AAPL', 'leg', 'long', sized(null, 60))),
+        NO_CASH,
+      ),
+    ).toEqual([]);
+    expect(
+      compareVenue(store(151, [60]), broker(151, stop('AAPL', 'leg', 'long', sized(151))), NO_CASH),
+    ).toEqual([]);
+    expect(
+      compareVenue(store(151), broker(151, stop('AAPL', 'leg', 'long', sized(151, 90))), NO_CASH),
+    ).toEqual([]);
+  });
+
+  it('skips a position whose entry is still working at the venue, its stop sized for the whole order', () => {
+    const working = broker(
+      40,
+      stop('AAPL', 'entry-aapl', null, sized(null)),
+      stop('AAPL', 'leg', 'long', sized(100, 90)),
+    );
+    expect(compareVenue(store(40, [60]), working, NO_CASH)).toEqual([]);
+    const addOn = stop('AAPL', 'add-on', null, sized(null));
+    const withAddOn = view({ AAPL: 40 }, [addOn], 1_000, aapl([60]));
+    const resting = broker(
+      40,
+      addOn,
+      stop('AAPL', 'leg', 'long', sized(40, 60)),
+      stop('AAPL', 'add-on-leg', 'long', sized(20, 58)),
+    );
+    expect(compareVenue(withAddOn, resting, NO_CASH)).toEqual([]);
+    expect(
+      compareVenue(withAddOn, broker(40, stop('AAPL', 'leg', 'long', sized(20, 60))), NO_CASH),
+    ).toMatchObject([{ kind: 'protective_qty' }, { kind: 'order_missing_at_broker' }]);
+  });
+
+  it('names a bracket stop left at the whole order once a part-filled entry is cancelled', () => {
+    expect(
+      compareVenue(
+        store(40, [60]),
+        broker(40, stop('AAPL', 'leg', 'long', sized(100, 60))),
+        NO_CASH,
+      ),
+    ).toEqual([
+      { kind: 'protective_qty', instrument: 'AAPL', order_id: null, store: 40, broker: 100 },
+    ]);
+  });
+
+  it('leaves an unguarded or mismatched position to the diffs that already name it', () => {
+    expect(compareVenue(store(151, [60]), broker(151), NO_CASH).map((d) => d.kind)).toEqual([
+      'position_unprotected',
+    ]);
+    expect(
+      compareVenue(
+        store(151, [60]),
+        broker(150, stop('AAPL', 'leg', 'long', sized(101, 90))),
+        NO_CASH,
+      ).map((d) => d.kind),
+    ).toEqual(['position_qty']);
+  });
+});
+
+describe('rearmable (#1990)', () => {
+  const guarded = { entryOrderIds: ['entry-AAPL'], stops: [60] };
+
+  it('re-arms only a name with a journalled stop and no entry working at the venue', () => {
+    const broker = view({ AAPL: 6 });
+    expect(rearmable(view({ AAPL: 6 }, [], 0, { AAPL: guarded }), broker)('AAPL')).toBe(true);
+    expect(
+      rearmable(view({ AAPL: 6 }, [], 0, { AAPL: { ...guarded, stops: [] } }), broker)('AAPL'),
+    ).toBe(false);
+    expect(rearmable(view({ AAPL: 6 }), broker)('AAPL')).toBe(false);
+    expect(
+      rearmable(
+        view({ AAPL: 6 }, [], 0, { AAPL: guarded }),
+        view({ AAPL: 6 }, [stop('AAPL', 'entry-AAPL', null)]),
+      )('AAPL'),
+    ).toBe(false);
   });
 });

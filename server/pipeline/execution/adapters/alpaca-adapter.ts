@@ -15,6 +15,7 @@ import {
   type UnpricedFillRecord,
 } from '../broker-state-store.js';
 import { ProtectiveRearmUnsupportedError } from '../protective-rearm-unsupported.js';
+import { ProtectiveReplaceError } from '../protective-replace-error.js';
 import type {
   BrokerAck,
   BrokerAdapter,
@@ -23,6 +24,7 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
   ProtectedExitRequest,
+  ProtectiveReplaceRequest,
 } from '../types.js';
 import type { UnpricedFillAlertChannel } from '../unpriced-fill-alert.js';
 import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca-client.js';
@@ -47,7 +49,6 @@ const MAX_REARM_ATTEMPTS = 4;
 
 const MAX_CANCEL_CONFIRM_ATTEMPTS = 5;
 const DEFAULT_CANCEL_CONFIRM_WAIT_MS = 250;
-const RESTING_LEG_STATUSES = ['new', 'accepted', 'pending_new', 'accepted_for_bidding'];
 const TERMINAL_LEG_STATES = new Set(['cancelled', 'filled', 'rejected', 'expired']);
 
 function defaultWait(ms: number): Promise<void> {
@@ -203,10 +204,9 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       this.rearmedLegs.delete(clientOrderId);
     }
 
-    if (order !== null) {
-      await this.call('cancel', () => this.input.client.cancelOrder(order));
-      this.brackets.delete(clientOrderId);
-    }
+    // The bracket stays on the sweep's worklist, as it does across a restart: a part fill that
+    // landed before the cancel is still booked by the next sweep (#1990)
+    if (order !== null) await this.call('cancel', () => this.input.client.cancelOrder(order));
   }
 
   private async resolveCancelTargets(
@@ -277,12 +277,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
     await this.cancelBracketLegsForExit(entryClientOrderId, instrument);
 
-    const positions = await this.call('submitProtectedExit', () =>
-      this.input.client.getPositions(),
-    );
-    const live = positions.find((position) => position.symbol === instrument);
-    const brokerQty = live === undefined ? 0 : Math.abs(Number(live.qty));
-    const qty = Math.min(size, brokerQty);
+    const heldSide = side === 'sell' ? 'long' : 'short';
+    const qty = await this.heldQtyUpTo(instrument, size, heldSide, 'submitProtectedExit');
     if (qty <= 0)
       return { client_order_id: clientOrderId, broker_order_ids: [], order_state: 'closed' };
 
@@ -309,6 +305,20 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
       throw rejected;
     }
     return ack;
+  }
+
+  // A stop that fills during the cancel leaves less held than the ledger knows, and one that
+  // oversold leaves the account on the other side, where a closing order would add to it
+  private async heldQtyUpTo(
+    instrument: string,
+    size: number,
+    heldSide: 'long' | 'short',
+    operation: string,
+  ): Promise<number> {
+    const positions = await this.call(operation, () => this.input.client.getPositions());
+    const live = positions.find((position) => position.symbol === instrument);
+    if (live?.side !== heldSide) return 0;
+    return Math.min(size, Math.abs(Number(live.qty)));
   }
 
   private async rearmAfterFailedExit(
@@ -359,7 +369,12 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     const entry = await this.call('submitProtectedExit', () =>
       this.input.client.getOrderByClientOrderId(entryClientOrderId),
     );
-    const legs = (entry?.legs ?? []).filter((leg) => RESTING_LEG_STATUSES.includes(leg.status));
+    // Any leg not yet terminal can still execute, `held` and `pending_cancel` included, so each is
+    // cancelled and confirmed terminal before anything replaces it: a leg whose cancel has not
+    // landed fails the confirm, and nothing is placed beside it
+    const legs = (entry?.legs ?? []).filter(
+      (leg) => !TERMINAL_LEG_STATES.has(mapOrderState(leg.status)),
+    );
     const target = legs.find((leg) => leg.type === 'limit');
     const stop = legs.find((leg) => leg.type === 'stop');
     if (target !== undefined) await this.cancelLegAndConfirm(target.id, instrument);
@@ -484,6 +499,47 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
   }
 
   async resizeProtectiveLegs(): Promise<void> {}
+
+  // Cancel is confirmed before the new legs go out, so the venue never holds two closing stops
+  // whose sum oversells; the window with no stop is accepted (David 2026-10-02, #1990). With
+  // nothing resting the cancel is a no-op and this re-arms
+  async replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+    const { entryClientOrderId, instrument } = request;
+    try {
+      await this.cancelBracketLegsForExit(entryClientOrderId, instrument);
+    } catch (cause) {
+      throw new ProtectiveReplaceError(
+        'cancel',
+        `replaceProtectiveLegs: the stale legs of ${entryClientOrderId} on ${instrument} did not cancel: ${(cause as Error).message}`,
+        { cause },
+      );
+    }
+    try {
+      const heldSide = request.side === 'buy' ? 'long' : 'short';
+      const qty = await this.heldQtyUpTo(
+        instrument,
+        request.qty,
+        heldSide,
+        'replaceProtectiveLegs',
+      );
+      if (qty <= 0) return 0;
+      await this.rearmProtectiveLegs(
+        entryClientOrderId,
+        instrument,
+        request.side,
+        qty,
+        request.stop,
+        request.target,
+      );
+      return qty;
+    } catch (cause) {
+      throw new ProtectiveReplaceError(
+        'place',
+        `replaceProtectiveLegs: the stale legs of ${entryClientOrderId} on ${instrument} are cancelled and the replacement failed: ${(cause as Error).message}`,
+        { cause },
+      );
+    }
+  }
 
   async rearmProtectiveLegs(
     clientOrderId: string,

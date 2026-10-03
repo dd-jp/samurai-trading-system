@@ -70,7 +70,7 @@ function entryToStop(limit: number, stop: number | undefined): number {
 
 function closingLeg(
   held: Position,
-  purpose: 'exit' | 'rearm',
+  purpose: 'exit' | 'rearm' | 'stop replace',
 ): { readonly size: number; readonly side: 'buy' | 'sell' } {
   const size = Math.abs(held.qty);
   if (!(size > 0)) {
@@ -213,6 +213,24 @@ export class V2RiskGate implements RiskGate {
     return mintApproval({
       kind: 'rearm',
       approvalId: `rearm:${request.clientOrderId}:${size}`,
+      clientOrderId: request.clientOrderId,
+      bookId: request.book.id,
+      bookVariant: request.book.variant,
+      venue: request.held.venue,
+      instrument: request.held.instrument,
+      side,
+      size,
+      entryClientOrderId: request.held.clientOrderId,
+      stop: request.stop,
+      target: request.target,
+    });
+  }
+
+  approveStopReplace(request: RearmRequest): RiskApprovedOrder {
+    const { size, side } = closingLeg(request.held, 'stop replace');
+    return mintApproval({
+      kind: 'replace_stop',
+      approvalId: `replace_stop:${request.clientOrderId}:${size}`,
       clientOrderId: request.clientOrderId,
       bookId: request.book.id,
       bookVariant: request.book.variant,

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { ProtectiveReplaceError } from './execution/index.js';
+import { earlierRunsThatActed, markingRun } from './replay-book.js';
 import { JournalReplayBroker, JournalReplayBrokerBooks, nativeAmountFor } from './replay-broker.js';
 
 const DAY = '2026-09-30';
@@ -116,6 +118,110 @@ describe('JournalReplayBroker', () => {
     expect(await ids()).toEqual(['early', 'late']);
   });
 
+  const swept = (runId = 'run-1', at = `${DAY}T07:30:00.000Z`) =>
+    db
+      .prepare(
+        `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+           order_rowid, book_day_rowid, recorded_at)
+         VALUES (?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_orders),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_book_days), ?)`,
+      )
+      .run(runId, DAY, at);
+
+  const fillRead = (
+    runId: string,
+    clientOrderId: string,
+    qty: number | null,
+    error: string | null = null,
+    at = `${DAY}T07:30:00.000Z`,
+  ) =>
+    db
+      .prepare(
+        `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+           recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(runId, DAY, clientOrderId, qty, error, at);
+
+  const marked = (at: string) =>
+    db
+      .prepare(
+        `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp,
+           ytd_loss_gbp, size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
+         VALUES ('debate/primary', ?, 600, 600, 0, 0, 1, 0, 0, ?)`,
+      )
+      .run(DAY, at);
+
+  it('serves a date that ran twice from the run that marked it, not a crashed run before it or a pass after it (#1990)', async () => {
+    order('sent', 'submitted', {});
+    swept('crashed', `${DAY}T07:30:00.000Z`);
+    fillRead('crashed', 'entry', 1, null, `${DAY}T07:30:00.000Z`);
+    fill('alpaca:first', 'sent', 7);
+    swept('retry', `${DAY}T07:40:00.000Z`);
+    fillRead('retry', 'entry', 3, null, `${DAY}T07:40:00.000Z`);
+    fill('alpaca:mid', 'sent', 7);
+    swept('retry', `${DAY}T07:40:01.000Z`);
+    marked(`${DAY}T07:40:02.000Z`);
+    fill('alpaca:after', 'sent', 7);
+    swept('flatten', `${DAY}T15:00:00.000Z`);
+    fillRead('flatten', 'entry', 7, null, `${DAY}T15:00:00.000Z`);
+    const replay = broker();
+    const ids = async () => (await replay.fetchNewFills()).map((f) => f.broker_fill_id);
+    expect(await ids()).toEqual(['first']);
+    expect(await ids()).toEqual(['first', 'mid']);
+    await expect(replay.fetchNewFills()).rejects.toThrow('row_missing: no journalled fill sweep 3');
+    await expect(replay.getOrder('entry')).resolves.toMatchObject({ filled_qty: 3 });
+    await expect(replay.getOrder('entry')).rejects.toThrow('row_missing');
+  });
+
+  it('serves each sweep exactly the fills its journalled sweep had booked, and fails a sweep never journalled (#1990)', async () => {
+    order('sent', 'submitted', {});
+    fill('alpaca:first', 'sent', 7);
+    swept();
+    swept();
+    fill('alpaca:mid', 'sent', 7);
+    swept();
+    fill('alpaca:after', 'sent', 7);
+    const sweeping = broker();
+    const ids = async () => (await sweeping.fetchNewFills()).map((f) => f.broker_fill_id);
+    expect(await ids()).toEqual(['first']);
+    expect(await ids()).toEqual(['first']);
+    expect(await ids()).toEqual(['first', 'mid']);
+    await expect(sweeping.fetchNewFills()).rejects.toThrow(
+      `replay: row_missing: no journalled fill sweep 4 on ${DAY}`,
+    );
+  });
+
+  it('re-serves each journalled fill read of an order in turn, and fails one never journalled (#1990)', async () => {
+    const read = (clientOrderId: string, qty: number | null, error: string | null = null) =>
+      fillRead('run-1', clientOrderId, qty, error);
+    swept('run-1');
+    read('entry', 4);
+    read('entry', null);
+    read('entry', null, 'order read timed out');
+    read('other', 2);
+    db.prepare(
+      `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+         recorded_at)
+       VALUES ('run-0', '2026-09-29', 'entry', 9, NULL, 'now')`,
+    ).run();
+    const replay = broker();
+    await expect(replay.getOrder('entry')).resolves.toEqual({
+      client_order_id: 'entry',
+      broker_order_ids: [],
+      order_state: 'submitted',
+      filled_qty: 4,
+    });
+    await expect(replay.getOrder('entry')).resolves.toBeNull();
+    await expect(replay.getOrder('entry')).rejects.toThrow('order read timed out');
+    await expect(replay.getOrder('entry')).rejects.toThrow(
+      `replay: row_missing: no journalled fill read 4 of entry on ${DAY}`,
+    );
+    await expect(replay.getOrder('other')).resolves.toMatchObject({ filled_qty: 2 });
+  });
+
   it('serves every fill at the first sweep when the day journalled no reconcile', async () => {
     order('sent', 'submitted', {});
     fill('alpaca:late', 'sent', 7, 0, { at: `${DAY}T23:59:00.000Z` });
@@ -155,7 +261,6 @@ describe('JournalReplayBroker', () => {
     expect(await state('rearmed-exit')).toBe('cancelled');
     expect(await state('filled-exit')).toBe('filled');
     expect(await state('working-exit')).toBe('submitted');
-    await expect(broker().getOrder()).resolves.toBeNull();
     await expect(broker().getOpenPositions()).resolves.toEqual([]);
     await expect(broker().resizeProtectiveLegs()).resolves.toBeUndefined();
   });
@@ -165,6 +270,70 @@ describe('JournalReplayBroker', () => {
     await expect(broker().rearmProtectiveLegs('entry', 'UP')).resolves.toBeUndefined();
     order('v2-debate-primary-2026-09-30-UP-rearm', 'rejected', { detail: 'legs held' });
     await expect(broker().rearmProtectiveLegs('entry', 'UP')).rejects.toThrow('legs held');
+  });
+
+  const replace = {
+    entryClientOrderId: 'entry',
+    instrument: 'UP',
+    side: 'buy' as const,
+    qty: 3,
+    stop: 9,
+    target: 12,
+  };
+
+  it('replaces a stale stop as the journalled replace went: refused at its step with its detail, else accepted (#1990)', async () => {
+    order('entry', 'submitted', {});
+    await expect(broker().replaceProtectiveLegs(replace)).resolves.toBe(3);
+    order('v2-debate-primary-2026-09-30-UP-restop', 'rejected', {
+      detail: 'oco refused',
+      failed_step: 'place',
+    });
+    await expect(broker().replaceProtectiveLegs(replace)).rejects.toMatchObject({
+      name: 'ProtectiveReplaceError',
+      step: 'place',
+      message: 'oco refused',
+    });
+  });
+
+  it('replays a journalled replace refused before any step as a plain refusal', async () => {
+    order('entry', 'submitted', {});
+    order('v2-debate-primary-2026-09-30-UP-restop', 'rejected', { detail: 'no_broker' });
+    const thrown = await broker()
+      .replaceProtectiveLegs(replace)
+      .catch((error: unknown) => error);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(ProtectiveReplaceError);
+    expect(thrown).toMatchObject({ message: 'no_broker' });
+  });
+
+  it('accepts a replace the journal sent and the venue accepted, at the qty it placed', async () => {
+    order('entry', 'submitted', {});
+    order('v2-debate-primary-2026-09-30-UP-restop', 'submitted', { detail: 'submitted' });
+    await expect(broker().replaceProtectiveLegs(replace)).resolves.toBe(3);
+  });
+
+  it('re-serves a replace that placed nothing as placing nothing', async () => {
+    order('entry', 'submitted', {});
+    order('v2-debate-primary-2026-09-30-UP-restop', 'submitted', { detail: 'closed' });
+    await expect(broker().replaceProtectiveLegs(replace)).resolves.toBe(0);
+  });
+
+  it('serves each same-date attempt in turn by its id suffix', async () => {
+    order('entry', 'submitted', {});
+    order('v2-debate-primary-2026-09-30-UP-restop', 'rejected', {
+      detail: 'cancel unconfirmed',
+      failed_step: 'cancel',
+    });
+    order('v2-debate-primary-2026-09-30-UP-restop-2', 'submitted', { detail: 'submitted' });
+    order('v2-debate-primary-2026-09-30-UP-restop-3', 'rejected', {
+      detail: 'oco refused',
+      failed_step: 'place',
+    });
+    const replay = broker();
+    await expect(replay.replaceProtectiveLegs(replace)).rejects.toMatchObject({ step: 'cancel' });
+    await expect(replay.replaceProtectiveLegs(replace)).resolves.toBe(3);
+    await expect(replay.replaceProtectiveLegs(replace)).rejects.toMatchObject({ step: 'place' });
+    await expect(replay.replaceProtectiveLegs(replace)).resolves.toBe(3);
   });
 });
 
@@ -198,7 +367,9 @@ describe('JournalReplayBrokerBooks', () => {
         ['UP', 3],
         ['DN', -2],
       ]),
-      openOrders: [{ clientOrderId: 'rest', instrument: 'NEW', protects: null }],
+      openOrders: [
+        { clientOrderId: 'rest', instrument: 'NEW', protects: null, qty: null, stopPrice: null },
+      ],
     }));
 
   it('mirrors the replayed store, each position guarded, after a clean journalled reconcile', async () => {
@@ -209,9 +380,21 @@ describe('JournalReplayBrokerBooks', () => {
         { instrument: 'DN', qty: -2 },
       ],
       openOrders: [
-        { clientOrderId: 'rest', instrument: 'NEW', protects: null },
-        { clientOrderId: 'replay-UP-stop', instrument: 'UP', protects: 'long' },
-        { clientOrderId: 'replay-DN-stop', instrument: 'DN', protects: 'short' },
+        { clientOrderId: 'rest', instrument: 'NEW', protects: null, qty: null, stopPrice: null },
+        {
+          clientOrderId: 'replay-UP-stop',
+          instrument: 'UP',
+          protects: 'long',
+          qty: 3,
+          stopPrice: null,
+        },
+        {
+          clientOrderId: 'replay-DN-stop',
+          instrument: 'DN',
+          protects: 'short',
+          qty: 2,
+          stopPrice: null,
+        },
       ],
       cashQuote: 0,
     });
@@ -221,5 +404,165 @@ describe('JournalReplayBrokerBooks', () => {
     await expect(books().read('alpaca')).rejects.toThrow('reconcile on 2026-09-30 was not run');
     reconcile('mismatch');
     await expect(books().read('alpaca')).rejects.toThrow('was mismatch: detail');
+  });
+
+  const mismatched = (diffs: readonly Record<string, unknown>[]) =>
+    db
+      .prepare(
+        `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+           recorded_at)
+         VALUES (?, 'alpaca', 'broker', 'mismatch', '[]', ?, 'stale', 'now')`,
+      )
+      .run(DAY, JSON.stringify(diffs));
+  const diff = (kind: string, fields: Record<string, unknown>) => ({
+    kind,
+    instrument: 'UP',
+    order_id: null,
+    store: 3,
+    broker: null,
+    ...fields,
+  });
+
+  it('mirrors a reconcile that found only stale stops with those stops, so the replay re-finds them (#1990)', async () => {
+    mismatched([
+      diff('protective_qty', { broker: 2 }),
+      diff('protective_price', { order_id: 'leg', store: 6, broker: 9 }),
+    ]);
+    const { openOrders } = await books().read('alpaca');
+    expect(openOrders.slice(1)).toEqual([
+      { clientOrderId: 'leg', instrument: 'UP', protects: 'long', qty: 2, stopPrice: 9 },
+      {
+        clientOrderId: 'replay-DN-stop',
+        instrument: 'DN',
+        protects: 'short',
+        qty: 2,
+        stopPrice: null,
+      },
+    ]);
+  });
+
+  it('mirrors a stale price alone at the mirrored qty', async () => {
+    mismatched([diff('protective_price', { order_id: 'leg', store: 6, broker: 9 })]);
+    const { openOrders } = await books().read('alpaca');
+    expect(openOrders[1]).toEqual({
+      clientOrderId: 'leg',
+      instrument: 'UP',
+      protects: 'long',
+      qty: 3,
+      stopPrice: 9,
+    });
+  });
+
+  it('mirrors a reconcile that found a position with no stop without its stop, so the replay re-arms it (#1990)', async () => {
+    mismatched([diff('position_unprotected', { broker: 3 })]);
+    const { openOrders } = await books().read('alpaca');
+    expect(openOrders.map((order) => order.clientOrderId)).not.toContain('replay-UP-stop');
+    expect(openOrders.at(-1)).toEqual({
+      clientOrderId: 'replay-DN-stop',
+      instrument: 'DN',
+      protects: 'short',
+      qty: 2,
+      stopPrice: null,
+    });
+  });
+
+  it('still fails the read on a mismatch that is not only stale stops', async () => {
+    mismatched([diff('protective_qty', { broker: 2 }), diff('position_qty', { broker: 4 })]);
+    await expect(books().read('alpaca')).rejects.toThrow('was mismatch: stale');
+  });
+});
+
+describe('which runs acted on a date, by journal position and never by clock (#1990)', () => {
+  // Each row's timestamp is deliberately out of order with the journal, so only rowids can tell
+  let clockSkew = 0;
+  const skewed = () => `${DAY}T23:59:${String(59 - (clockSkew++ % 60)).padStart(2, '0')}.000Z`;
+
+  const sweep = (runId: string, book: () => void = () => {}) => {
+    const first = (
+      db.prepare('SELECT COALESCE(MAX(rowid), 0) AS id FROM v2_fills').get() as { id: number }
+    ).id;
+    book();
+    db.prepare(
+      `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+         order_rowid, book_day_rowid, recorded_at)
+       VALUES (?, ?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+         (SELECT COALESCE(MAX(rowid), 0) FROM v2_orders),
+         (SELECT COALESCE(MAX(rowid), 0) FROM v2_book_days), ?)`,
+    ).run(runId, DAY, first, skewed());
+  };
+
+  const mark = () =>
+    db
+      .prepare(
+        `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp,
+           ytd_loss_gbp, size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
+         VALUES ('debate/primary', ?, 600, 600, 0, 0, 1, 0, 0, ?)`,
+      )
+      .run(DAY, skewed());
+
+  const read = (runId: string) =>
+    db
+      .prepare(
+        `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+           recorded_at)
+         VALUES (?, ?, 'entry', 3, NULL, ?)`,
+      )
+      .run(runId, DAY, skewed());
+
+  beforeEach(() => {
+    order('entry', 'submitted', {}, '2026-09-29');
+  });
+
+  it('takes the last run to sweep before the day was marked, not a pass after the marks', () => {
+    sweep('cycle');
+    sweep('cycle');
+    mark();
+    sweep('flatten');
+    expect(markingRun(db, DAY)?.runId).toBe('cycle');
+    expect(earlierRunsThatActed(db, DAY)).toEqual([]);
+  });
+
+  it('takes the last run on an unmarked date', () => {
+    sweep('first');
+    sweep('second');
+    expect(markingRun(db, DAY)?.runId).toBe('second');
+    expect(markingRun(db, '2026-01-01')).toBeUndefined();
+  });
+
+  it('clears an idle earlier run when the marking run books a fill at its own opening sweep', () => {
+    sweep('idle');
+    sweep('cycle', () => fill('alpaca:overnight', 'entry', 7));
+    sweep('cycle');
+    mark();
+    expect(earlierRunsThatActed(db, DAY)).toEqual([]);
+  });
+
+  it('clears what an earlier run booked at its own opening sweep', () => {
+    sweep('first', () => fill('alpaca:overnight', 'entry', 7));
+    sweep('cycle');
+    mark();
+    expect(earlierRunsThatActed(db, DAY)).toEqual([]);
+  });
+
+  it.each([
+    ['swept twice', () => sweep('first')],
+    ['read a fill', () => read('first')],
+    ['booked a fill after its opening sweep', () => fill('alpaca:sim-x', 'entry', 7)],
+    ['journalled an order after its opening sweep', () => order('late', 'submitted', {})],
+  ])('names an earlier run that %s', (_what, acted) => {
+    sweep('first');
+    acted();
+    sweep('cycle');
+    mark();
+    expect(earlierRunsThatActed(db, DAY)).toEqual(['first']);
+  });
+
+  it('ignores an order or fill on another date between the runs', () => {
+    sweep('first');
+    order('other-day', 'submitted', {}, '2026-09-29');
+    fill('alpaca:other-day', 'entry', 7, 0, { day: '2026-09-29' });
+    sweep('cycle');
+    mark();
+    expect(earlierRunsThatActed(db, DAY)).toEqual([]);
   });
 });

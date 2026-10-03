@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type {
   DecisionJournal,
   JournalledFill,
+  JournalledFillRead,
   JournalledOrder,
   JournalledReconcile,
   JournalledRefusal,
@@ -158,6 +159,59 @@ export class Journal implements DecisionJournal {
       )
       .all(bookId) as { client_order_id: string }[];
     return rows.flatMap((row) => this.orderFor(row.client_order_id) ?? []);
+  }
+
+  // A broker entry booked below its size still rests at the venue for the remainder, under legs
+  // Alpaca holds until it fills completely
+  partFilledEntries(bookId: string, before?: string): readonly JournalledOrder[] {
+    const rows = this.db
+      .prepare(
+        `SELECT client_order_id FROM v2_orders o
+         WHERE book_id = ? AND leg = 'entry' AND outcome = 'submitted'
+           AND (? IS NULL OR trading_date < ?)
+           AND (SELECT SUM(f.qty) FROM v2_fills f
+                 WHERE f.client_order_id = o.client_order_id AND f.leg = 'entry')
+               < json_extract(o.payload, '$.size')
+         ORDER BY trading_date, client_order_id`,
+      )
+      .all(bookId, before ?? null, before ?? null) as { client_order_id: string }[];
+    return rows.flatMap((row) => this.orderFor(row.client_order_id) ?? []);
+  }
+
+  recordFillRead(read: JournalledFillRead): void {
+    this.db
+      .prepare(
+        `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+           recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        read.run_id,
+        read.trading_date,
+        read.client_order_id,
+        read.filled_qty,
+        read.error,
+        this.#now(),
+      );
+  }
+
+  lastFillRowid(): number {
+    const row = this.db.prepare('SELECT COALESCE(MAX(rowid), 0) AS id FROM v2_fills').get() as {
+      id: number;
+    };
+    return row.id;
+  }
+
+  recordFillSweep(runId: string, tradingDate: string, firstFillRowid: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+           order_rowid, book_day_rowid, recorded_at)
+         VALUES (?, ?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_orders),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_book_days), ?)`,
+      )
+      .run(runId, tradingDate, firstFillRowid, this.#now());
   }
 
   markCancelled(clientOrderId: string, detail: string): void {

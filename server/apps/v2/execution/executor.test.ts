@@ -6,6 +6,7 @@ import type {
   SleeveDecision,
   Venue,
 } from '../../../../contracts/index.js';
+import { ProtectiveReplaceError } from '../../../pipeline/execution/index.js';
 import { type BrokerAdapter, type NormalizedFill, toBrokerFillId } from '../../../shared/index.js';
 import { V2RiskGate } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
@@ -129,6 +130,7 @@ function fakeBroker(name: string, fills: NormalizedFill[] = []) {
     rearmProtectiveLegs: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn().mockResolvedValue(undefined),
     resumeFlatten: vi.fn().mockResolvedValue(null),
+    getOrder: vi.fn().mockResolvedValue(null),
     fetchNewFills: vi.fn().mockResolvedValue(fills),
   };
 }
@@ -291,6 +293,83 @@ describe('V2OrderExecutor', () => {
       approvalId: 'rearm:r1:6',
     });
     expect(alpaca.rearmProtectiveLegs).toHaveBeenCalledWith('c0', 'AAPL', 'buy', 6, 21, 18);
+  });
+
+  it('submits a stop replace through the venue on the entry side, and names the step a replace failed at (#1990)', async () => {
+    const { executor: paper, alpaca } = executor(false);
+    const replaceProtectiveLegs = vi.fn().mockResolvedValue(6);
+    (
+      alpaca as unknown as { replaceProtectiveLegs: typeof replaceProtectiveLegs }
+    ).replaceProtectiveLegs = replaceProtectiveLegs;
+    const approve = (clientOrderId: string) =>
+      gate.approveStopReplace({ book: primary, held, clientOrderId, stop: 21, target: 18 });
+    expect(await paper.submit(approve('s1'))).toEqual({
+      outcome: 'submitted',
+      detail: 'submitted',
+      approvalId: 'replace_stop:s1:6',
+    });
+    expect(replaceProtectiveLegs).toHaveBeenCalledExactlyOnceWith({
+      entryClientOrderId: 'c0',
+      instrument: 'AAPL',
+      side: 'buy',
+      qty: 6,
+      stop: 21,
+      target: 18,
+    });
+    expect(alpaca.rearmProtectiveLegs).not.toHaveBeenCalled();
+    replaceProtectiveLegs.mockRejectedValueOnce(
+      new ProtectiveReplaceError('place', 'oco refused', { cause: undefined }),
+    );
+    expect(await paper.submit(approve('s2'))).toEqual({
+      outcome: 'rejected',
+      detail: 'oco refused',
+      approvalId: 'replace_stop:s2:6',
+      failedStep: 'place',
+    });
+    replaceProtectiveLegs.mockRejectedValueOnce(new Error('network'));
+    expect(await paper.submit(approve('s3'))).not.toHaveProperty('failedStep');
+    replaceProtectiveLegs.mockResolvedValueOnce(0);
+    expect(await paper.submit(approve('s4'))).toMatchObject({
+      outcome: 'submitted',
+      detail: 'closed',
+    });
+  });
+
+  it('reads an entry filled qty from the venue, and never from a simulated route (#1990)', async () => {
+    const { executor: paper, alpaca, simulated } = executor(false);
+    const route = { bookVariant: 'primary', venue: 'alpaca' } as const;
+    expect(await paper.filledQty(route, 'e1', 'AAPL')).toBeUndefined();
+    alpaca.getOrder.mockResolvedValueOnce({
+      client_order_id: 'e1',
+      broker_order_ids: ['b'],
+      order_state: 'partially_filled',
+      filled_qty: 4,
+    });
+    expect(await paper.filledQty(route, 'e1', 'AAPL')).toBe(4);
+    expect(alpaca.getOrder).toHaveBeenLastCalledWith('e1', 'AAPL');
+    expect(await paper.filledQty({ bookVariant: 'no-veto', venue: 'alpaca' }, 'e1', 'AAPL')).toBe(
+      undefined,
+    );
+    expect(simulated.getOrder).not.toHaveBeenCalled();
+  });
+
+  it('a venue that cannot replace a stop refuses the replace before any step, touching nothing', async () => {
+    const { executor: paper, alpaca } = executor(false);
+    const order = gate.approveStopReplace({
+      book: primary,
+      held,
+      clientOrderId: 's1',
+      stop: 21,
+      target: 18,
+    });
+    const submission = await paper.submit(order);
+    expect(submission).toMatchObject({
+      outcome: 'rejected',
+      detail: expect.stringContaining('alpaca cannot replace a resting stop'),
+    });
+    expect(submission.failedStep).toBeUndefined();
+    expect(alpaca.rearmProtectiveLegs).not.toHaveBeenCalled();
+    expect(alpaca.submitBracket).not.toHaveBeenCalled();
   });
 
   it('a primary saxo order routes to the simulated broker (#1400: no live Saxo adapter), and a broker error rejects', async () => {

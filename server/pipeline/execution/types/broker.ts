@@ -6,4 +6,5 @@ export type {
   NormalizedOrder,
   NormalizedPosition,
   ProtectedExitRequest,
+  ProtectiveReplaceRequest,
 } from '../../../shared/index.js';

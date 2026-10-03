@@ -99,8 +99,8 @@ const LEDGER: Ledger = {
 const CLEAN_BROKER: BrokerBook = {
   positions: [{ instrument: 'AAPL', qty: 6 }],
   openOrders: [
-    { clientOrderId: 'aapl-stop', instrument: 'AAPL', protects: 'long' },
-    { clientOrderId: 'entry-NVDA', instrument: 'NVDA', protects: null },
+    { clientOrderId: 'aapl-stop', instrument: 'AAPL', protects: 'long', qty: 6, stopPrice: null },
+    { clientOrderId: 'entry-NVDA', instrument: 'NVDA', protects: null, qty: null, stopPrice: null },
   ],
   cashQuote: 800 * FX,
 };
@@ -120,6 +120,7 @@ function harness(
     tolerance?: number | undefined;
     ledger?: Ledger;
     brokerMode?: BrokerMode;
+    entryStops?: Record<string, number>;
   } = {},
 ): Harness {
   const ledger = options.ledger ?? LEDGER;
@@ -138,6 +139,12 @@ function harness(
     },
     journal: {
       restingEntries: (bookId) => ledger.resting[bookId] ?? [],
+      orderFor: (clientOrderId) => {
+        const stop = options.entryStops?.[clientOrderId];
+        return stop === undefined
+          ? undefined
+          : { ...resting(clientOrderId, ''), payload: { stop } };
+      },
       recordReconcile: (run) => reconciles.push(run),
       recordRefusal: (refusal) => refusals.push(refusal),
     },
@@ -169,9 +176,37 @@ describe('storeView', () => {
     });
     expect(storeView(deps, 'alpaca', [PRIMARY, TREND])).toEqual({
       positions: new Map([['AAPL', 4]]),
-      openOrders: [{ clientOrderId: 'entry-NVDA', instrument: 'NVDA', protects: null }],
+      openOrders: [
+        {
+          clientOrderId: 'entry-NVDA',
+          instrument: 'NVDA',
+          protects: null,
+          qty: null,
+          stopPrice: null,
+        },
+      ],
       cashGbp: 800,
+      protection: new Map([['AAPL', { entryOrderIds: ['entry-AAPL', 'entry-AAPL'], stops: [] }]]),
     });
+  });
+
+  it('carries each held entry stop into the units the ledger split factor gives it', () => {
+    const { deps } = harness(CLEAN_BROKER, {
+      ledger: {
+        ...LEDGER,
+        positions: {
+          [PRIMARY.id]: [{ ...held('AAPL', 151), splitFactor: 1.5 }],
+          [TREND.id]: [{ ...held('MSFT', 50), clientOrderId: 'entry-MSFT-2', splitFactor: 0.5 }],
+        },
+      },
+      entryStops: { 'entry-AAPL': 90, 'entry-MSFT-2': 45 },
+    });
+    expect(storeView(deps, 'alpaca', [PRIMARY, TREND]).protection).toEqual(
+      new Map([
+        ['AAPL', { entryOrderIds: ['entry-AAPL'], stops: [60] }],
+        ['MSFT', { entryOrderIds: ['entry-MSFT-2'], stops: [90] }],
+      ]),
+    );
   });
 });
 
@@ -181,7 +216,7 @@ describe('reconcileBooks', () => {
     const outcome = await reconcileBooks(deps, DATE);
 
     expect(reads).toEqual(['alpaca']);
-    expect(outcome).toEqual({ blockedBookIds: new Set(), refusals: [] });
+    expect(outcome).toEqual({ blockedBookIds: new Set(), refusals: [], staleStops: [] });
     expect(refusals).toEqual([]);
     expect(logs).toEqual([]);
     expect(reconciles).toEqual([
@@ -255,7 +290,13 @@ describe('reconcileBooks', () => {
       positions: [...CLEAN_BROKER.positions, { instrument: 'MSFT', qty: 5 }],
       openOrders: [
         ...CLEAN_BROKER.openOrders,
-        { clientOrderId: 'msft-stop', instrument: 'MSFT', protects: 'long' },
+        {
+          clientOrderId: 'msft-stop',
+          instrument: 'MSFT',
+          protects: 'long',
+          qty: 5,
+          stopPrice: null,
+        },
       ],
     });
     const outcome = await reconcileBooks(deps, DATE);
@@ -282,6 +323,7 @@ describe('reconcileBooks', () => {
     expect(outcome).toEqual({
       blockedBookIds: new Set([PRIMARY.id]),
       refusals: [`${PRIMARY.id}: entries blocked, ${summary}`],
+      staleStops: [],
     });
     expect(reconciles[0]).toMatchObject({ source: 'broker', status: 'mismatch', diffs });
     expect(logs).toEqual([
@@ -369,7 +411,21 @@ describe('reconcileBooks', () => {
 
   it('pools every primary book on one account: a position split across books reconciles clean', async () => {
     const { deps, reconciles } = harness(
-      { ...CLEAN_BROKER, positions: [{ instrument: 'AAPL', qty: 9 }], cashQuote: 1_700 * FX },
+      {
+        ...CLEAN_BROKER,
+        positions: [{ instrument: 'AAPL', qty: 9 }],
+        openOrders: [
+          ...CLEAN_BROKER.openOrders,
+          {
+            clientOrderId: 'aapl-trend-stop',
+            instrument: 'AAPL',
+            protects: 'long',
+            qty: 3,
+            stopPrice: null,
+          },
+        ],
+        cashQuote: 1_700 * FX,
+      },
       {
         ledger: {
           books: [PRIMARY, TREND],
@@ -426,7 +482,101 @@ describe('reconcileOrBlockEntries', () => {
     expect(await reconcileOrBlockEntries(deps, DATE)).toEqual({
       blockedBookIds: new Set(),
       refusals: [],
+      staleStops: [],
     });
+  });
+
+  it('names each instrument whose stop no longer matches the ledger once, by venue, beside the block (#1990)', async () => {
+    const stale = (clientOrderId: string, qty: number, stopPrice: number) => ({
+      clientOrderId,
+      instrument: 'AAPL',
+      protects: 'long' as const,
+      qty,
+      stopPrice,
+    });
+    const { deps } = harness(
+      {
+        ...CLEAN_BROKER,
+        openOrders: [
+          stale('leg-a', 2, 90),
+          stale('leg-b', 2, 91),
+          ...CLEAN_BROKER.openOrders.slice(1),
+        ],
+      },
+      { entryStops: { 'entry-AAPL': 60 } },
+    );
+    const outcome = await reconcileBooks(deps, DATE);
+    expect(outcome.staleStops).toEqual([{ venue: 'alpaca', instrument: 'AAPL' }]);
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
+  });
+
+  const unguarded = (extra: BrokerBook['openOrders'] = []): BrokerBook => ({
+    ...CLEAN_BROKER,
+    openOrders: [...CLEAN_BROKER.openOrders.slice(1), ...extra],
+  });
+
+  it('names a held position with no closing stop for re-arming when its entry stop is journalled (David 2026-10-02, #1990)', async () => {
+    const { deps, reconciles } = harness(unguarded(), { entryStops: { 'entry-AAPL': 60 } });
+    const outcome = await reconcileBooks(deps, DATE);
+    expect(reconciles[0]?.diffs).toEqual([
+      { kind: 'position_unprotected', instrument: 'AAPL', order_id: null, store: 6, broker: 6 },
+    ]);
+    expect(outcome.staleStops).toEqual([{ venue: 'alpaca', instrument: 'AAPL' }]);
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
+  });
+
+  it('re-arms nothing on a position qty difference, even where a stop is journalled', async () => {
+    const { deps, reconciles } = harness(
+      { ...CLEAN_BROKER, positions: [{ instrument: 'AAPL', qty: 5 }] },
+      { entryStops: { 'entry-AAPL': 60 } },
+    );
+    const outcome = await reconcileBooks(deps, DATE);
+    expect(reconciles[0]?.diffs).toMatchObject([{ kind: 'position_qty', instrument: 'AAPL' }]);
+    expect(outcome.staleStops).toEqual([]);
+  });
+
+  it('leaves an unprotected position with no journalled stop to the alert and the block alone', async () => {
+    const outcome = await reconcileBooks(harness(unguarded()).deps, DATE);
+    expect(outcome.staleStops).toEqual([]);
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
+  });
+
+  it('does not re-arm an unprotected position whose entry is still working at the venue', async () => {
+    const working = {
+      clientOrderId: 'entry-AAPL',
+      instrument: 'AAPL',
+      protects: null,
+      qty: null,
+      stopPrice: null,
+    };
+    const { deps } = harness(unguarded([working]), { entryStops: { 'entry-AAPL': 60 } });
+    const outcome = await reconcileBooks(deps, DATE);
+    expect(outcome.staleStops).toEqual([]);
+    expect(outcome.blockedBookIds).toEqual(new Set([PRIMARY.id]));
+  });
+
+  it.each([
+    ['qty', { qty: 2, stopPrice: 60 }],
+    ['price', { qty: 6, stopPrice: 90 }],
+  ])('names a stale stop whose %s alone differs', async (_what, sized) => {
+    const { deps } = harness(
+      {
+        ...CLEAN_BROKER,
+        openOrders: [
+          { clientOrderId: 'leg', instrument: 'AAPL', protects: 'long', ...sized },
+          ...CLEAN_BROKER.openOrders.slice(1),
+        ],
+      },
+      { entryStops: { 'entry-AAPL': 60 } },
+    );
+    expect((await reconcileBooks(deps, DATE)).staleStops).toEqual([
+      { venue: 'alpaca', instrument: 'AAPL' },
+    ]);
+  });
+
+  it('names no stale stop for a mismatch that is not about a stop', async () => {
+    const { deps } = harness({ ...CLEAN_BROKER, positions: [{ instrument: 'AAPL', qty: 5 }] });
+    expect((await reconcileBooks(deps, DATE)).staleStops).toEqual([]);
   });
 
   it('a store throw blocks every book with an error alert and journals nothing (#1927)', async () => {

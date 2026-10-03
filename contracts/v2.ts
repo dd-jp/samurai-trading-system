@@ -248,7 +248,19 @@ export interface ApprovedRearm extends ApprovedOrderFields {
   readonly target: number;
 }
 
-export type RiskApprovedOrder = (ApprovedBracketEntry | ApprovedFlatten | ApprovedRearm) & {
+export interface ApprovedStopReplace extends ApprovedOrderFields {
+  readonly kind: 'replace_stop';
+  readonly entryClientOrderId: string;
+  readonly stop: number;
+  readonly target: number;
+}
+
+export type RiskApprovedOrder = (
+  | ApprovedBracketEntry
+  | ApprovedFlatten
+  | ApprovedRearm
+  | ApprovedStopReplace
+) & {
   readonly [riskApproved]: true;
 };
 
@@ -324,6 +336,7 @@ export interface RiskGate {
   ): 'insufficient_cash' | 'gross_cap' | undefined;
   approveExit(request: ExitRequest): RiskApprovedOrder;
   approveRearm(request: RearmRequest): RiskApprovedOrder;
+  approveStopReplace(request: RearmRequest): RiskApprovedOrder;
   capitalRefusal(tradingDate: string): string | undefined;
   fxRefusal(tradingDate: string): string | undefined;
   allocationRefusal(sleeve: Pick<Sleeve, 'id' | 'spec'>, tradingDate: string): string | undefined;
@@ -345,10 +358,13 @@ export interface V2Fill {
   readonly filled_at?: string | undefined;
 }
 
+export type StopReplaceStep = 'cancel' | 'place';
+
 export interface Submission {
   readonly outcome: OrderOutcome;
   readonly detail: string;
   readonly approvalId: string;
+  readonly failedStep?: StopReplaceStep | undefined;
 }
 
 export interface FillSweep {
@@ -410,6 +426,11 @@ export interface OrderExecutor {
   canRoute(route: ExecutionRoute): boolean;
   submit(order: RiskApprovedOrder): Promise<Submission>;
   cancel(route: ExecutionRoute, clientOrderId: string, instrument: string): Promise<void>;
+  filledQty(
+    route: ExecutionRoute,
+    clientOrderId: string,
+    instrument: string,
+  ): Promise<number | undefined>;
   resumeFlatten(
     route: ExecutionRoute,
     clientOrderId: string,
@@ -427,6 +448,8 @@ export interface BrokerOpenOrder {
   readonly clientOrderId: string;
   readonly instrument: string;
   readonly protects: 'long' | 'short' | null;
+  readonly qty: number | null;
+  readonly stopPrice: number | null;
 }
 
 export interface BrokerBook {
@@ -450,6 +473,8 @@ export type ReconcileDiffKind =
   | 'position_missing_at_broker'
   | 'position_qty'
   | 'position_unprotected'
+  | 'protective_qty'
+  | 'protective_price'
   | 'order_missing_at_broker'
   | 'order_unknown_to_store'
   | 'cash'
@@ -553,6 +578,14 @@ export interface JournalledRefusal {
   readonly instrument?: string | undefined;
 }
 
+export interface JournalledFillRead {
+  readonly run_id: string;
+  readonly trading_date: string;
+  readonly client_order_id: string;
+  readonly filled_qty: number | null;
+  readonly error: string | null;
+}
+
 export interface DecisionJournal {
   recordDecision(
     bookId: string,
@@ -565,7 +598,11 @@ export interface DecisionJournal {
   unfilledEntriesBefore(bookId: string, tradingDate: string): readonly JournalledOrder[];
   unfilledSimulatedEntriesBefore(tradingDate: string): readonly JournalledOrder[];
   restingEntries(bookId: string): readonly JournalledOrder[];
+  partFilledEntries(bookId: string, before?: string): readonly JournalledOrder[];
   markCancelled(clientOrderId: string, detail: string): void;
+  recordFillRead(read: JournalledFillRead): void;
+  lastFillRowid(): number;
+  recordFillSweep(runId: string, tradingDate: string, firstFillRowid: number): void;
   recordFill(fill: JournalledFill): boolean;
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[];
   recordSplit(split: JournalledSplit): void;

@@ -332,6 +332,59 @@ describe('Journal', () => {
     expect(journal.unfilledEntriesBefore('debate/primary', '2026-09-25')).toEqual([]);
   });
 
+  it('lists broker entries booked below their size, before a date or at any date (#1990)', () => {
+    const db = openSharedStore(':memory:');
+    const capital = new CapitalConfigStore(db, clock);
+    capital.setYear(2026, 1_000, 1_500);
+    new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
+    const journal = new Journal(db, clock);
+    const base: JournalledOrder = {
+      client_order_id: 'part',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: '2026-09-23',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: false,
+      outcome: 'submitted',
+      payload: { size: 10 },
+    };
+    const fill = (clientOrderId: string, qty: number, leg = 'entry', n = 1) =>
+      journal.recordFill({
+        ...CAPTURED,
+        fill_id: `alpaca:${clientOrderId}-${leg}-${n}`,
+        client_order_id: clientOrderId,
+        book_id: 'debate/primary',
+        trading_date: '2026-09-24',
+        instrument: 'AAPL',
+        venue: 'alpaca',
+        leg: leg as 'entry',
+        side: 'buy',
+        qty,
+        price_gbp: 1,
+        fee_gbp: 0,
+      });
+    journal.recordOrder(base);
+    journal.recordOrder({ ...base, client_order_id: 'full' });
+    journal.recordOrder({ ...base, client_order_id: 'none' });
+    journal.recordOrder({ ...base, client_order_id: 'today', trading_date: '2026-09-25' });
+    journal.recordOrder({ ...base, client_order_id: 'gone', outcome: 'cancelled' });
+    journal.recordOrder({ ...base, client_order_id: 'other', book_id: 'debate/no-veto' });
+    fill('part', 3);
+    fill('part', 1, 'entry', 2);
+    fill('part', 6, 'stop');
+    fill('full', 10);
+    fill('today', 4);
+    fill('gone', 4);
+    fill('other', 4);
+    const ids = (before?: string) =>
+      journal.partFilledEntries('debate/primary', before).map((order) => order.client_order_id);
+    expect(ids('2026-09-25')).toEqual(['part']);
+    expect(ids()).toEqual(['part', 'today']);
+  });
+
   it('lists unfilled simulated and dry-run entries from earlier dates, oldest first', () => {
     const db = openSharedStore(':memory:');
     const capital = new CapitalConfigStore(db, clock);

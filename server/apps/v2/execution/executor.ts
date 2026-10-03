@@ -10,6 +10,7 @@ import type {
   V2Fill,
   Venue,
 } from '../../../../contracts/index.js';
+import { ProtectiveReplaceError } from '../../../pipeline/execution/index.js';
 import { type BrokerAck, type BrokerAdapter, describeThrownSafely } from '../../../shared/index.js';
 import { consumeApproval } from '../risk/index.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
@@ -51,6 +52,29 @@ async function sendRearm(
   return { client_order_id: child.clientOrderId, broker_order_ids: [], order_state: 'submitted' };
 }
 
+async function sendStopReplace(
+  broker: BrokerAdapter,
+  order: Extract<RiskApprovedOrder, { kind: 'replace_stop' }>,
+  child: ChildOrder,
+): Promise<BrokerAck> {
+  if (broker.replaceProtectiveLegs === undefined) {
+    throw new Error(`${order.venue} cannot replace a resting stop`);
+  }
+  const placed = await broker.replaceProtectiveLegs({
+    entryClientOrderId: order.entryClientOrderId,
+    instrument: order.instrument,
+    side: order.side === 'buy' ? 'sell' : 'buy',
+    qty: child.size,
+    stop: order.stop,
+    target: order.target,
+  });
+  return {
+    client_order_id: child.clientOrderId,
+    broker_order_ids: [],
+    order_state: placed > 0 ? 'submitted' : 'closed',
+  };
+}
+
 function sendFlatten(
   broker: BrokerAdapter,
   order: Extract<RiskApprovedOrder, { kind: 'flatten' }>,
@@ -78,6 +102,7 @@ function send(
   child: ChildOrder,
 ): Promise<BrokerAck> {
   if (order.kind === 'flatten') return sendFlatten(broker, order, child);
+  if (order.kind === 'replace_stop') return sendStopReplace(broker, order, child);
   if (order.kind === 'rearm') {
     return sendRearm(
       broker,
@@ -105,6 +130,14 @@ function send(
 
 function failedSubmission(order: RiskApprovedOrder, error: unknown, dryRun: boolean): Submission {
   const { approvalId } = order;
+  if (error instanceof ProtectiveReplaceError) {
+    return {
+      outcome: 'rejected',
+      detail: describeThrownSafely(error),
+      approvalId,
+      failedStep: error.step,
+    };
+  }
   if (!(error instanceof DryRunRefusedError)) {
     return { outcome: 'rejected', detail: describeThrownSafely(error), approvalId };
   }
@@ -155,6 +188,16 @@ export class V2OrderExecutor implements OrderExecutor {
 
   async cancel(route: ExecutionRoute, clientOrderId: string, instrument: string): Promise<void> {
     await this.#brokerFor(route)?.cancel(clientOrderId, instrument);
+  }
+
+  async filledQty(
+    route: ExecutionRoute,
+    clientOrderId: string,
+    instrument: string,
+  ): Promise<number | undefined> {
+    if (this.simulates(route)) return undefined;
+    const order = await this.#brokerFor(route)?.getOrder(clientOrderId, instrument);
+    return order?.filled_qty;
   }
 
   async resumeFlatten(

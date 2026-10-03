@@ -3,6 +3,8 @@ import type {
   BrokerBookReader,
   BrokerOpenOrder,
   OrderState,
+  ReconcileDiff,
+  StopReplaceStep,
   Venue,
 } from '../../../contracts/index.js';
 import type {
@@ -12,9 +14,12 @@ import type {
   NormalizedFill,
   NormalizedOrder,
   NormalizedPosition,
+  ProtectiveReplaceRequest,
 } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
+import { ProtectiveReplaceError } from './execution/index.js';
+import { markingRun } from './replay-book.js';
 
 interface SentOrder {
   readonly outcome: string;
@@ -66,8 +71,18 @@ export interface JournalBrokerDay {
   readonly quotePerGbp: number;
 }
 
+function replaceRefusal(step: StopReplaceStep | null, detail: string): Error {
+  return step === null
+    ? new Error(detail)
+    : new ProtectiveReplaceError(step, detail, { cause: undefined });
+}
+
+const ALL_ROWS = Number.MAX_SAFE_INTEGER;
+
 export class JournalReplayBroker implements BrokerAdapter {
   #sweeps = 0;
+  readonly #restops = new Map<string, number>();
+  readonly #reads = new Map<string, number>();
 
   constructor(private readonly day: JournalBrokerDay) {}
 
@@ -84,8 +99,40 @@ export class JournalReplayBroker implements BrokerAdapter {
     return this.#answer(clientOrderId);
   }
 
-  getOrder(): Promise<NormalizedOrder | null> {
-    return Promise.resolve(null);
+  // Each read the replayed cycle makes re-serves in turn the reads of the run that marked the day;
+  // a date another run read on is flagged before the replay runs. One with no recording fails,
+  // since a default would decide the replay differently from the run
+  getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
+    const index = this.#reads.get(clientOrderId) ?? 0;
+    this.#reads.set(clientOrderId, index + 1);
+    const { db, tradingDate } = this.day;
+    const read = db
+      .prepare(
+        `SELECT filled_qty, error FROM v2_fill_reads
+         WHERE trading_date = @date AND client_order_id = @id AND run_id = @run
+         ORDER BY read_id LIMIT 1 OFFSET @index`,
+      )
+      .get({
+        date: tradingDate,
+        id: clientOrderId,
+        run: markingRun(db, tradingDate)?.runId ?? null,
+        index,
+      }) as { filled_qty: number | null; error: string | null } | undefined;
+    if (read === undefined) {
+      return Promise.reject(
+        new Error(
+          `replay: row_missing: no journalled fill read ${index + 1} of ${clientOrderId} on ${this.day.tradingDate}`,
+        ),
+      );
+    }
+    if (read.error !== null) return Promise.reject(new Error(read.error));
+    if (read.filled_qty === null) return Promise.resolve(null);
+    return Promise.resolve({
+      client_order_id: clientOrderId,
+      broker_order_ids: [],
+      order_state: 'submitted',
+      filled_qty: read.filled_qty,
+    });
   }
 
   resumeFlatten(clientOrderId: string): Promise<NormalizedOrder | null> {
@@ -100,13 +147,18 @@ export class JournalReplayBroker implements BrokerAdapter {
   fetchNewFills(): Promise<NormalizedFill[]> {
     const { db, tradingDate, venue, quotePerGbp } = this.day;
     this.#sweeps += 1;
-    const cut = this.#sweeps === 1 ? this.#firstReconcileAt() : LATEST;
+    let cut: number;
+    try {
+      cut = this.#sweepCut(this.#sweeps);
+    } catch (error) {
+      return Promise.reject(error);
+    }
     const rows = db
       .prepare(
         `SELECT fill_id, client_order_id, leg, qty, price_gbp, fee_gbp, filled_at, recorded_at
          FROM v2_fills
          WHERE trading_date = ? AND venue = ? AND substr(fill_id, 1, length(?)) <> ?
-           AND recorded_at <= ?
+           AND rowid <= ?
          ORDER BY rowid`,
       )
       .all(tradingDate, venue, `${venue}:sim-`, `${venue}:sim-`, cut) as BrokerFillRow[];
@@ -138,6 +190,30 @@ export class JournalReplayBroker implements BrokerAdapter {
       .get(entryClientOrderId, instrument, this.day.tradingDate) as SentOrder | undefined;
     if (rearm?.outcome === 'rejected') return Promise.reject(new Error(rearm.detail ?? ''));
     return Promise.resolve();
+  }
+
+  // Each replace the replayed cycle sends re-serves the journalled attempt with the same suffix
+  replaceProtectiveLegs({
+    entryClientOrderId,
+    instrument,
+    qty,
+  }: ProtectiveReplaceRequest): Promise<number> {
+    const attempt = this.#restops.get(entryClientOrderId) ?? 0;
+    this.#restops.set(entryClientOrderId, attempt + 1);
+    const suffix = attempt === 0 ? '-restop' : `-restop-${attempt + 1}`;
+    const sent = this.day.db
+      .prepare(
+        `SELECT r.outcome, json_extract(r.payload, '$.detail') AS detail,
+                json_extract(r.payload, '$.failed_step') AS step
+           FROM v2_orders r JOIN v2_orders e ON e.client_order_id = ?
+          WHERE r.book_id = e.book_id AND r.instrument = ? AND r.trading_date = ?
+            AND substr(r.client_order_id, -length(?)) = ?`,
+      )
+      .get(entryClientOrderId, instrument, this.day.tradingDate, suffix, suffix) as
+      | (SentOrder & { readonly step: StopReplaceStep | null })
+      | undefined;
+    if (sent?.outcome !== 'rejected') return Promise.resolve(sent?.detail === 'closed' ? 0 : qty);
+    return Promise.reject(replaceRefusal(sent.step, sent.detail ?? ''));
   }
 
   cancel(clientOrderId: string): Promise<void> {
@@ -177,8 +253,33 @@ export class JournalReplayBroker implements BrokerAdapter {
     });
   }
 
-  // The cycle reconciles after its first sweep, so a fill journalled after the day's first
-  // reconcile was booked at the second sweep and must not be visible to the decisions or exits
+  // Sweep N serves the fills the marking run's sweep N had booked, so a flatten pass after the
+  // marks is not served. A day journalled before sweeps were recorded swept once before its first
+  // reconcile and once at the close
+  #sweepCut(sweep: number): number {
+    const { db, tradingDate } = this.day;
+    const recorded = db
+      .prepare(
+        `SELECT last_fill_rowid AS cut FROM v2_fill_sweeps
+         WHERE trading_date = ? AND run_id = ? ORDER BY sweep_id`,
+      )
+      .all(tradingDate, markingRun(db, tradingDate)?.runId ?? null) as { cut: number }[];
+    if (recorded.length === 0)
+      return sweep === 1 ? this.#rowidAt(this.#firstReconcileAt()) : ALL_ROWS;
+    const row = recorded[sweep - 1];
+    if (row === undefined) {
+      throw new Error(`replay: row_missing: no journalled fill sweep ${sweep} on ${tradingDate}`);
+    }
+    return row.cut;
+  }
+
+  #rowidAt(at: string): number {
+    const row = this.day.db
+      .prepare('SELECT COALESCE(MAX(rowid), 0) AS cut FROM v2_fills WHERE recorded_at <= ?')
+      .get(at) as { cut: number };
+    return row.cut;
+  }
+
   #firstReconcileAt(): string {
     const row = this.day.db
       .prepare('SELECT MIN(recorded_at) AS at FROM v2_reconciles WHERE trading_date = ?')
@@ -200,14 +301,14 @@ export class JournalReplayBroker implements BrokerAdapter {
         `SELECT json_extract(o.payload, '$.size') AS size,
            (SELECT SUM(f.qty) FROM v2_fills f
              WHERE f.client_order_id = o.client_order_id
-               AND (f.trading_date < @date OR (f.trading_date = @date AND f.recorded_at <= @cut)))
+               AND (f.trading_date < @date OR (f.trading_date = @date AND f.rowid <= @cut)))
              AS filled,
            EXISTS (SELECT 1 FROM v2_fills f
              WHERE f.client_order_id = o.client_order_id AND f.trading_date = @date
-               AND f.recorded_at <= @cut) AS today
+               AND f.rowid <= @cut) AS today
          FROM v2_orders o WHERE o.client_order_id = @id`,
       )
-      .get({ date: tradingDate, id: clientOrderId, cut: this.#firstReconcileAt() }) as
+      .get({ date: tradingDate, id: clientOrderId, cut: this.#sweepCut(1) }) as
       | FlattenFills
       | undefined;
     if (flatten?.today !== 1) return 'submitted';
@@ -227,11 +328,52 @@ function protectiveStops(positions: ReadonlyMap<string, number>): BrokerOpenOrde
       clientOrderId: `replay-${instrument}-stop`,
       instrument,
       protects: qty > 0 ? 'long' : 'short',
+      qty: Math.abs(qty),
+      stopPrice: null,
     }));
 }
 
-// Only a clean journalled reconcile is mirrored; any other status blocks the replayed books' entries
-// as it blocked the journalled ones
+const STALE_STOP_KINDS: ReadonlySet<string> = new Set([
+  'protective_qty',
+  'protective_price',
+  'position_unprotected',
+]);
+
+// A reconcile whose only differences were stale or missing stops is mirrored with those stops, so
+// the replay finds them and re-runs the replacement or re-arm the journalled cycle sent (#1990)
+function staleStop(stop: BrokerOpenOrder, diffs: readonly ReconcileDiff[]): BrokerOpenOrder {
+  const mine = diffs.filter((entry) => entry.instrument === stop.instrument);
+  const qty = mine.find((entry) => entry.kind === 'protective_qty');
+  const price = mine.find((entry) => entry.kind === 'protective_price');
+  return {
+    ...stop,
+    clientOrderId: price?.order_id ?? stop.clientOrderId,
+    qty: qty?.broker ?? stop.qty,
+    stopPrice: price?.broker ?? stop.stopPrice,
+  };
+}
+
+function staleStopsOnly(row: { status: string; diffs: string }): ReconcileDiff[] | undefined {
+  if (row.status !== 'mismatch') return undefined;
+  const diffs = JSON.parse(row.diffs) as ReconcileDiff[];
+  const onlyStale = diffs.length > 0 && diffs.every((entry) => STALE_STOP_KINDS.has(entry.kind));
+  return onlyStale ? diffs : undefined;
+}
+
+function mirroredStops(
+  positions: ReadonlyMap<string, number>,
+  diffs: readonly ReconcileDiff[],
+): BrokerOpenOrder[] {
+  const unguarded = new Set(
+    diffs.filter((entry) => entry.kind === 'position_unprotected').map((entry) => entry.instrument),
+  );
+  return protectiveStops(positions)
+    .filter((stop) => !unguarded.has(stop.instrument))
+    .map((stop) => staleStop(stop, diffs));
+}
+
+// Only a clean journalled reconcile, or one that found only stale or missing stops, is mirrored;
+// any other status blocks the replayed books' entries as it blocked the journalled ones
 export class JournalReplayBrokerBooks implements BrokerBookReader {
   constructor(
     private readonly db: StoreHandle,
@@ -242,12 +384,15 @@ export class JournalReplayBrokerBooks implements BrokerBookReader {
   read(venue: Venue): Promise<BrokerBook> {
     const row = this.db
       .prepare(
-        `SELECT status, detail FROM v2_reconciles
+        `SELECT status, detail, diffs FROM v2_reconciles
          WHERE trading_date = ? AND venue = ? AND source = 'broker'
          ORDER BY reconcile_id LIMIT 1`,
       )
-      .get(this.tradingDate, venue) as { status: string; detail: string } | undefined;
-    if (row?.status !== 'clean') {
+      .get(this.tradingDate, venue) as
+      | { status: string; detail: string; diffs: string }
+      | undefined;
+    const stale = row === undefined ? undefined : staleStopsOnly(row);
+    if (row?.status !== 'clean' && stale === undefined) {
       const status = row === undefined ? 'not run' : `${row.status}: ${row.detail}`;
       return Promise.reject(
         new Error(`replay: the journalled ${venue} reconcile on ${this.tradingDate} was ${status}`),
@@ -256,7 +401,7 @@ export class JournalReplayBrokerBooks implements BrokerBookReader {
     const book = this.mirror(venue);
     return Promise.resolve({
       positions: [...book.positions].map(([instrument, qty]) => ({ instrument, qty })),
-      openOrders: [...book.openOrders, ...protectiveStops(book.positions)],
+      openOrders: [...book.openOrders, ...mirroredStops(book.positions, stale ?? [])],
       cashQuote: 0,
     });
   }

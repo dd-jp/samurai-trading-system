@@ -16,6 +16,7 @@ import type {
   SleeveSpec,
 } from '../../../contracts/index.js';
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
+import { ProtectiveReplaceError } from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { type InstrumentDetails, LSE_MOMENTUM_LINES } from '../../providers/saxo-bars/index.js';
@@ -27,6 +28,7 @@ import {
   type NormalizedFill,
   type NormalizedOrder,
   type ProtectedExitRequest,
+  type ProtectiveReplaceRequest,
   SimulatedClock,
   toBrokerFillId,
 } from '../../shared/index.js';
@@ -38,6 +40,8 @@ import {
   calendarDaysBetween,
   runCycle,
   runEntryPass,
+  runFlattenPass,
+  stopReplaceable,
   vetoApplied,
 } from './cycle.js';
 import { addDays, BarsMarketData, TABLE_VENUE_SESSIONS } from './data/index.js';
@@ -255,6 +259,8 @@ function primaryBooksMirror(
         clientOrderId: `stop-${instrument}`,
         instrument,
         protects: qty > 0 ? ('long' as const) : ('short' as const),
+        qty: Math.abs(qty),
+        stopPrice: null,
       }));
       return Promise.resolve({
         positions: [...view.positions].map(([instrument, qty]) => ({ instrument, qty })),
@@ -2456,6 +2462,334 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     expect(fillRows(deps)).toHaveLength(1);
   });
 
+  it('cancels the remainder of a booked part fill from an earlier date and re-arms the fill in the same run, so held legs never leave it bare (#1990)', async () => {
+    class RearmingAlpaca extends FakeAlpaca {
+      readonly replaces: ProtectiveReplaceRequest[] = [];
+      replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+        this.replaces.push(request);
+        return Promise.resolve(request.qty);
+      }
+    }
+    const alpaca = new RearmingAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    alpaca.cumulative(ENTRY, 'entry', 4, 20);
+    await runCycle(deps, '2026-09-28');
+    expect(heldQty(deps)).toBe(4);
+    expect(alpaca.cancelled).toEqual([ENTRY]);
+    expect(deps.journal.orderFor(ENTRY)?.outcome).toBe('cancelled');
+    expect(alpaca.replaces).toMatchObject([{ entryClientOrderId: ENTRY, qty: 4 }]);
+    expect(deps.journal.partFilledEntries('debate/primary')).toEqual([]);
+    await runCycle(deps, '2026-09-29');
+    expect(alpaca.cancelled).toEqual([ENTRY]);
+    expect(alpaca.replaces).toHaveLength(1);
+  });
+
+  class VenuePartFill extends FakeAlpaca {
+    readonly replaces: ProtectiveReplaceRequest[] = [];
+    readonly calls: string[] = [];
+    readError: Error | undefined;
+    reportsFill = true;
+    filled = 0;
+
+    override getOrder(): Promise<null> {
+      if (this.readError !== undefined) return Promise.reject(this.readError);
+      if (this.filled === 0) return Promise.resolve(null);
+      this.calls.push('read');
+      if (this.reportsFill) this.cumulative(ENTRY, 'entry', this.filled, 20);
+      return Promise.resolve({
+        client_order_id: ENTRY,
+        broker_order_ids: ['a1'],
+        order_state: 'partially_filled',
+        filled_qty: this.filled,
+      } as unknown as null);
+    }
+
+    override cancel(clientOrderId: string): Promise<void> {
+      this.calls.push(`cancel ${clientOrderId}`);
+      return super.cancel(clientOrderId);
+    }
+
+    override fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+      this.calls.push('sweep');
+      return super.fetchNewFills(since);
+    }
+
+    replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+      this.calls.push(`replace ${request.qty}`);
+      this.replaces.push(request);
+      return Promise.resolve(request.qty);
+    }
+
+    submitProtectedExit(request: ProtectedExitRequest): Promise<BrokerAck> {
+      this.calls.push(`exit ${request.size}`);
+      return Promise.resolve({
+        client_order_id: request.clientOrderId,
+        broker_order_ids: ['pf1'],
+        order_state: 'submitted',
+      });
+    }
+  }
+
+  async function partFilledAtVenue(filled: number) {
+    const alpaca = new VenuePartFill();
+    const log = vi.fn();
+    const deps = { ...harness([longAapl], false, alpaca), logger: { log } };
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    alpaca.filled = filled;
+    alpaca.calls.splice(0);
+    return { alpaca, deps, log };
+  }
+
+  it('cancels the remainder of an entry the venue reports part filled, books the fill and re-arms it in the same run (#1990)', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(4);
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.calls.filter((call) => call !== 'sweep')).toEqual([
+      'read',
+      `cancel ${ENTRY}`,
+      'replace 4',
+    ]);
+    expect(alpaca.calls.slice(alpaca.calls.indexOf(`cancel ${ENTRY}`), -1)).toEqual([
+      `cancel ${ENTRY}`,
+      'sweep',
+      'replace 4',
+    ]);
+    expect(heldQty(deps)).toBe(4);
+    const entry = deps.journal.orderFor(ENTRY)?.payload as { stop: number; target: number };
+    expect(alpaca.replaces).toEqual([
+      {
+        entryClientOrderId: ENTRY,
+        instrument: 'AAPL',
+        side: 'buy',
+        qty: 4,
+        stop: entry.stop,
+        target: entry.target,
+      },
+    ]);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-restop')?.outcome).toBe(
+      'submitted',
+    );
+  });
+
+  it('a flatten pass cancels a part-filled entry remainder and flattens the booked fill (#1990, #1894)', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(4);
+    deps.setControl('halt');
+    await runFlattenPass(deps, '2026-09-28');
+    expect(alpaca.calls.filter((call) => call !== 'sweep')).toEqual([
+      'read',
+      `cancel ${ENTRY}`,
+      'exit 4',
+    ]);
+    expect(deps.journal.restingEntries('debate/primary')).toEqual([]);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload).toMatchObject({
+      reason: 'manual_halt',
+    });
+    expect(alpaca.replaces).toEqual([]);
+  });
+
+  it('re-arms no part fill whose position already has an exit pending', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(4);
+    const exiting = new Proxy(deps.books, {
+      get: (target, key) => {
+        const value = Reflect.get(target, key, target);
+        if (key !== 'position') return typeof value === 'function' ? value.bind(target) : value;
+        return (bookId: string, instrument: string) => {
+          const held = target.position(bookId, instrument);
+          return held === undefined ? undefined : { ...held, exitClientOrderId: 'pending-exit' };
+        };
+      },
+    });
+    await runCycle({ ...deps, books: exiting }, '2026-09-28').catch(() => undefined);
+    expect(alpaca.cancelled).toContain(ENTRY);
+    expect(alpaca.replaces).toEqual([]);
+  });
+
+  function venueReads(deps: CycleDeps) {
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+    ).db;
+    return {
+      reads: db
+        .prepare(
+          'SELECT trading_date, client_order_id, filled_qty, error FROM v2_fill_reads ORDER BY read_id',
+        )
+        .all(),
+      sweeps: db
+        .prepare(
+          'SELECT trading_date, last_fill_rowid AS cut FROM v2_fill_sweeps ORDER BY sweep_id',
+        )
+        .all(),
+      fills: db.prepare(`SELECT rowid AS id FROM v2_fills WHERE book_id = 'debate/primary'`).all(),
+    };
+  }
+
+  it('journals each venue fill read and the cut of every sweep, for the replay to serve (#1990)', async () => {
+    const { deps } = await partFilledAtVenue(4);
+    const before = venueReads(deps).sweeps.length;
+    await runCycle(deps, '2026-09-28');
+    const { reads, sweeps, fills } = venueReads(deps);
+    expect(reads).toEqual([
+      { trading_date: '2026-09-28', client_order_id: ENTRY, filled_qty: 4, error: null },
+    ]);
+    const [booked] = fills as { id: number }[];
+    const today = (sweeps as { trading_date: string; cut: number }[]).slice(before);
+    expect(today.map((sweep) => sweep.trading_date)).toEqual([
+      '2026-09-28',
+      '2026-09-28',
+      '2026-09-28',
+    ]);
+    expect(today[0]?.cut).toBeLessThan(booked?.id ?? 0);
+    expect(today.slice(1).map((sweep) => sweep.cut >= (booked?.id ?? Infinity))).toEqual([
+      true,
+      true,
+    ]);
+  });
+
+  it('journals the cut of a sweep whose booking throws, so the later sweeps keep their places', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(0);
+    const before = venueReads(deps).sweeps.length;
+    alpaca.cumulative(ENTRY, 'entry', 2, 20);
+    let thrown = false;
+    const throwing = new Proxy(deps.journal, {
+      get: (target, key) => {
+        const value = Reflect.get(target, key, target);
+        if (key !== 'recordFill' || thrown) {
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return () => {
+          thrown = true;
+          throw new Error('disk full');
+        };
+      },
+    });
+    await runCycle({ ...deps, journal: throwing }, '2026-09-28').catch(() => undefined);
+    expect(thrown).toBe(true);
+    const sweeps = (venueReads(deps).sweeps as { trading_date: string }[]).slice(before);
+    expect(sweeps.map((sweep) => sweep.trading_date)).toEqual(['2026-09-28', '2026-09-28']);
+  });
+
+  it('warns of a venue whose fill fetch failed and still records the sweep', async () => {
+    const { alpaca, deps, log } = await partFilledAtVenue(0);
+    const before = venueReads(deps).sweeps.length;
+    const fetch = alpaca.fetchNewFills.bind(alpaca);
+    let failed = false;
+    alpaca.fetchNewFills = (since: Date) => {
+      if (failed) return fetch(since);
+      failed = true;
+      return Promise.reject(new Error('fills endpoint down'));
+    };
+    await runCycle(deps, '2026-09-28');
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        event: 'v2_fill_sweep_failed',
+        message: expect.stringContaining('fills endpoint down'),
+      }),
+    );
+    expect(venueReads(deps).sweeps.length - before).toBe(2);
+  });
+
+  it('journals the cut of a sweep whose fetch throws', async () => {
+    const { deps } = await partFilledAtVenue(0);
+    const before = venueReads(deps).sweeps.length;
+    let thrown = false;
+    const failing = new Proxy(deps.executor, {
+      get: (target, key) => {
+        const value = Reflect.get(target, key, target);
+        if (key !== 'fetchNewFills' || thrown) {
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+        return () => {
+          thrown = true;
+          return Promise.reject(new Error('sweep down'));
+        };
+      },
+    });
+    await runCycle({ ...deps, executor: failing }, '2026-09-28').catch(() => undefined);
+    expect(thrown).toBe(true);
+    const sweeps = (venueReads(deps).sweeps as { trading_date: string }[]).slice(before);
+    expect(sweeps.map((sweep) => sweep.trading_date)).toEqual(['2026-09-28', '2026-09-28']);
+  });
+
+  it('journals a read the venue answered with no order as null, and a failed read with its error', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(0);
+    await runCycle(deps, '2026-09-28');
+    expect(venueReads(deps).reads).toEqual([
+      { trading_date: '2026-09-28', client_order_id: ENTRY, filled_qty: null, error: null },
+    ]);
+    const failing = await partFilledAtVenue(0);
+    failing.alpaca.readError = new Error('order read timed out');
+    await runCycle(failing.deps, '2026-09-28');
+    expect(venueReads(failing.deps).reads).toEqual([
+      {
+        trading_date: '2026-09-28',
+        client_order_id: ENTRY,
+        filled_qty: null,
+        error: 'order read timed out',
+      },
+    ]);
+    expect(alpaca.replaces).toEqual([]);
+  });
+
+  it('sweeps no extra time for an entry cancelled with nothing filled', async () => {
+    const { alpaca, deps } = await partFilledAtVenue(0);
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).toContain(ENTRY);
+    expect(alpaca.calls.filter((call) => call === 'sweep')).toHaveLength(2);
+    expect(alpaca.replaces).toEqual([]);
+  });
+
+  it('re-arms nothing when the venue reports a fill the sweep has not delivered yet', async () => {
+    const { alpaca, deps, log } = await partFilledAtVenue(4);
+    alpaca.reportsFill = false;
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).toContain(ENTRY);
+    expect(heldQty(deps)).toBe(0);
+    expect(alpaca.replaces).toEqual([]);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        event: 'v2_part_fill_unbooked',
+        message: `${ENTRY}: cancelled with a fill the venue reports and the sweep has not delivered; the next reconcile re-arms it`,
+      }),
+    );
+  });
+
+  it('keeps an entry whose filled qty the venue cannot report, blocks a fresh entry on it and alerts critical', async () => {
+    const { alpaca, deps, log } = await partFilledAtVenue(0);
+    alpaca.readError = new Error('order read timed out');
+    deps.setDecisions([longAapl]);
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).not.toContain(ENTRY);
+    expect(alpaca.brackets.map((bracket) => bracket.client_order_id)).toEqual([ENTRY]);
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'error',
+        event: 'v2_entry_fill_read_failed',
+        message: `${ENTRY}: order read timed out`,
+      }),
+    );
+  });
+
+  it('cancels an entry from an earlier date that never filled, and re-arms nothing', async () => {
+    class RearmingAlpaca extends FakeAlpaca {
+      readonly replaces: ProtectiveReplaceRequest[] = [];
+      replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+        this.replaces.push(request);
+        return Promise.resolve(request.qty);
+      }
+    }
+    const alpaca = new RearmingAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(deps, '2026-09-28');
+    expect(alpaca.cancelled).toContain(ENTRY);
+    expect(alpaca.replaces).toEqual([]);
+  });
+
   it('kill line: duplicates and a stale report inside one sweep leave the latest cumulative quantity', async () => {
     const { alpaca, deps, log } = await entered();
     for (const qty of [4, 4, 6, 4, 6]) alpaca.cumulative(ENTRY, 'entry', qty, 20);
@@ -3315,6 +3649,32 @@ describe('#1849: a CFD fill with no cost model', () => {
     await runCycle(deps, '2026-09-25');
     deps.setDecisions([]);
     await expect(runCycle(deps, '2026-09-28')).rejects.toThrow('boom');
+  });
+});
+
+describe('stopReplaceable (#1990)', () => {
+  const held = {
+    instrument: 'AAPL',
+    venue: 'alpaca',
+    qty: 151,
+    avgPriceGbp: 10,
+    stopGbp: 9,
+    targetGbp: 12,
+    clientOrderId: 'entry',
+    exitClientOrderId: undefined,
+    openedDate: '2026-09-25',
+    marksHeld: 1,
+    stray: false,
+    splitFactor: 1.5,
+    splitAnchorDate: undefined,
+  } as const;
+
+  it('replaces only a held, non-stray position on the venue with no exit pending', () => {
+    expect(stopReplaceable(held, 'alpaca')).toBe(true);
+    expect(stopReplaceable(undefined, 'alpaca')).toBe(false);
+    expect(stopReplaceable(held, 'saxo')).toBe(false);
+    expect(stopReplaceable({ ...held, stray: true }, 'alpaca')).toBe(false);
+    expect(stopReplaceable({ ...held, exitClientOrderId: 'exit' }, 'alpaca')).toBe(false);
   });
 });
 
@@ -4286,7 +4646,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       {
         level: 'error',
         message: expect.stringMatching(
-          /^debate\/primary AAPL: x10 split on a broker-held position, ledger qty 6 -> 60; check the venue's resting stop and bracket qty and price/,
+          /^debate\/primary AAPL: x10 split on a broker-held position, ledger qty 6 -> 60; reconcile checks the venue's stop against it and re-places a stale one$/,
         ),
       },
     ]);
@@ -4344,6 +4704,490 @@ describe('runCycle: positions held across a split (#1865)', () => {
         /^debate\/primary: entries blocked, alpaca broker reconcile mismatch: /,
       ),
     );
+  });
+
+  const ONE_FOR_TWO: RawBar = { open: 40, high: 41, low: 39, close: 40 };
+  const oneForTwo = [
+    ...preSplit(0.5),
+    seriesBar('2026-09-28', ONE_FOR_TWO, 1),
+    seriesBar('2026-09-29', ONE_FOR_TWO, 1),
+  ];
+
+  interface RestingStop {
+    readonly qty: number;
+    readonly stopPrice: number;
+  }
+
+  class StopVenue {
+    constructor(
+      readonly held: number,
+      public stop: RestingStop | undefined,
+    ) {}
+
+    reader(deps: Harness): BrokerBookReader {
+      return {
+        read: async (venue) => {
+          const book = await deps.brokerBooks.read(venue);
+          if (venue !== 'alpaca') return book;
+          return {
+            ...book,
+            positions: [{ instrument: 'AAPL', qty: this.held }],
+            openOrders: [
+              ...book.openOrders.filter((order) => order.instrument !== 'AAPL'),
+              ...(this.stop === undefined
+                ? []
+                : [
+                    {
+                      clientOrderId: 'alpaca-stop-leg',
+                      instrument: 'AAPL',
+                      protects: 'long' as const,
+                      ...this.stop,
+                    },
+                  ]),
+            ],
+          };
+        },
+      };
+    }
+  }
+
+  class ReplacingAlpaca extends SplitAlpaca {
+    readonly replaces: ProtectiveReplaceRequest[] = [];
+    readonly exits: ProtectedExitRequest[] = [];
+    replaceError: Error | undefined;
+    placedQty: number | undefined;
+    venue: StopVenue | undefined;
+
+    replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+      this.replaces.push(request);
+      if (this.replaceError !== undefined) return Promise.reject(this.replaceError);
+      if (this.venue !== undefined) {
+        this.venue.stop = { qty: request.qty, stopPrice: Math.round(request.stop * 100) / 100 };
+      }
+      return Promise.resolve(this.placedQty ?? request.qty);
+    }
+
+    override submitProtectedExit(request: ProtectedExitRequest): Promise<BrokerAck> {
+      this.exits.push(request);
+      return super.submitProtectedExit(request);
+    }
+  }
+
+  const RESTOP = 'v2-debate-primary-2026-09-29-AAPL-restop';
+
+  async function brokerHeld101Across(
+    bars: readonly DailyBar[],
+    held: number,
+    stopAt: (entryStop: number) => RestingStop | undefined,
+    replaceError?: Error,
+    placedQty?: number,
+  ) {
+    const alpaca = new ReplacingAlpaca();
+    alpaca.replaceError = replaceError;
+    alpaca.placedQty = placedQty;
+    const { deps, entries } = loggedDeps(harness([longAapl], false, alpaca));
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill(BROKER_ENTRY, 'entry', 101, 20);
+    deps.setDecisions([]);
+    await runCycle(withMarket(deps, bars), '2026-09-28');
+    const entry = deps.journal.orderFor(BROKER_ENTRY)?.payload as { stop: number; target: number };
+    const venue = new StopVenue(held, stopAt(entry.stop));
+    alpaca.venue = venue;
+    const next = (date: string) =>
+      runCycle({ ...withMarket(deps, bars), brokerBooks: venue.reader(deps) }, date);
+    const across = await next('2026-09-29');
+    return { deps, entries, across, entry, alpaca, venue, next };
+  }
+
+  const SPLITS = [
+    { split: '3:2 forward', bars: () => threeForTwo, held: 151, ratio: 1.5 },
+    { split: '1:2 reverse', bars: () => oneForTwo, held: 50, ratio: 0.5 },
+  ];
+
+  it.each(SPLITS)(
+    'a $split split the broker left the 101-share stop unchanged on raises the reconcile mismatch, cancels the stale stop and re-places it at the rescaled qty and price, then reconciles clean (#1990)',
+    async ({ bars, held, ratio }) => {
+      const { deps, entries, across, entry, alpaca, venue, next } = await brokerHeld101Across(
+        bars(),
+        held,
+        (stop) => ({ qty: 101, stopPrice: stop }),
+      );
+      expect(primary(deps)).toMatchObject({ qty: held, splitFactor: ratio });
+      expect(eventsOf(entries, 'v2_reconcile_mismatch')).toMatchObject([
+        {
+          level: 'error',
+          payload: [
+            { kind: 'protective_qty', instrument: 'AAPL', store: held, broker: 101 },
+            {
+              kind: 'protective_price',
+              instrument: 'AAPL',
+              order_id: 'alpaca-stop-leg',
+              store: expect.closeTo(entry.stop / ratio, 9),
+              broker: entry.stop,
+            },
+          ],
+        },
+      ]);
+      expect(across.refusals).toContainEqual(
+        expect.stringMatching(
+          /^debate\/primary: entries blocked, alpaca broker reconcile mismatch: protective_qty AAPL/,
+        ),
+      );
+      expect(alpaca.replaces).toEqual([
+        {
+          entryClientOrderId: BROKER_ENTRY,
+          instrument: 'AAPL',
+          side: 'buy',
+          qty: held,
+          stop: expect.closeTo(entry.stop / ratio, 9),
+          target: expect.closeTo(entry.target / ratio, 9),
+        },
+      ]);
+      expect(alpaca.exits).toEqual([]);
+      expect(deps.journal.orderFor(RESTOP)).toMatchObject({
+        leg: 'exit',
+        side: 'sell',
+        outcome: 'submitted',
+        payload: { size: held, reason: 'split_stop_replace' },
+      });
+      expect(eventsOf(entries, 'v2_stop_replaced')).toMatchObject([
+        {
+          level: 'warn',
+          message:
+            "debate/primary AAPL: any stale stop cancelled, stop placed for the ledger qty or the broker's if less",
+        },
+      ]);
+      expect(venue.stop).toEqual({
+        qty: held,
+        stopPrice: Math.round((entry.stop / ratio) * 100) / 100,
+      });
+
+      const after = await next('2026-09-30');
+      expect(eventsOf(entries, 'v2_reconcile_mismatch')).toHaveLength(1);
+      expect(after.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
+      expect(alpaca.replaces).toHaveLength(1);
+    },
+  );
+
+  it.each(SPLITS)(
+    'a $split split whose stop the venue resized and repriced to the rescaled ledger reconciles clean and replaces nothing',
+    async ({ bars, held, ratio }) => {
+      const { entries, across, alpaca } = await brokerHeld101Across(bars(), held, (stop) => ({
+        qty: held,
+        stopPrice: Math.round((stop / ratio) * 100) / 100,
+      }));
+      expect(eventsOf(entries, 'v2_reconcile_mismatch')).toEqual([]);
+      expect(across.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
+      expect(alpaca.replaces).toEqual([]);
+    },
+  );
+
+  it.each(SPLITS)(
+    'a $split split whose re-place fails after the cancel flattens the position at market and alerts critical',
+    async ({ bars, held }) => {
+      const failed = new ProtectiveReplaceError('place', 'oco rejected', { cause: undefined });
+      const { deps, entries, across, alpaca, next } = await brokerHeld101Across(
+        bars(),
+        held,
+        (stop) => ({ qty: 101, stopPrice: stop }),
+        failed,
+      );
+      expect(deps.journal.orderFor(RESTOP)).toMatchObject({
+        outcome: 'rejected',
+        payload: { failed_step: 'place' },
+      });
+      expect(alpaca.exits).toMatchObject([
+        {
+          entryClientOrderId: BROKER_ENTRY,
+          clientOrderId: 'v2-debate-primary-2026-09-29-AAPL-exit',
+          side: 'sell',
+          size: held,
+        },
+      ]);
+      expect(
+        deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')?.payload,
+      ).toMatchObject({
+        reason: 'stop_replace_failed',
+      });
+      expect(primary(deps)?.exitClientOrderId).toBe('v2-debate-primary-2026-09-29-AAPL-exit');
+      expect(eventsOf(entries, 'v2_stop_replace_failed')).toMatchObject([
+        {
+          level: 'error',
+          message: expect.stringMatching(
+            /^debate\/primary AAPL: any stale stop cancelled but the place failed, flattening at market: /,
+          ),
+        },
+      ]);
+      expect(across.refusals).toContainEqual(expect.stringContaining('the place failed'));
+      await next('2026-09-30');
+      expect(alpaca.replaces).toHaveLength(1);
+    },
+  );
+
+  it('a stale stop that will not cancel is left alone: nothing re-placed or flattened, an alert, entries blocked', async () => {
+    const failed = new ProtectiveReplaceError('cancel', 'cancel unconfirmed', { cause: undefined });
+    const { deps, entries, across, alpaca } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      failed,
+    );
+    expect(alpaca.replaces).toHaveLength(1);
+    expect(alpaca.exits).toEqual([]);
+    expect(primary(deps)?.exitClientOrderId).toBeUndefined();
+    expect(deps.journal.orderFor(RESTOP)).toMatchObject({
+      outcome: 'rejected',
+      payload: { failed_step: 'cancel' },
+    });
+    expect(eventsOf(entries, 'v2_stop_cancel_failed')).toMatchObject([
+      {
+        level: 'error',
+        message: expect.stringMatching(
+          /^debate\/primary AAPL: the stale stop did not cancel, nothing placed: cancel unconfirmed$/,
+        ),
+      },
+    ]);
+    expect(across.refusals).toContainEqual(
+      expect.stringMatching(/^debate\/primary: entries blocked, alpaca broker reconcile mismatch/),
+    );
+  });
+
+  it('a stale stop on a position with no journalled entry stop is alerted and never cancelled', async () => {
+    const { deps, entries, alpaca, venue, next } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 151, stopPrice: stop / 1.5 }),
+    );
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { run: (id: string) => void } } }
+    ).db;
+    db.prepare(
+      "UPDATE v2_orders SET payload = json_remove(payload, '$.stop') WHERE client_order_id = ?",
+    ).run(BROKER_ENTRY);
+    venue.stop = { qty: 101, stopPrice: 90 };
+    await next('2026-09-30');
+    expect(alpaca.replaces).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_replace_unpriced')).toMatchObject([
+      {
+        level: 'error',
+        message:
+          "debate/primary AAPL: the venue's stop is missing or does not match the ledger and no journalled entry stop exists to re-place it at; nothing was cancelled",
+      },
+    ]);
+  });
+
+  it('retries a stop the venue still shows stale on a same-date re-run under the next id, at most four times a date', async () => {
+    const { deps, entries, alpaca, venue } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({
+        qty: 101,
+        stopPrice: stop,
+      }),
+    );
+    const stale = () => {
+      venue.stop = { qty: 101, stopPrice: 90 };
+    };
+    for (const attempt of [2, 3, 4]) {
+      stale();
+      await unmarkedRerun(deps, venue, '2026-09-29');
+      expect(alpaca.replaces).toHaveLength(attempt);
+      expect(deps.journal.orderFor(`${RESTOP}-${attempt}`)?.outcome).toBe('submitted');
+    }
+    stale();
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(alpaca.replaces).toHaveLength(4);
+    expect(deps.journal.orderFor(`${RESTOP}-5`)).toBeUndefined();
+    expect(eventsOf(entries, 'v2_stop_replace_exhausted')).toMatchObject([
+      {
+        level: 'error',
+        message:
+          'debate/primary AAPL: 4 stop replaces already sent this date; nothing more is sent until the next date',
+      },
+    ]);
+  });
+
+  function unmarkedRerun(deps: Harness, venue: StopVenue, date: string) {
+    const unmarked = new Proxy(deps.books, {
+      get: (target, key) => {
+        if (key === 'isMarked') return () => false;
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    return runCycle(
+      { ...withMarket(deps, threeForTwo), books: unmarked, brokerBooks: venue.reader(deps) },
+      date,
+    ).catch(() => undefined);
+  }
+
+  const noStop = (): undefined => undefined;
+
+  it('re-arms a held position the venue holds no stop for at the rescaled ledger level, as after a crash between cancel and place (David 2026-10-02)', async () => {
+    const { deps, entries, across, entry, alpaca, venue, next } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      noStop,
+    );
+    expect(eventsOf(entries, 'v2_reconcile_mismatch')).toMatchObject([
+      { payload: [{ kind: 'position_unprotected', instrument: 'AAPL', store: 151, broker: 151 }] },
+    ]);
+    expect(across.refusals).toContainEqual(
+      expect.stringMatching(/^debate\/primary: entries blocked, .*position_unprotected AAPL/),
+    );
+    expect(alpaca.replaces).toEqual([
+      {
+        entryClientOrderId: BROKER_ENTRY,
+        instrument: 'AAPL',
+        side: 'buy',
+        qty: 151,
+        stop: expect.closeTo(entry.stop / 1.5, 9),
+        target: expect.closeTo(entry.target / 1.5, 9),
+      },
+    ]);
+    expect(deps.journal.orderFor(RESTOP)).toMatchObject({
+      outcome: 'submitted',
+      payload: { size: 151, reason: 'split_stop_replace' },
+    });
+    expect(venue.stop).toEqual({ qty: 151, stopPrice: Math.round((entry.stop / 1.5) * 100) / 100 });
+    expect(alpaca.exits).toEqual([]);
+
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(alpaca.replaces).toHaveLength(1);
+    const after = await next('2026-09-30');
+    expect(after.refusals.filter((refusal) => refusal.includes('reconcile'))).toEqual([]);
+    expect(alpaca.replaces).toHaveLength(1);
+  });
+
+  it('places the stop on a same-date re-run when a cancel that timed out completes late, and a third run sends nothing', async () => {
+    const { deps, entries, alpaca, venue } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      new ProtectiveReplaceError('cancel', 'cancel unconfirmed', { cause: undefined }),
+    );
+    expect(deps.journal.orderFor(RESTOP)?.payload).toMatchObject({ failed_step: 'cancel' });
+    venue.stop = undefined;
+    alpaca.replaceError = undefined;
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(alpaca.replaces).toHaveLength(2);
+    expect(alpaca.replaces[1]).toMatchObject({ qty: 151 });
+    expect(deps.journal.orderFor(`${RESTOP}-2`)?.outcome).toBe('submitted');
+    expect(venue.stop).toMatchObject({ qty: 151 });
+    expect(eventsOf(entries, 'v2_stop_replaced')).toHaveLength(1);
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(alpaca.replaces).toHaveLength(2);
+    expect(deps.journal.orderFor(`${RESTOP}-3`)).toBeUndefined();
+  });
+
+  it('leaves a same-date retry whose stale leg is still pending cancel to the next attempt, placing and flattening nothing', async () => {
+    const pending = new ProtectiveReplaceError('cancel', 'leg still pending_cancel', {
+      cause: undefined,
+    });
+    const { deps, entries, alpaca, venue } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      pending,
+    );
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(deps.journal.orderFor(`${RESTOP}-2`)).toMatchObject({
+      outcome: 'rejected',
+      payload: { failed_step: 'cancel' },
+    });
+    expect(alpaca.exits).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_cancel_failed')).toHaveLength(2);
+    alpaca.replaceError = undefined;
+    venue.stop = undefined;
+    await unmarkedRerun(deps, venue, '2026-09-29');
+    expect(deps.journal.orderFor(`${RESTOP}-3`)?.outcome).toBe('submitted');
+    expect(alpaca.replaces).toHaveLength(3);
+    expect(venue.stop).toMatchObject({ qty: 151 });
+  });
+
+  it('logs a replace that found nothing left held at the broker as placing nothing', async () => {
+    const { deps, entries } = await brokerHeld101Across(threeForTwo, 151, noStop, undefined, 0);
+    expect(deps.journal.orderFor(RESTOP)?.payload).toMatchObject({ detail: 'closed' });
+    expect(eventsOf(entries, 'v2_stop_replaced')).toMatchObject([
+      {
+        message:
+          'debate/primary AAPL: any stale stop cancelled, nothing placed: the broker holds none of it on that side; reconcile names the difference',
+      },
+    ]);
+  });
+
+  it('places the stop on the next run when a cancel that timed out completes late at the venue', async () => {
+    const { deps, alpaca, venue, next } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      new ProtectiveReplaceError('cancel', 'cancel unconfirmed', { cause: undefined }),
+    );
+    expect(deps.journal.orderFor(RESTOP)?.outcome).toBe('rejected');
+    venue.stop = undefined;
+    alpaca.replaceError = undefined;
+    await next('2026-09-30');
+    expect(alpaca.replaces).toHaveLength(2);
+    expect(alpaca.replaces[1]).toMatchObject({ qty: 151 });
+    expect(deps.journal.orderFor(RESTOP.replace('09-29', '09-30'))?.outcome).toBe('submitted');
+    expect(venue.stop).toMatchObject({ qty: 151 });
+  });
+
+  it('flattens and alerts critical when the re-arm of an unprotected position fails to place', async () => {
+    const { deps, entries, alpaca } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      noStop,
+      new ProtectiveReplaceError('place', 'oco rejected', { cause: undefined }),
+    );
+    expect(alpaca.exits).toMatchObject([{ entryClientOrderId: BROKER_ENTRY, size: 151 }]);
+    expect(primary(deps)?.exitClientOrderId).toBe('v2-debate-primary-2026-09-29-AAPL-exit');
+    expect(eventsOf(entries, 'v2_stop_replace_failed')).toMatchObject([{ level: 'error' }]);
+  });
+
+  it('keeps only the alert and the entry block for an unprotected position with no journalled stop', async () => {
+    const { deps, entries, alpaca, venue, next } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 151, stopPrice: stop / 1.5 }),
+    );
+    const db = (
+      deps.journal as unknown as { db: { prepare: (sql: string) => { run: (id: string) => void } } }
+    ).db;
+    db.prepare(
+      "UPDATE v2_orders SET payload = json_remove(payload, '$.stop') WHERE client_order_id = ?",
+    ).run(BROKER_ENTRY);
+    venue.stop = undefined;
+    const after = await next('2026-09-30');
+    expect(alpaca.replaces).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_replace_unpriced')).toEqual([]);
+    expect(eventsOf(entries, 'v2_reconcile_mismatch')).toMatchObject([
+      { payload: [{ kind: 'position_unprotected', instrument: 'AAPL' }] },
+    ]);
+    expect(after.refusals).toContainEqual(
+      expect.stringMatching(/^debate\/primary: entries blocked, .*position_unprotected AAPL/),
+    );
+  });
+
+  it('reports a stop replace refused before any cancel by its own reason', async () => {
+    const { deps, entries, across, alpaca } = await brokerHeld101Across(
+      threeForTwo,
+      151,
+      (stop) => ({ qty: 101, stopPrice: stop }),
+      new Error('no_broker_for_venue:alpaca'),
+    );
+    expect(deps.journal.orderFor(RESTOP)?.outcome).toBe('rejected');
+    expect(alpaca.exits).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_cancel_failed')).toEqual([]);
+    expect(eventsOf(entries, 'v2_stop_replace_refused')).toMatchObject([
+      {
+        level: 'error',
+        message: expect.stringMatching(
+          /^debate\/primary AAPL: the stop replace was refused before any cancel was sent: .*no_broker_for_venue:alpaca/,
+        ),
+      },
+    ]);
+    expect(across.refusals).toContainEqual(expect.stringContaining('refused before any cancel'));
   });
 
   it('dates the cash in lieu of a late-evening broker exit by the London day, as the exit itself', async () => {
@@ -4636,7 +5480,13 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
         positions: [...book.positions, { instrument: 'TSLA', qty: 2 }],
         openOrders: [
           ...book.openOrders,
-          { clientOrderId: 'stop-TSLA', instrument: 'TSLA', protects: 'long' },
+          {
+            clientOrderId: 'stop-TSLA',
+            instrument: 'TSLA',
+            protects: 'long',
+            qty: 2,
+            stopPrice: null,
+          },
         ],
       }),
       'position_missing_in_store',
@@ -4657,7 +5507,13 @@ describe('runCycle: reconcile against the broker before entries (#1872)', () => 
         ...book,
         openOrders: [
           ...book.openOrders,
-          { clientOrderId: 'manual', instrument: 'TSLA', protects: null },
+          {
+            clientOrderId: 'manual',
+            instrument: 'TSLA',
+            protects: null,
+            qty: null,
+            stopPrice: null,
+          },
         ],
       }),
       'order_unknown_to_store',

@@ -50,21 +50,60 @@ type Leg = NonNullable<AlpacaOrder['legs']>[number];
 interface Broker {
   filled: boolean;
   positionScale: number;
+  partial?: number | undefined;
+  failSweeps?: number | undefined;
 }
 
-function splitAlpaca(broker: Broker): AlpacaBrokerClient {
+interface Venue {
+  readonly staleStop: boolean;
+  readonly ocos: AlpacaOrder[];
+  readonly cancelled: Set<string>;
+}
+
+function legStatus(venue: Venue, leg: Leg): string {
+  return venue.cancelled.has(leg.id) ? 'canceled' : 'new';
+}
+
+function listedStop(order: AlpacaOrder, broker: Broker, venue: Venue): Record<string, unknown> {
+  const oco = venue.ocos.find(
+    (placed) => placed.client_order_id === `${order.client_order_id}:rearm`,
+  );
+  if (oco !== undefined) return { qty: oco.qty, stop_price: oco.legs?.[0]?.stop_price ?? null };
+  const stop = Number(order.legs?.[1]?.stop_price);
+  return venue.staleStop
+    ? { qty: order.qty, stop_price: String(stop) }
+    : {
+        qty: String(Number(order.qty) * broker.positionScale),
+        stop_price: String(stop / broker.positionScale),
+      };
+}
+
+function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
   const orders: AlpacaOrder[] = [];
   const view = (order: AlpacaOrder): AlpacaOrder =>
-    broker.filled
+    broker.partial !== undefined
       ? {
           ...order,
-          status: 'filled',
-          filled_qty: order.qty,
+          status: 'partially_filled',
+          filled_qty: String(broker.partial),
           filled_avg_price: order.limit_price ?? null,
           filled_at: BROKER_FILLED_AT,
+          legs: (order.legs ?? []).map((leg) => ({
+            ...leg,
+            status: venue.cancelled.has(leg.id) ? 'canceled' : 'held',
+          })),
         }
-      : order;
-  const held = () => (broker.filled ? orders : []);
+      : broker.filled
+        ? {
+            ...order,
+            status: 'filled',
+            filled_qty: order.qty,
+            filled_avg_price: order.limit_price ?? null,
+            filled_at: BROKER_FILLED_AT,
+            legs: (order.legs ?? []).map((leg) => ({ ...leg, status: legStatus(venue, leg) })),
+          }
+        : order;
+  const held = () => (broker.filled || broker.partial !== undefined ? orders : []);
   return {
     submitOrder: vi.fn((request) => {
       const id = `alp-${orders.length + 1}`;
@@ -88,24 +127,68 @@ function splitAlpaca(broker: Broker): AlpacaBrokerClient {
         filled_avg_price: null,
         filled_at: null,
         limit_price: request.limit_price,
-        legs: [leg('tp', 'limit'), leg('sl', 'stop')],
+        legs: [
+          leg('tp', 'limit'),
+          { ...leg('sl', 'stop'), stop_price: request.stop_loss.stop_price },
+        ],
       };
       orders.push(order);
       return Promise.resolve(order);
     }),
     getOrder: vi.fn((id: string) => {
+      if ((broker.failSweeps ?? 0) > 0 && orders.some((order) => order.id === id)) {
+        broker.failSweeps = (broker.failSweeps ?? 0) - 1;
+        return Promise.reject(new Error('alpaca order read timed out'));
+      }
       const order = orders.find((candidate) => candidate.id === id);
+      if (venue.cancelled.has(id)) {
+        const cancelled = order === undefined ? orders[0] : view(order);
+        return Promise.resolve({ ...cancelled, id, status: 'canceled' });
+      }
       return order === undefined
         ? Promise.reject(new Error(`no order ${id}`))
         : Promise.resolve(view(order));
     }),
     getOrderByClientOrderId: vi.fn((clientOrderId: string) => {
-      const order = orders.find((candidate) => candidate.client_order_id === clientOrderId);
-      return Promise.resolve(order === undefined ? null : view(order));
+      const order = [...orders, ...venue.ocos].find(
+        (candidate) => candidate.client_order_id === clientOrderId,
+      );
+      if (order === undefined) return Promise.resolve(null);
+      return Promise.resolve(venue.ocos.includes(order) ? order : view(order));
     }),
     submitMarketOrder: vi.fn().mockRejectedValue(new Error('unused')),
-    submitOcoOrder: vi.fn().mockRejectedValue(new Error('unused')),
-    cancelOrder: vi.fn().mockResolvedValue(undefined),
+    submitOcoOrder: vi.fn((request) => {
+      const oco: AlpacaOrder = {
+        id: `oco-${venue.ocos.length + 1}`,
+        client_order_id: request.client_order_id,
+        symbol: request.symbol,
+        side: request.side,
+        qty: request.qty,
+        order_class: 'oco',
+        status: 'new',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+        limit_price: request.take_profit.limit_price,
+        legs: [
+          {
+            id: `oco-${venue.ocos.length + 1}-sl`,
+            type: 'stop',
+            status: 'new',
+            filled_qty: '0',
+            filled_avg_price: null,
+            filled_at: null,
+            stop_price: request.stop_loss.stop_price,
+          },
+        ],
+      };
+      venue.ocos.push(oco);
+      return Promise.resolve(oco);
+    }),
+    cancelOrder: vi.fn((id: string) => {
+      venue.cancelled.add(id);
+      return Promise.resolve();
+    }),
     listOpenOrders: vi.fn(() =>
       Promise.resolve(
         held().map((order) => ({
@@ -116,6 +199,8 @@ function splitAlpaca(broker: Broker): AlpacaBrokerClient {
           type: 'stop',
           order_class: 'simple',
           status: 'new',
+          filled_qty: '0',
+          ...listedStop(order, broker, venue),
         })),
       ),
     ),
@@ -123,7 +208,7 @@ function splitAlpaca(broker: Broker): AlpacaBrokerClient {
       Promise.resolve(
         held().map((order) => ({
           symbol: order.symbol,
-          qty: String(Number(order.qty) * broker.positionScale),
+          qty: String((broker.partial ?? Number(order.qty)) * broker.positionScale),
           side: order.side === 'buy' ? ('long' as const) : ('short' as const),
           avg_entry_price: order.limit_price ?? '0',
         })),
@@ -158,9 +243,9 @@ function journalRows(sql: string, storePath = options.storePath): unknown[] {
   }
 }
 
-function tamperedCopy(name: string, sql: string): string {
+function tamperedCopy(name: string, sql: string, source = options.storePath): string {
   const storePath = join(directory, `${name}.sqlite`);
-  copyFileSync(options.storePath, storePath);
+  copyFileSync(source, storePath);
   const db = new BetterSqlite3(storePath);
   try {
     db.exec(sql);
@@ -168,6 +253,55 @@ function tamperedCopy(name: string, sql: string): string {
     db.close();
   }
   return storePath;
+}
+
+let staleOptions: ReplayCliOptions;
+
+let partOptions: ReplayCliOptions;
+
+async function journalDays(
+  name: string,
+  base: ReplayCliOptions,
+  staleStop: boolean,
+  splitDay: Broker = { filled: true, positionScale: 2 },
+) {
+  const storePath = join(directory, `${name}.sqlite`);
+  const seed = openSharedStore(storePath);
+  new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
+    2026,
+    100_000,
+    1_500,
+  );
+  seed.close();
+  const clock = new SimulatedClock(new Date(`${ENTRY_DAY}T07:30:00.000Z`));
+  const broker: Broker = { filled: false, positionScale: 1 };
+  const alpacaClient = splitAlpaca(broker, { staleStop, ocos: [], cancelled: new Set() });
+  const days: [string, Broker][] = [
+    [ENTRY_DAY, { filled: false, positionScale: 1 }],
+    [SPLIT_DAY, splitDay],
+    [DAY_AFTER, { ...splitDay, failSweeps: 0 }],
+  ];
+  for (const [tradingDate, state] of days) {
+    clock.advanceTo(new Date(`${tradingDate}T07:30:00.000Z`));
+    Object.assign(broker, state);
+    const root = composeV2Root({
+      ...base,
+      tradingDate,
+      dryRun: false,
+      storePath,
+      clock,
+      logger: { log: () => {} },
+      transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer(clock)),
+      newsSource: { headlines: () => Promise.resolve([]) },
+      alpacaClient,
+    });
+    try {
+      await root.run();
+    } finally {
+      root.close();
+    }
+  }
+  return { ...base, storePath };
 }
 
 beforeAll(async () => {
@@ -185,17 +319,9 @@ beforeAll(async () => {
   writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n02 Jan 2026,1.26\n');
   const spreadsPath = join(directory, 'spreads.csv');
   writeFileSync(spreadsPath, 'symbol,sessions,median_half_spread_bps\nUP,10,2\n');
-  const storePath = join(directory, 'paper.sqlite');
-  const seed = openSharedStore(storePath);
-  new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
-    2026,
-    100_000,
-    1_500,
-  );
-  seed.close();
-  options = {
+  const base: ReplayCliOptions = {
     tradingDate: SPLIT_DAY,
-    storePath,
+    storePath: join(directory, 'unused.sqlite'),
     barStoreRoot,
     constituentsPath,
     fxPath,
@@ -204,40 +330,14 @@ beforeAll(async () => {
     cfdCataloguePath: join(directory, 'absent-catalogue.json'),
     venueSessions: OPEN_EVERY_DAY,
   };
-  const clock = new SimulatedClock(new Date(`${ENTRY_DAY}T07:30:00.000Z`));
-  const broker: Broker = { filled: false, positionScale: 1 };
-  const alpacaClient = splitAlpaca(broker);
-  const days: [string, Broker][] = [
-    [ENTRY_DAY, { filled: false, positionScale: 1 }],
-    [SPLIT_DAY, { filled: true, positionScale: 2 }],
-    [DAY_AFTER, { filled: true, positionScale: 2 }],
-  ];
-  for (const [tradingDate, state] of days) {
-    clock.advanceTo(new Date(`${tradingDate}T07:30:00.000Z`));
-    Object.assign(broker, state);
-    const root = composeV2Root({
-      tradingDate,
-      dryRun: false,
-      storePath,
-      barStoreRoot,
-      constituentsPath,
-      fxPath,
-      spreadsPath,
-      saxoSpreadsPath: options.saxoSpreadsPath,
-      cfdCataloguePath: options.cfdCataloguePath,
-      clock,
-      logger: { log: () => {} },
-      venueSessions: OPEN_EVERY_DAY,
-      transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer(clock)),
-      newsSource: { headlines: () => Promise.resolve([]) },
-      alpacaClient,
-    });
-    try {
-      await root.run();
-    } finally {
-      root.close();
-    }
-  }
+  options = await journalDays('paper', base, false);
+  staleOptions = await journalDays('stale-stop', base, true);
+  partOptions = await journalDays('part-fill', base, false, {
+    filled: false,
+    positionScale: 2,
+    partial: 3,
+    failSweeps: 1,
+  });
 });
 
 afterAll(() => {
@@ -330,4 +430,274 @@ describe('replay of positions held across a 2:1 split (#1983)', () => {
       key: `debate/primary|UP|detector|${dateAt(SPLIT_BAR)}`,
     });
   });
+});
+
+describe('replay of a split the broker left the stop unchanged on (#1990)', () => {
+  it('journals the mismatch, the stop replace on the split day, and a clean reconcile the day after', () => {
+    const rows = (sql: string) => journalRows(sql, staleOptions.storePath);
+    expect(
+      rows(
+        `SELECT trading_date, status FROM v2_reconciles WHERE source = 'broker' ORDER BY reconcile_id`,
+      ),
+    ).toEqual([
+      { trading_date: ENTRY_DAY, status: 'clean' },
+      { trading_date: SPLIT_DAY, status: 'mismatch' },
+      { trading_date: DAY_AFTER, status: 'clean' },
+    ]);
+    expect(
+      rows(
+        `SELECT trading_date, outcome, json_extract(payload, '$.reason') AS reason FROM v2_orders
+          WHERE substr(client_order_id, -7) = '-restop'`,
+      ),
+    ).toEqual([{ trading_date: SPLIT_DAY, outcome: 'submitted', reason: 'split_stop_replace' }]);
+  });
+
+  it.each([ENTRY_DAY, SPLIT_DAY, DAY_AFTER])('replays %s identical', async (tradingDate) => {
+    const result = await replayFromFiles({ ...staleOptions, tradingDate });
+    expect(result.divergences).toEqual([]);
+  });
+});
+
+describe('replay of an entry part filled at the venue before the journal booked it (#1990)', () => {
+  const rows = (sql: string) => journalRows(sql, partOptions.storePath);
+
+  it('reads the part fill, cancels the remainder, books the fill at a mid-run sweep and re-arms it', () => {
+    expect(
+      rows(
+        `SELECT trading_date, filled_qty, error FROM v2_fill_reads WHERE filled_qty IS NOT NULL
+          ORDER BY read_id`,
+      ),
+    ).toEqual([{ trading_date: SPLIT_DAY, filled_qty: 3, error: null }]);
+    expect(
+      rows(
+        `SELECT trading_date, outcome FROM v2_orders WHERE book_id = 'debate/primary'
+            AND (leg = 'entry' OR substr(client_order_id, -7) = '-restop')
+            AND trading_date <= '${SPLIT_DAY}' ORDER BY rowid`,
+      ),
+    ).toEqual([
+      { trading_date: ENTRY_DAY, outcome: 'cancelled' },
+      { trading_date: SPLIT_DAY, outcome: 'submitted' },
+    ]);
+    const [opening, protecting] = rows(
+      `SELECT last_fill_rowid AS cut FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}'
+        ORDER BY sweep_id`,
+    ) as { cut: number }[];
+    expect(
+      rows(
+        `SELECT rowid AS id FROM v2_fills WHERE book_id = 'debate/primary' AND trading_date = '${SPLIT_DAY}'`,
+      ),
+    ).toEqual([{ id: protecting?.cut }]);
+    expect(opening?.cut).toBeLessThan(protecting?.cut ?? 0);
+  });
+
+  it('replays the part-fill day identical, the read and the mid-run sweep served as journalled', async () => {
+    const result = await replayFromFiles({ ...partOptions, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
+  // Earlier-run rows go in ahead of the marking run's by sweep_id, as a real earlier run's would,
+  // with timestamps after every other row so that nothing can lean on the clock
+  const earlierSweeps = (sweeps: number, source = partOptions.storePath) => {
+    const rows = Array.from(
+      { length: sweeps },
+      (_, k) =>
+        `INSERT INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_rowid,
+           last_fill_rowid, order_rowid, book_day_rowid, recorded_at)
+         SELECT MIN(sweep_id) - 1000 + ${k}, 'earlier', trading_date, first_fill_rowid,
+                first_fill_rowid, order_rowid, book_day_rowid, '${SPLIT_DAY}T23:5${k}:00.000Z'
+           FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}';`,
+    );
+    return {
+      source,
+      sql: `DROP TRIGGER v2_fill_sweeps_no_update;
+        UPDATE v2_fill_sweeps SET sweep_id = sweep_id + 1000
+         WHERE sweep_id >= (SELECT MIN(sweep_id) FROM v2_fill_sweeps
+                             WHERE trading_date = '${SPLIT_DAY}');
+        ${rows.join('\n')}`,
+    };
+  };
+
+  const withEarlierRun = (name: string, extra: string, sweeps = 1, source?: string) => {
+    const earlier = earlierSweeps(sweeps, source);
+    return tamperedCopy(name, `${earlier.sql}\n${extra}`, earlier.source);
+  };
+
+  it('replays identical a date whose earlier run stopped after its opening sweep (#1990)', async () => {
+    const storePath = withEarlierRun('stopped-at-opening', '');
+    expect(
+      journalRows(
+        `SELECT COUNT(DISTINCT run_id) AS runs FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}'`,
+        storePath,
+      ),
+    ).toEqual([{ runs: 2 }]);
+    const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('replays identical an idle earlier run when the marking run books a fill at its own opening sweep, whatever the clock says (ninth review probe)', async () => {
+    const storePath = withEarlierRun(
+      'idle-then-opening-fill',
+      `DROP TRIGGER IF EXISTS v2_fills_no_update;
+       UPDATE v2_fills SET recorded_at = '${SPLIT_DAY}T07:30:00.001Z'
+        WHERE trading_date = '${SPLIT_DAY}';`,
+      1,
+      options.storePath,
+    );
+    expect(
+      journalRows(
+        `SELECT s.first_fill_rowid < f.rowid AND f.rowid <= s.last_fill_rowid AS opening
+           FROM v2_fills f, v2_fill_sweeps s
+          WHERE f.trading_date = '${SPLIT_DAY}' AND f.book_id = 'debate/primary'
+            AND s.sweep_id = (SELECT MIN(sweep_id) FROM v2_fill_sweeps
+                               WHERE trading_date = '${SPLIT_DAY}' AND run_id <> 'earlier')`,
+        storePath,
+      ),
+    ).toEqual([{ opening: 1 }]);
+    const result = await replayFromFiles({ ...options, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('replays identical a date with a flatten pass that did nothing, before the cycle or after its marks', async () => {
+    const storePath = withEarlierRun(
+      'idle-flatten',
+      `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+           order_rowid, book_day_rowid, recorded_at)
+         SELECT 'later-flatten', '${SPLIT_DAY}', MAX(rowid), MAX(rowid), 0,
+                (SELECT MAX(rowid) FROM v2_book_days), '${SPLIT_DAY}T00:00:00.000Z'
+           FROM v2_fills;
+       INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+           recorded_at)
+         VALUES ('later-flatten', '${SPLIT_DAY}', 'v2-debate-primary-${ENTRY_DAY}-UP', 0, NULL,
+                 '${SPLIT_DAY}T00:00:00.000Z');`,
+    );
+    const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
+  it.each([
+    [
+      'read an entry',
+      `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error, recorded_at)
+         VALUES ('earlier', '${SPLIT_DAY}', 'v2-debate-primary-${ENTRY_DAY}-UP', NULL, 'order read timed out', '${SPLIT_DAY}T00:00:00.000Z');`,
+      1,
+    ],
+    ['swept again', '', 2],
+  ] as const)(
+    'flags multiple_runs, not a mismatch, when an earlier run %s (David 2026-10-02, #1990)',
+    async (what, extra, sweeps) => {
+      const storePath = withEarlierRun(`earlier-${what.replace(' ', '-')}`, extra, sweeps);
+      const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+      expect(result.divergences).toEqual([
+        { kind: 'multiple_runs', tradingDate: SPLIT_DAY, earlierRuns: ['earlier'] },
+      ]);
+    },
+  );
+
+  it('diverges when the journalled fill read is missing, never defaulting it', async () => {
+    const storePath = tamperedCopy(
+      'no-fill-reads',
+      `DROP TRIGGER v2_fill_reads_no_delete; DELETE FROM v2_fill_reads;`,
+      partOptions.storePath,
+    );
+    const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toContainEqual({
+      kind: 'row_missing',
+      stage: 'orders',
+      key: `v2-debate-primary-${SPLIT_DAY}-UP-restop`,
+    });
+  });
+
+  it('books the fill at the sweep the journal says booked it: a later cut there loses the re-arm', async () => {
+    const storePath = tamperedCopy(
+      'late-sweep',
+      `DROP TRIGGER v2_fill_sweeps_no_update;
+       UPDATE v2_fill_sweeps SET last_fill_rowid = 0
+        WHERE sweep_id = (SELECT MIN(sweep_id) + 1 FROM v2_fill_sweeps
+                           WHERE trading_date = '${SPLIT_DAY}');`,
+      partOptions.storePath,
+    );
+    const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toContainEqual({
+      kind: 'row_missing',
+      stage: 'orders',
+      key: `v2-debate-primary-${SPLIT_DAY}-UP-restop`,
+    });
+  });
+});
+
+async function journalRetried(name: string, base: ReplayCliOptions, mode: 'restop' | 'read') {
+  const storePath = join(directory, `${name}.sqlite`);
+  const seed = openSharedStore(storePath);
+  new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
+    2026,
+    100_000,
+    1_500,
+  );
+  seed.close();
+  const clock = new SimulatedClock(new Date(`${ENTRY_DAY}T07:30:00.000Z`));
+  const broker: Broker = { filled: false, positionScale: 1 };
+  const venue: Venue = { staleStop: false, ocos: [], cancelled: new Set() };
+  const inner = splitAlpaca(broker, venue);
+  const gate = { hang: false };
+  const alpacaClient: AlpacaBrokerClient = {
+    ...inner,
+    cancelOrder: (id: string) =>
+      gate.hang && mode === 'read' ? new Promise(() => {}) : inner.cancelOrder(id),
+    getOrder: (id: string) =>
+      gate.hang && venue.ocos.length > 0 ? new Promise(() => {}) : inner.getOrder(id),
+  };
+  const runOnce = async (tradingDate: string, at: string, waitMs?: number) => {
+    clock.advanceTo(new Date(at));
+    const root = composeV2Root({
+      ...base,
+      tradingDate,
+      dryRun: false,
+      storePath,
+      clock,
+      logger: { log: () => {} },
+      transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer(clock)),
+      newsSource: { headlines: () => Promise.resolve([]) },
+      alpacaClient,
+    });
+    try {
+      if (waitMs === undefined) await root.run();
+      else await Promise.race([root.run(), new Promise((resolve) => setTimeout(resolve, waitMs))]);
+    } finally {
+      root.close();
+    }
+  };
+  await runOnce(ENTRY_DAY, `${ENTRY_DAY}T07:30:00.000Z`);
+  Object.assign(broker, { filled: false, positionScale: 2, partial: 3, failSweeps: 1 });
+  if (mode === 'read') Object.assign(broker, { partial: undefined, failSweeps: 0 });
+  gate.hang = true;
+  await runOnce(SPLIT_DAY, `${SPLIT_DAY}T07:30:00.000Z`, 1_500);
+  gate.hang = false;
+  if (mode === 'read') Object.assign(broker, { partial: 3, failSweeps: 0 });
+  const lease = new BetterSqlite3(storePath);
+  lease.prepare('DELETE FROM v2_run_lease').run();
+  lease.close();
+  await runOnce(SPLIT_DAY, `${SPLIT_DAY}T09:30:00.000Z`);
+  return { ...base, storePath };
+}
+
+describe('replay of a date a crashed run acted on before the retry that marked it (#1990)', () => {
+  it.each([
+    ['sent a re-arm and hung before the marks', 'restop'],
+    ['read a different fill and hung cancelling', 'read'],
+  ] as const)(
+    'reports one multiple_runs and no per-order mismatch when the first run %s',
+    async (_what, mode) => {
+      const retried = await journalRetried(`retried-${mode}`, options, mode);
+      const runs = journalRows(
+        `SELECT COUNT(DISTINCT run_id) AS runs FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}'`,
+        retried.storePath,
+      );
+      expect(runs).toEqual([{ runs: 2 }]);
+      const result = await replayFromFiles({ ...retried, tradingDate: SPLIT_DAY });
+      expect(result.divergences).toEqual([
+        { kind: 'multiple_runs', tradingDate: SPLIT_DAY, earlierRuns: [expect.any(String)] },
+      ]);
+    },
+    60_000,
+  );
 });

@@ -64,6 +64,15 @@ export interface ProtectedExitRequest {
   readonly rearm: { readonly stop: number; readonly target: number } | undefined;
 }
 
+export interface ProtectiveReplaceRequest {
+  readonly entryClientOrderId: string;
+  readonly instrument: string;
+  readonly side: 'buy' | 'sell';
+  readonly qty: number;
+  readonly stop: number;
+  readonly target: number;
+}
+
 export interface BrokerAdapter {
   submitBracket(order: NativeBracketRequest): Promise<BrokerAck>;
   getOrder(clientOrderId: string, instrument: string): Promise<NormalizedOrder | null>;
@@ -89,4 +98,5 @@ export interface BrokerAdapter {
   getOpenPositions(): Promise<NormalizedPosition[]>;
   readonly prices_own_fills?: boolean;
   submitProtectedExit?(request: ProtectedExitRequest): Promise<BrokerAck>;
+  replaceProtectiveLegs?(request: ProtectiveReplaceRequest): Promise<number>;
 }

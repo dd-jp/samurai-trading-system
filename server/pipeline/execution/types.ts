@@ -22,6 +22,7 @@ export type {
   NormalizedOrder,
   NormalizedPosition,
   ProtectedExitRequest,
+  ProtectiveReplaceRequest,
 } from './types/broker.js';
 export type {
   Execution,

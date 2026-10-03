@@ -7,6 +7,7 @@ import type {
   DecisionJournal,
   MarketData,
   OrderExecutor,
+  Position,
   ReconcileDiff,
   ReconcileSource,
   ReconcileStatus,
@@ -16,12 +17,22 @@ import type {
 import type { Logger } from '../../shared/index.js';
 import { describeThrownSafely, logIfPresent } from '../../shared/index.js';
 import { quotePerGbp } from './data/index.js';
-import { type CashRule, compareVenue, type VenueView } from './reconcile-compare.js';
+import {
+  type CashRule,
+  compareVenue,
+  type HeldProtection,
+  rearmable,
+  type StoreView,
+  type VenueView,
+} from './reconcile-compare.js';
 
 export interface ReconcileDeps {
   readonly registry: Pick<SleeveSource, 'ids'>;
   readonly books: Pick<BookLedger, 'forSleeve' | 'positions' | 'cash'>;
-  readonly journal: Pick<DecisionJournal, 'restingEntries' | 'recordReconcile' | 'recordRefusal'>;
+  readonly journal: Pick<
+    DecisionJournal,
+    'restingEntries' | 'orderFor' | 'recordReconcile' | 'recordRefusal'
+  >;
   readonly executor: Pick<OrderExecutor, 'simulates'>;
   readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
   readonly brokerBooks: BrokerBookReader;
@@ -30,9 +41,15 @@ export interface ReconcileDeps {
   readonly logger?: Logger | undefined;
 }
 
+export interface StaleStop {
+  readonly venue: Venue;
+  readonly instrument: string;
+}
+
 export interface ReconcileOutcome {
   readonly blockedBookIds: ReadonlySet<string>;
   readonly refusals: readonly string[];
+  readonly staleStops?: readonly StaleStop[] | undefined;
 }
 
 interface VenueGroup {
@@ -92,11 +109,33 @@ function netByInstrument(
   return positions;
 }
 
+// The entry's stop is journalled in the units it was priced in; the ledger's split factor carries
+// it into the units the venue now quotes
+function nativeStop(deps: Pick<ReconcileDeps, 'journal'>, held: Position): number[] {
+  const stop = deps.journal.orderFor(held.clientOrderId)?.payload.stop;
+  return typeof stop === 'number' ? [stop / held.splitFactor] : [];
+}
+
+function protectionByInstrument(
+  deps: Pick<ReconcileDeps, 'journal'>,
+  held: readonly Position[],
+): Map<string, HeldProtection> {
+  const protection = new Map<string, HeldProtection>();
+  for (const position of held) {
+    const known = protection.get(position.instrument) ?? { entryOrderIds: [], stops: [] };
+    protection.set(position.instrument, {
+      entryOrderIds: [...known.entryOrderIds, position.clientOrderId],
+      stops: [...known.stops, ...nativeStop(deps, position)],
+    });
+  }
+  return protection;
+}
+
 export function storeView(
   deps: Pick<ReconcileDeps, 'books' | 'journal'>,
   venue: Venue,
   books: readonly BookSpec[],
-): VenueView {
+): StoreView {
   const held = books
     .flatMap((book) => deps.books.positions(book.id))
     .filter((position) => position.venue === venue);
@@ -109,8 +148,11 @@ export function storeView(
       clientOrderId: order.client_order_id,
       instrument: order.instrument,
       protects: null,
+      qty: null,
+      stopPrice: null,
     })),
     cashGbp: books.reduce((sum, book) => sum + deps.books.cash(book.id), 0),
+    protection: protectionByInstrument(deps, held),
   };
 }
 
@@ -148,6 +190,7 @@ interface GroupResult {
   readonly status: ReconcileStatus;
   readonly diffs: readonly ReconcileDiff[];
   readonly detail: string;
+  readonly staleStops?: readonly StaleStop[];
 }
 
 // A simulated venue keeps no state outside the ledger: its fills are written straight into the
@@ -167,6 +210,22 @@ function cashRuleFor(deps: ReconcileDeps): CashRule {
   return { toleranceGbp: deps.reconcileCashToleranceGbp };
 }
 
+function staleStopsOf(
+  venue: Venue,
+  diffs: readonly ReconcileDiff[],
+  rearm: (instrument: string) => boolean,
+): StaleStop[] {
+  const instruments = diffs
+    .filter(
+      (entry) =>
+        entry.kind === 'protective_qty' ||
+        entry.kind === 'protective_price' ||
+        (entry.kind === 'position_unprotected' && rearm(entry.instrument as string)),
+    )
+    .map((entry) => entry.instrument as string);
+  return [...new Set(instruments)].map((instrument) => ({ venue, instrument }));
+}
+
 async function reconcileGroup(
   deps: ReconcileDeps,
   group: VenueGroup,
@@ -183,6 +242,7 @@ async function reconcileGroup(
     status: statusOf(diffs),
     diffs,
     detail: [...diffs.map(describeDiff), ...notes].join('; '),
+    staleStops: staleStopsOf(group.venue, diffs, rearmable(store, read.view)),
   };
 }
 
@@ -240,6 +300,7 @@ export async function reconcileBooks(
 ): Promise<ReconcileOutcome> {
   const blockedBookIds = new Set<string>();
   const refusals: string[] = [];
+  const staleStops: StaleStop[] = [];
   for (const group of venueGroups(deps)) {
     const result = await reconcileGroup(deps, group, tradingDate);
     deps.journal.recordReconcile({
@@ -254,8 +315,9 @@ export async function reconcileBooks(
     if (result.status === 'clean') continue;
     refusals.push(...blockGroup(deps, group, tradingDate, { ...result, status: result.status }));
     for (const book of group.books) blockedBookIds.add(book.id);
+    staleStops.push(...(result.staleStops ?? []));
   }
-  return { blockedBookIds, refusals };
+  return { blockedBookIds, refusals, staleStops };
 }
 
 export type SyncThrowEvent =

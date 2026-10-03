@@ -61,6 +61,7 @@ export {
   SaxoTokenRefresher,
   StaticSaxoTokenSource,
 } from './adapters/saxo-token-source.js';
+export { tickFor } from './adapters/us-equity-price-tick.js';
 export type { DormantLegsUnresolvedAlertChannel } from './dormant-legs-unresolved-alert.js';
 export { ExecutionImpl, executeVerdict } from './execute.js';
 export {
@@ -79,6 +80,7 @@ export type {
 export { FILLED_WITH_ZERO_SIZE } from './ingest-fills.js';
 export type { LegResizeUnverifiedAlertChannel } from './leg-resize-unverified-alert.js';
 export type { NonSterlingFeeAlertChannel } from './non-sterling-fee-alert.js';
+export { ProtectiveReplaceError } from './protective-replace-error.js';
 export { TERMINAL_SWEEP_AGE_MS, UNRESOLVABLE_FLATTEN_MAX_AGE_MS } from './reconcile.js';
 export type {
   ResidualExposureAlert,
