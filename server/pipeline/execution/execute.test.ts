@@ -1,9 +1,9 @@
+import { sanitizeBrokerError } from '../../apps/v2/execution/alpaca/broker-error.js';
 import type { MarketDataService, MarkRead } from '../../providers/market-data-service/index.js';
 import type { Clock, Fill, OpenPosition, OrderIntent } from '../../shared/index.js';
 import { toBrokerFillId } from '../../shared/index.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import type { VerdictDecision } from '../verdict/index.js';
-import { sanitizeBrokerError } from './broker-error.js';
 
 function hostileThrownValue(): Record<string, unknown> {
   const hostile: Record<string, unknown> = {

@@ -73,6 +73,14 @@ describe('risk, sizing and loss-budget paths', () => {
     expect(isTradingPathFile(path)).toBe(true);
   });
 
+  it.each([
+    'server/apps/v2/execution/alpaca/alpaca-adapter.ts',
+    'server/apps/v2/execution/broker-state/sqlite-broker-state-store.ts',
+    'server/apps/v2/execution/saxo/saxo-token-source.ts',
+  ])('%s, moved out of server/pipeline/execution, is trading-path', (path) => {
+    expect(isTradingPathFile(path)).toBe(true);
+  });
+
   it('leaves the rest of momentum out', () => {
     expect(isTradingPathFile('server/pipeline/momentum/signal.ts')).toBe(false);
   });
@@ -81,6 +89,7 @@ describe('risk, sizing and loss-budget paths', () => {
     'server/apps/v2/index.ts',
     'server/apps/v2/daily-summary.ts',
     'server/apps/v2/smoke.ts',
+    'server/apps/v2/execution/executor.ts',
   ])('leaves %s out of the rest of apps/v2', (path) => {
     expect(isTradingPathFile(path)).toBe(false);
   });

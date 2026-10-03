@@ -1,3 +1,4 @@
+import { isProtectiveRearmUnsupported } from '../../apps/v2/execution/alpaca/protective-rearm-unsupported.js';
 import {
   describeThrownSafely,
   heldQuantityFromFills,
@@ -5,7 +6,6 @@ import {
   logCaughtFailure,
   safeLog,
 } from '../../shared/index.js';
-import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
 import { alertResidualExposure, type ResidualExposureFlags } from './residual-protection.js';
 import { reflattenResidual } from './residual-reflatten.js';
 import type {

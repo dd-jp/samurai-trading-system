@@ -1,3 +1,4 @@
+import { ProtectiveRearmUnsupportedError } from '../../apps/v2/execution/alpaca/protective-rearm-unsupported.js';
 import type {
   MarketDataService,
   TradingCalendar,
@@ -23,7 +24,6 @@ import {
   UNATTRIBUTED_FLATTEN_FILL,
   UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED,
 } from './ingest-fills.js';
-import { ProtectiveRearmUnsupportedError } from './protective-rearm-unsupported.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {
   BrokerAck,

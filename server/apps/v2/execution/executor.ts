@@ -10,9 +10,9 @@ import type {
   V2Fill,
   Venue,
 } from '../../../../contracts/index.js';
-import { ProtectiveReplaceError } from '../../../pipeline/execution/index.js';
 import { type BrokerAck, type BrokerAdapter, describeThrownSafely } from '../../../shared/index.js';
 import { consumeApproval } from '../risk/index.js';
+import { ProtectiveReplaceError } from './alpaca/protective-replace-error.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
 import { type FillPricing, quoteSimulatedFill } from './simulated-costs.js';
 import { type ChildOrder, childOrders } from './slicing.js';

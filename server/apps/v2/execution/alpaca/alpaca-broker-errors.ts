@@ -4,13 +4,13 @@ import {
   isTimeoutAbort,
   parseRetryAfterMs,
   readErrorBody,
-} from '../../../shared/index.js';
+} from '../../../../shared/index.js';
 import {
   type HttpMethod,
   isRetrySafeMethod,
   VenueRateLimitError,
   VenueTimeoutError,
-} from './venue-errors.js';
+} from '../saxo/venue-errors.js';
 
 export type AlpacaHttpMethod = HttpMethod;
 

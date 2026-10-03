@@ -1,10 +1,10 @@
-import type { Clock, InjectableTimers, Logger } from '../../../shared/index.js';
+import type { Clock, InjectableTimers, Logger } from '../../../../shared/index.js';
 import {
   DEFAULT_INJECTABLE_TIMERS,
   fetchWithTimeout,
   maskCredentials,
   SystemClock,
-} from '../../../shared/index.js';
+} from '../../../../shared/index.js';
 import type { SaxoTradingEnvironment } from './saxo-environment.js';
 import type { FetchLike, SaxoOAuthConfig, SaxoTokenResponse } from './saxo-oauth.js';
 import { requestSaxoToken, SaxoOAuthError } from './saxo-oauth.js';

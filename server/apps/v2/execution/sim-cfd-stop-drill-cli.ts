@@ -1,19 +1,17 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Logger } from '../../../shared/index.js';
+import { exitCodeOrOne, isMainModule } from '../../../tools/cli-entrypoint.js';
+import { type FetchLike, resolveSaxoOAuthConfig } from './saxo/saxo-oauth.js';
+import { readTokenFile, tokenFilePath } from './saxo/saxo-token-file.js';
 import {
-  readTokenFile,
-  resolveSaxoOAuthConfig,
   SaxoTokenRefresher,
   type SaxoTokenSource,
   StaticSaxoTokenSource,
-  tokenFilePath,
-} from '../../../pipeline/execution/index.js';
-import type { Logger } from '../../../shared/index.js';
-import { exitCodeOrOne, isMainModule } from '../../../tools/cli-entrypoint.js';
+} from './saxo/saxo-token-source.js';
 import {
   assertSimGateway,
-  type FetchLike,
   SAXO_SIM_GATEWAY,
   SaxoSimGateway,
   SimOnlyRefusal,

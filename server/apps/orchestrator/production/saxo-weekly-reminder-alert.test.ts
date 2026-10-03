@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { writeTokenFile } from '../../../pipeline/execution/adapters/saxo-token-file.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
+import { writeTokenFile } from '../../v2/execution/saxo/saxo-token-file.js';
 import type {
   SaxoWeeklyReminderAlert,
   SaxoWeeklyReminderAlertChannel,

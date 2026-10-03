@@ -1,11 +1,11 @@
-import type { Logger, RetryConfig } from '../../../shared/index.js';
+import type { Logger, RetryConfig } from '../../../../shared/index.js';
 import {
   DEFAULT_VENUE_PACING,
   fetchWithTimeout,
   TokenBucket,
   truncateForError,
   withRetry,
-} from '../../../shared/index.js';
+} from '../../../../shared/index.js';
 import type { SaxoHttpMethod } from './saxo-broker-errors.js';
 import {
   classifySaxoBrokerNetworkError,

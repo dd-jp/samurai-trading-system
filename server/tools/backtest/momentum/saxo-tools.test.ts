@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SaxoSessionState } from '../../../pipeline/execution/adapters/saxo-token-source.js';
+import type { SaxoSessionState } from '../../../apps/v2/execution/saxo/saxo-token-source.js';
 import type { FetchResult } from '../../../providers/bar-store/index.js';
 import type { ChartSample, InfoPriceQuote } from '../../../providers/saxo-bars/index.js';
 import {

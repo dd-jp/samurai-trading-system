@@ -1,5 +1,5 @@
-import { TokenBucket } from '../../../shared/index.js';
-import { recordingLogger } from '../../../shared/recording-logger.js';
+import { TokenBucket } from '../../../../shared/index.js';
+import { recordingLogger } from '../../../../shared/recording-logger.js';
 import {
   SaxoBrokerProviderError,
   SaxoBrokerRateLimitError,

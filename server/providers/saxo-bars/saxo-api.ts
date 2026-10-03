@@ -1,10 +1,10 @@
-import type { SaxoTokenSource } from '../../pipeline/execution/index.js';
+import type { SaxoTokenSource } from '../../apps/v2/execution/index.js';
 import {
   resolveSaxoOAuthConfig,
   SaxoSessionLostError,
   SaxoTokenRefresher,
   tokenFilePath,
-} from '../../pipeline/execution/index.js';
+} from '../../apps/v2/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import type { Logger } from '../../shared/index.js';
 import { delay, isFiniteNumber, jsonOrTextResult, maskCredentials } from '../../shared/index.js';

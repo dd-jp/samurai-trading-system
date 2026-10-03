@@ -2,13 +2,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  readKeepAliveState,
-  writeKeepAliveState,
-} from '../../../pipeline/execution/adapters/saxo-keepalive-state.js';
-import type { SaxoTokenFileRecord } from '../../../pipeline/execution/adapters/saxo-token-file.js';
-import { writeTokenFile } from '../../../pipeline/execution/adapters/saxo-token-file.js';
-import { SaxoSessionLostError } from '../../../pipeline/execution/adapters/saxo-token-source.js';
+import { readKeepAliveState, writeKeepAliveState } from './saxo/saxo-keepalive-state.js';
+import type { SaxoTokenFileRecord } from './saxo/saxo-token-file.js';
+import { writeTokenFile } from './saxo/saxo-token-file.js';
+import { SaxoSessionLostError } from './saxo/saxo-token-source.js';
 import {
   recordedSessionLoss,
   recordSessionLoss,

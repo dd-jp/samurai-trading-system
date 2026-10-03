@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,7 +10,7 @@ import {
 } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildAuthorizeUrl,
@@ -401,16 +402,21 @@ describe('tokenFilePath', () => {
     expect(tokenFilePath('live')).toMatch(/data\/saxo-tokens\/live\.json$/);
   });
 
+  it('resolves under the directory holding package.json', () => {
+    const root = dirname(dirname(dirname(tokenFilePath('sim'))));
+    expect(existsSync(join(root, 'package.json'))).toBe(true);
+  });
+
   it('is anchored to the repo root, not the working directory (review round 1, finding 1)', () => {
     const fromRepoRoot = tokenFilePath('sim');
-    const originalCwd = process.cwd();
     const elsewhere = mkdtempSync(join(tmpdir(), 'saxo-login-cwd-'));
+    // process.chdir() throws in vitest worker threads, which Stryker's runner uses
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(elsewhere);
     try {
-      process.chdir(elsewhere);
       expect(tokenFilePath('sim')).toBe(fromRepoRoot);
       expect(tokenFilePath('sim')).not.toContain(elsewhere);
     } finally {
-      process.chdir(originalCwd);
+      cwd.mockRestore();
       rmSync(elsewhere, { recursive: true, force: true });
     }
   });

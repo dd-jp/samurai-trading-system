@@ -10,8 +10,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TokenBucket } from '../../../shared/index.js';
-import { recordingLogger } from '../../../shared/recording-logger.js';
+import { TokenBucket } from '../../../../shared/index.js';
+import { recordingLogger } from '../../../../shared/recording-logger.js';
 import { SaxoHttpBrokerClient } from './saxo-http-client.js';
 import type { FetchLike } from './saxo-oauth.js';
 import type { SaxoTokenFileRecord } from './saxo-token-file.js';

@@ -4,7 +4,7 @@ import {
   isTimeoutAbort,
   parseRetryAfterMs,
   truncateForError,
-} from '../../../shared/index.js';
+} from '../../../../shared/index.js';
 import {
   type HttpMethod,
   isRetrySafeMethod,

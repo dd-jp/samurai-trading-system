@@ -6,9 +6,9 @@ import type {
   SleeveDecision,
   Venue,
 } from '../../../../contracts/index.js';
-import { ProtectiveReplaceError } from '../../../pipeline/execution/index.js';
 import { type BrokerAdapter, type NormalizedFill, toBrokerFillId } from '../../../shared/index.js';
 import { V2RiskGate } from '../risk/index.js';
+import { ProtectiveReplaceError } from './alpaca/protective-replace-error.js';
 import { DryRunRefusedError } from './dry-run-broker.js';
 import { UnapprovedOrderError, V2OrderExecutor } from './executor.js';
 import { venueFee } from './simulated-costs.js';

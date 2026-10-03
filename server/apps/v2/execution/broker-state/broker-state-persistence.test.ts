@@ -1,16 +1,16 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type Clock, TokenBucket, toBrokerFillId } from '../../shared/index.js';
-import { recordingLogger } from '../../shared/recording-logger.js';
-import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
-import { AlpacaBrokerAdapter } from './adapters/alpaca-adapter.js';
-import type { AlpacaBrokerClient, AlpacaOrder } from './adapters/alpaca-client.js';
+import type { NativeBracketRequest } from '../../../../shared/index.js';
+import { type Clock, TokenBucket, toBrokerFillId } from '../../../../shared/index.js';
+import { recordingLogger } from '../../../../shared/recording-logger.js';
+import { openSharedStore, type StoreHandle } from '../../../../shared/store/index.js';
+import { AlpacaBrokerAdapter } from '../alpaca/alpaca-adapter.js';
+import type { AlpacaBrokerClient, AlpacaOrder } from '../alpaca/alpaca-client.js';
+import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../alpaca/unpriced-fill-alert.js';
 import type { BrokerVenue } from './broker-state-store.js';
 import { InMemoryBrokerStateStore } from './broker-state-store.js';
 import { SqliteBrokerStateStore } from './sqlite-broker-state-store.js';
-import type { NativeBracketRequest } from './types.js';
-import type { UnpricedFillAlert, UnpricedFillAlertChannel } from './unpriced-fill-alert.js';
 
 const FILL_TS = new Date('2026-07-15T14:00:00Z').getTime();
 const FILL_TIME = '2026-07-15T14:00:00.000Z';

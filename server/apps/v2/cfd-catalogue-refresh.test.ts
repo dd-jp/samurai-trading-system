@@ -2,8 +2,6 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { writeTokenFile } from '../../pipeline/execution/adapters/saxo-token-file.js';
-import { readKeepAliveState, StaticSaxoTokenSource } from '../../pipeline/execution/index.js';
 import type { FetchResult } from '../../providers/bar-store/index.js';
 import { SaxoReadOnlyApi } from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
@@ -18,6 +16,9 @@ import {
   writeAtomically,
 } from './cfd-catalogue-refresh.js';
 import { createVenueRouter, loadCfdCatalogue } from './data/index.js';
+import { readKeepAliveState } from './execution/saxo/saxo-keepalive-state.js';
+import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
+import { StaticSaxoTokenSource } from './execution/saxo/saxo-token-source.js';
 import { LSE_LINES } from './signal/index.js';
 
 const GATEWAY = 'https://gw.test/openapi';

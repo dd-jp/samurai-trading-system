@@ -18,7 +18,7 @@ import type { SaxoTokenResponse } from './saxo-oauth.js';
 class SaxoTokenFileError extends Error {}
 
 function repoRoot(): string {
-  const fromModule = fileURLToPath(new URL('../../../../', import.meta.url));
+  const fromModule = fileURLToPath(new URL('../../../../../', import.meta.url));
   const trimmed = fromModule.replace(/\/+$/, '');
   return trimmed.endsWith('/dist') ? dirname(trimmed) : trimmed;
 }

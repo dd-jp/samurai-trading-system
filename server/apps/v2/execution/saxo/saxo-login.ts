@@ -2,21 +2,19 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { isAbsolute, resolve } from 'node:path';
+import { fetchWithTimeout, maskCredentials } from '../../../../shared/index.js';
+import type { SaxoTradingEnvironment } from './saxo-environment.js';
 import type {
   FetchLike,
   SaxoOAuthConfig as SaxoLoginConfig,
-  SaxoTokenFileRecord,
   SaxoTokenResponse,
-  SaxoTradingEnvironment,
-} from '../pipeline/execution/index.js';
+} from './saxo-oauth.js';
 import {
   requestSaxoToken,
   resolveSaxoOAuthConfig as resolveLoginConfig,
   SaxoOAuthError as SaxoLoginError,
-  tokenFilePath,
-  writeTokenFile,
-} from '../pipeline/execution/index.js';
-import { fetchWithTimeout, maskCredentials } from '../shared/index.js';
+} from './saxo-oauth.js';
+import { type SaxoTokenFileRecord, tokenFilePath, writeTokenFile } from './saxo-token-file.js';
 
 export {
   type FetchLike,

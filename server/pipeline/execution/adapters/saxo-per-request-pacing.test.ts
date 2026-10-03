@@ -1,6 +1,7 @@
+import { InMemoryBrokerStateStore } from '../../../apps/v2/execution/broker-state/broker-state-store.js';
+import { SaxoHttpBrokerClient } from '../../../apps/v2/execution/saxo/saxo-http-client.js';
 import { TokenBucket } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
-import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import type { DormantLegsUnresolvedAlertChannel } from '../dormant-legs-unresolved-alert.js';
 import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
 import type { NativeBracketRequest } from '../types.js';
@@ -10,7 +11,6 @@ import {
   type SaxoInstrumentResolver,
   saxoExternalReference,
 } from './saxo-adapter.js';
-import { SaxoHttpBrokerClient } from './saxo-http-client.js';
 
 function wireRef(clientOrderId = 'key-3usl-0930', leg?: 'stop' | 'target'): string {
   const base = saxoExternalReference(clientOrderId);

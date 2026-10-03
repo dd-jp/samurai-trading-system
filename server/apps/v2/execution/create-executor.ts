@@ -1,6 +1,6 @@
 import type { BrokerBookReader, OrderExecutor } from '../../../../contracts/index.js';
-import { AlpacaHttpBrokerClient } from '../../../pipeline/execution/index.js';
 import type { BrokerAdapter } from '../../../shared/index.js';
+import { AlpacaHttpBrokerClient } from './alpaca/alpaca-http-client.js';
 import type { AlpacaBrokerOptions } from './alpaca.js';
 import { alpacaBroker } from './alpaca.js';
 import { AlpacaBrokerBooks, NO_BROKER_BOOKS } from './broker-books.js';
