@@ -32,14 +32,14 @@ const CASES: readonly Case[] = [
   },
   {
     table: 'v2_fill_sweeps',
-    seed: `INSERT INTO v2_fill_sweeps (sweep_id, run_id, trading_date, last_fill_rowid, recorded_at)
-      VALUES (1, 'run-1', '2026-10-01', 3, '2026-10-01T07:00:00.000Z')`,
+    seed: `INSERT INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_rowid, last_fill_rowid, order_rowid, book_day_rowid, recorded_at)
+      VALUES (1, 'run-1', '2026-10-01', 0, 3, 0, 0, '2026-10-01T07:00:00.000Z')`,
     attacks: [
       {
         name: 'same sweep_id',
         outcome: 'refused',
-        sql: `INSERT OR REPLACE INTO v2_fill_sweeps (sweep_id, run_id, trading_date, last_fill_rowid, recorded_at)
-          VALUES (1, 'run-1', '2026-10-01', 9, '2026-10-01T08:00:00.000Z')`,
+        sql: `INSERT OR REPLACE INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_rowid, last_fill_rowid, order_rowid, book_day_rowid, recorded_at)
+          VALUES (1, 'run-1', '2026-10-01', 0, 9, 0, 0, '2026-10-01T08:00:00.000Z')`,
       },
     ],
   },

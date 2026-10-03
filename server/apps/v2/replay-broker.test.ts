@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { ProtectiveReplaceError } from './execution/index.js';
+import { earlierRunsThatActed, markingRun } from './replay-book.js';
 import { JournalReplayBroker, JournalReplayBrokerBooks, nativeAmountFor } from './replay-broker.js';
 
 const DAY = '2026-09-30';
@@ -120,8 +121,12 @@ describe('JournalReplayBroker', () => {
   const swept = (runId = 'run-1', at = `${DAY}T07:30:00.000Z`) =>
     db
       .prepare(
-        `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
-         VALUES (?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills), ?)`,
+        `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+           order_rowid, book_day_rowid, recorded_at)
+         VALUES (?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_orders),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_book_days), ?)`,
       )
       .run(runId, DAY, at);
 
@@ -192,6 +197,7 @@ describe('JournalReplayBroker', () => {
   it('re-serves each journalled fill read of an order in turn, and fails one never journalled (#1990)', async () => {
     const read = (clientOrderId: string, qty: number | null, error: string | null = null) =>
       fillRead('run-1', clientOrderId, qty, error);
+    swept('run-1');
     read('entry', 4);
     read('entry', null);
     read('entry', null, 'order read timed out');
@@ -463,5 +469,100 @@ describe('JournalReplayBrokerBooks', () => {
   it('still fails the read on a mismatch that is not only stale stops', async () => {
     mismatched([diff('protective_qty', { broker: 2 }), diff('position_qty', { broker: 4 })]);
     await expect(books().read('alpaca')).rejects.toThrow('was mismatch: stale');
+  });
+});
+
+describe('which runs acted on a date, by journal position and never by clock (#1990)', () => {
+  // Each row's timestamp is deliberately out of order with the journal, so only rowids can tell
+  let clockSkew = 0;
+  const skewed = () => `${DAY}T23:59:${String(59 - (clockSkew++ % 60)).padStart(2, '0')}.000Z`;
+
+  const sweep = (runId: string, book: () => void = () => {}) => {
+    const first = (
+      db.prepare('SELECT COALESCE(MAX(rowid), 0) AS id FROM v2_fills').get() as { id: number }
+    ).id;
+    book();
+    db.prepare(
+      `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+         order_rowid, book_day_rowid, recorded_at)
+       VALUES (?, ?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+         (SELECT COALESCE(MAX(rowid), 0) FROM v2_orders),
+         (SELECT COALESCE(MAX(rowid), 0) FROM v2_book_days), ?)`,
+    ).run(runId, DAY, first, skewed());
+  };
+
+  const mark = () =>
+    db
+      .prepare(
+        `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp,
+           ytd_loss_gbp, size_multiplier, entries_blocked, custody_accrual_gbp, recorded_at)
+         VALUES ('debate/primary', ?, 600, 600, 0, 0, 1, 0, 0, ?)`,
+      )
+      .run(DAY, skewed());
+
+  const read = (runId: string) =>
+    db
+      .prepare(
+        `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
+           recorded_at)
+         VALUES (?, ?, 'entry', 3, NULL, ?)`,
+      )
+      .run(runId, DAY, skewed());
+
+  beforeEach(() => {
+    order('entry', 'submitted', {}, '2026-09-29');
+  });
+
+  it('takes the last run to sweep before the day was marked, not a pass after the marks', () => {
+    sweep('cycle');
+    sweep('cycle');
+    mark();
+    sweep('flatten');
+    expect(markingRun(db, DAY)?.runId).toBe('cycle');
+    expect(earlierRunsThatActed(db, DAY)).toEqual([]);
+  });
+
+  it('takes the last run on an unmarked date', () => {
+    sweep('first');
+    sweep('second');
+    expect(markingRun(db, DAY)?.runId).toBe('second');
+    expect(markingRun(db, '2026-01-01')).toBeUndefined();
+  });
+
+  it('clears an idle earlier run when the marking run books a fill at its own opening sweep', () => {
+    sweep('idle');
+    sweep('cycle', () => fill('alpaca:overnight', 'entry', 7));
+    sweep('cycle');
+    mark();
+    expect(earlierRunsThatActed(db, DAY)).toEqual([]);
+  });
+
+  it('clears what an earlier run booked at its own opening sweep', () => {
+    sweep('first', () => fill('alpaca:overnight', 'entry', 7));
+    sweep('cycle');
+    mark();
+    expect(earlierRunsThatActed(db, DAY)).toEqual([]);
+  });
+
+  it.each([
+    ['swept twice', () => sweep('first')],
+    ['read a fill', () => read('first')],
+    ['booked a fill after its opening sweep', () => fill('alpaca:sim-x', 'entry', 7)],
+    ['journalled an order after its opening sweep', () => order('late', 'submitted', {})],
+  ])('names an earlier run that %s', (_what, acted) => {
+    sweep('first');
+    acted();
+    sweep('cycle');
+    mark();
+    expect(earlierRunsThatActed(db, DAY)).toEqual(['first']);
+  });
+
+  it('ignores an order or fill on another date between the runs', () => {
+    sweep('first');
+    order('other-day', 'submitted', {}, '2026-09-29');
+    fill('alpaca:other-day', 'entry', 7, 0, { day: '2026-09-29' });
+    sweep('cycle');
+    mark();
+    expect(earlierRunsThatActed(db, DAY)).toEqual([]);
   });
 });

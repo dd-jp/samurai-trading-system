@@ -195,13 +195,23 @@ export class Journal implements DecisionJournal {
       );
   }
 
-  recordFillSweep(runId: string, tradingDate: string): void {
+  lastFillRowid(): number {
+    const row = this.db.prepare('SELECT COALESCE(MAX(rowid), 0) AS id FROM v2_fills').get() as {
+      id: number;
+    };
+    return row.id;
+  }
+
+  recordFillSweep(runId: string, tradingDate: string, firstFillRowid: number): void {
     this.db
       .prepare(
-        `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
-         VALUES (?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills), ?)`,
+        `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+           order_rowid, book_day_rowid, recorded_at)
+         VALUES (?, ?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_orders),
+           (SELECT COALESCE(MAX(rowid), 0) FROM v2_book_days), ?)`,
       )
-      .run(runId, tradingDate, this.#now());
+      .run(runId, tradingDate, firstFillRowid, this.#now());
   }
 
   markCancelled(clientOrderId: string, detail: string): void {

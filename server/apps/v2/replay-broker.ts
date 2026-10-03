@@ -19,6 +19,7 @@ import type {
 import { toBrokerFillId } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { ProtectiveReplaceError } from './execution/index.js';
+import { markingRun } from './replay-book.js';
 
 interface SentOrder {
   readonly outcome: string;
@@ -98,9 +99,9 @@ export class JournalReplayBroker implements BrokerAdapter {
     return this.#answer(clientOrderId);
   }
 
-  // Each read the replayed cycle makes re-serves in turn the reads of the last run, by the marks,
-  // that read that order: on a date that ran twice that is the run whose answer was acted on. One
-  // with no recording fails, since a default would decide the replay differently from the run
+  // Each read the replayed cycle makes re-serves in turn the reads of the run that marked the day;
+  // a date another run read on is flagged before the replay runs. One with no recording fails,
+  // since a default would decide the replay differently from the run
   getOrder(clientOrderId: string): Promise<NormalizedOrder | null> {
     const index = this.#reads.get(clientOrderId) ?? 0;
     this.#reads.set(clientOrderId, index + 1);
@@ -108,15 +109,15 @@ export class JournalReplayBroker implements BrokerAdapter {
     const read = db
       .prepare(
         `SELECT filled_qty, error FROM v2_fill_reads
-         WHERE trading_date = @date AND client_order_id = @id AND run_id = (
-           SELECT run_id FROM v2_fill_reads
-            WHERE trading_date = @date AND client_order_id = @id AND recorded_at <= @end
-            ORDER BY recorded_at DESC, read_id DESC LIMIT 1)
+         WHERE trading_date = @date AND client_order_id = @id AND run_id = @run
          ORDER BY read_id LIMIT 1 OFFSET @index`,
       )
-      .get({ date: tradingDate, id: clientOrderId, end: this.#markedAt(), index }) as
-      | { filled_qty: number | null; error: string | null }
-      | undefined;
+      .get({
+        date: tradingDate,
+        id: clientOrderId,
+        run: markingRun(db, tradingDate)?.runId ?? null,
+        index,
+      }) as { filled_qty: number | null; error: string | null } | undefined;
     if (read === undefined) {
       return Promise.reject(
         new Error(
@@ -252,21 +253,17 @@ export class JournalReplayBroker implements BrokerAdapter {
     });
   }
 
-  // Sweep N serves the fills the marking run's sweep N had booked: the last run to sweep by the
-  // day's marks, so a crashed run before it or a flatten pass after it is not served. A day
-  // journalled before sweeps were recorded swept once before its first reconcile and once at the
-  // close
+  // Sweep N serves the fills the marking run's sweep N had booked, so a flatten pass after the
+  // marks is not served. A day journalled before sweeps were recorded swept once before its first
+  // reconcile and once at the close
   #sweepCut(sweep: number): number {
     const { db, tradingDate } = this.day;
     const recorded = db
       .prepare(
         `SELECT last_fill_rowid AS cut FROM v2_fill_sweeps
-         WHERE trading_date = @date AND run_id = (
-           SELECT run_id FROM v2_fill_sweeps WHERE trading_date = @date AND recorded_at <= @end
-            ORDER BY recorded_at DESC, sweep_id DESC LIMIT 1)
-         ORDER BY sweep_id`,
+         WHERE trading_date = ? AND run_id = ? ORDER BY sweep_id`,
       )
-      .all({ date: tradingDate, end: this.#markedAt() }) as { cut: number }[];
+      .all(tradingDate, markingRun(db, tradingDate)?.runId ?? null) as { cut: number }[];
     if (recorded.length === 0)
       return sweep === 1 ? this.#rowidAt(this.#firstReconcileAt()) : ALL_ROWS;
     const row = recorded[sweep - 1];
@@ -274,13 +271,6 @@ export class JournalReplayBroker implements BrokerAdapter {
       throw new Error(`replay: row_missing: no journalled fill sweep ${sweep} on ${tradingDate}`);
     }
     return row.cut;
-  }
-
-  #markedAt(): string {
-    const row = this.day.db
-      .prepare('SELECT MAX(recorded_at) AS at FROM v2_book_days WHERE trading_date = ?')
-      .get(this.day.tradingDate) as { at: string | null };
-    return row.at ?? LATEST;
   }
 
   #rowidAt(at: string): number {
@@ -311,14 +301,14 @@ export class JournalReplayBroker implements BrokerAdapter {
         `SELECT json_extract(o.payload, '$.size') AS size,
            (SELECT SUM(f.qty) FROM v2_fills f
              WHERE f.client_order_id = o.client_order_id
-               AND (f.trading_date < @date OR (f.trading_date = @date AND f.recorded_at <= @cut)))
+               AND (f.trading_date < @date OR (f.trading_date = @date AND f.rowid <= @cut)))
              AS filled,
            EXISTS (SELECT 1 FROM v2_fills f
              WHERE f.client_order_id = o.client_order_id AND f.trading_date = @date
-               AND f.recorded_at <= @cut) AS today
+               AND f.rowid <= @cut) AS today
          FROM v2_orders o WHERE o.client_order_id = @id`,
       )
-      .get({ date: tradingDate, id: clientOrderId, cut: this.#firstReconcileAt() }) as
+      .get({ date: tradingDate, id: clientOrderId, cut: this.#sweepCut(1) }) as
       | FlattenFills
       | undefined;
     if (flatten?.today !== 1) return 'submitted';

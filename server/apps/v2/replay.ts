@@ -430,7 +430,7 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
       divergences: [{ kind: 'nothing_to_replay', tradingDate }],
     };
   }
-  const earlierRuns = earlierRunsThatActed(db, day, tradingDate);
+  const earlierRuns = earlierRunsThatActed(db, tradingDate);
   if (earlierRuns.length > 0) return multipleRuns(inputs, rows.length, calls.length, earlierRuns);
   const changed = inputChangesSince(db, tradingDate, inputs.bars, inputs.catalogue).map(
     (change): Divergence => ({ kind: 'input_changed_since', tradingDate, ...change }),

@@ -112,41 +112,59 @@ export function journalledDay(db: StoreHandle, tradingDate: string): JournalledD
   };
 }
 
-// David 2026-10-02 (#1990): a date another run acted on before the run that marked it is flagged,
-// not replayed. A run that only swept once acted on nothing: the marking run's own opening sweep
-// re-reads the venue it saw
-export function earlierRunsThatActed(
-  db: StoreHandle,
-  day: JournalledDay,
-  tradingDate: string,
-): string[] {
-  const end = day.markedAt ?? LATEST;
-  const marking = db
+export interface MarkingRun {
+  readonly runId: string;
+  readonly firstSweepId: number;
+}
+
+// The run that marked the day is the last to sweep before the day's last mark row, told by journal
+// rowids rather than clocks: a flatten pass after the marks swept with that mark already written
+export function markingRun(db: StoreHandle, tradingDate: string): MarkingRun | undefined {
+  const row = db
     .prepare(
-      `SELECT run_id, MIN(recorded_at) OVER (PARTITION BY run_id) AS started FROM v2_fill_sweeps
-        WHERE trading_date = ? AND recorded_at <= ?
-        ORDER BY recorded_at DESC, sweep_id DESC LIMIT 1`,
+      `WITH mark AS (SELECT MAX(rowid) AS id FROM v2_book_days WHERE trading_date = @date),
+            marking AS (
+              SELECT run_id FROM v2_fill_sweeps, mark
+               WHERE trading_date = @date AND (mark.id IS NULL OR book_day_rowid < mark.id)
+               ORDER BY sweep_id DESC LIMIT 1)
+       SELECT marking.run_id AS runId, MIN(s.sweep_id) AS firstSweepId
+         FROM marking JOIN v2_fill_sweeps s
+           ON s.run_id = marking.run_id AND s.trading_date = @date`,
     )
-    .get(tradingDate, end) as { run_id: string; started: string } | undefined;
+    .get({ date: tradingDate }) as { runId: string | null; firstSweepId: number | null };
+  return row.runId === null ? undefined : { runId: row.runId, firstSweepId: row.firstSweepId ?? 0 };
+}
+
+// David 2026-10-02 (#1990): a date another run acted on before the run that marked it is flagged,
+// not replayed. A run acted if it swept twice, read a fill, or journalled an order or fill between
+// the end of its opening sweep and the start of the next sweep; what its opening sweep booked the
+// marking run's own opening sweep would re-read. Rows are placed by rowid, never by clock
+export function earlierRunsThatActed(db: StoreHandle, tradingDate: string): string[] {
+  const marking = markingRun(db, tradingDate);
   if (marking === undefined) return [];
   const rows = db
     .prepare(
       `WITH runs AS (
-         SELECT run_id, COUNT(*) AS sweeps, MIN(recorded_at) AS first FROM v2_fill_sweeps
-          WHERE trading_date = @date AND run_id <> @marking AND recorded_at <= @end
-          GROUP BY run_id)
-       SELECT run_id FROM runs
+         SELECT run_id, COUNT(*) AS sweeps, MIN(sweep_id) AS opening FROM v2_fill_sweeps
+          WHERE trading_date = @date AND sweep_id < @first GROUP BY run_id),
+       bounds AS (
+         SELECT r.run_id, r.sweeps, r.opening, o.last_fill_rowid AS fills_after,
+                o.order_rowid AS orders_after, n.first_fill_rowid AS fills_to,
+                n.order_rowid AS orders_to
+           FROM runs r JOIN v2_fill_sweeps o ON o.sweep_id = r.opening
+           JOIN v2_fill_sweeps n ON n.sweep_id = (
+             SELECT MIN(sweep_id) FROM v2_fill_sweeps
+              WHERE trading_date = @date AND sweep_id > r.opening))
+       SELECT run_id FROM bounds
         WHERE sweeps > 1
-           OR EXISTS (SELECT 1 FROM v2_fill_reads r WHERE r.run_id = runs.run_id)
-           OR EXISTS (SELECT 1 FROM v2_orders o WHERE o.trading_date = @date
-                        AND o.recorded_at > runs.first AND o.recorded_at < @started)
+           OR EXISTS (SELECT 1 FROM v2_fill_reads x WHERE x.run_id = bounds.run_id)
            OR EXISTS (SELECT 1 FROM v2_fills f WHERE f.trading_date = @date
-                        AND f.recorded_at > runs.first AND f.recorded_at < @started)
-        ORDER BY first`,
+                        AND f.rowid > fills_after AND f.rowid <= fills_to)
+           OR EXISTS (SELECT 1 FROM v2_orders o WHERE o.trading_date = @date
+                        AND o.rowid > orders_after AND o.rowid <= orders_to)
+        ORDER BY opening`,
     )
-    .all({ date: tradingDate, marking: marking.run_id, end, started: marking.started }) as {
-    run_id: string;
-  }[];
+    .all({ date: tradingDate, first: marking.firstSweepId }) as { run_id: string }[];
   return rows.map((row) => row.run_id);
 }
 

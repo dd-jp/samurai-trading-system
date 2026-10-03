@@ -495,15 +495,32 @@ describe('replay of an entry part filled at the venue before the journal booked 
     expect(result.divergences).toEqual([]);
   });
 
-  const withEarlierRun = (name: string, extra: string) =>
-    tamperedCopy(
-      name,
-      `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
-         SELECT 'earlier', trading_date, last_fill_rowid, '${SPLIT_DAY}T07:29:00.000Z'
-           FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}' ORDER BY sweep_id LIMIT 1;
-       ${extra}`,
-      partOptions.storePath,
+  // Earlier-run rows go in ahead of the marking run's by sweep_id, as a real earlier run's would,
+  // with timestamps after every other row so that nothing can lean on the clock
+  const earlierSweeps = (sweeps: number, source = partOptions.storePath) => {
+    const rows = Array.from(
+      { length: sweeps },
+      (_, k) =>
+        `INSERT INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_rowid,
+           last_fill_rowid, order_rowid, book_day_rowid, recorded_at)
+         SELECT MIN(sweep_id) - 1000 + ${k}, 'earlier', trading_date, first_fill_rowid,
+                first_fill_rowid, order_rowid, book_day_rowid, '${SPLIT_DAY}T23:5${k}:00.000Z'
+           FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}';`,
     );
+    return {
+      source,
+      sql: `DROP TRIGGER v2_fill_sweeps_no_update;
+        UPDATE v2_fill_sweeps SET sweep_id = sweep_id + 1000
+         WHERE sweep_id >= (SELECT MIN(sweep_id) FROM v2_fill_sweeps
+                             WHERE trading_date = '${SPLIT_DAY}');
+        ${rows.join('\n')}`,
+    };
+  };
+
+  const withEarlierRun = (name: string, extra: string, sweeps = 1, source?: string) => {
+    const earlier = earlierSweeps(sweeps, source);
+    return tamperedCopy(name, `${earlier.sql}\n${extra}`, earlier.source);
+  };
 
   it('replays identical a date whose earlier run stopped after its opening sweep (#1990)', async () => {
     const storePath = withEarlierRun('stopped-at-opening', '');
@@ -517,15 +534,41 @@ describe('replay of an entry part filled at the venue before the journal booked 
     expect(result.divergences).toEqual([]);
   });
 
+  it('replays identical an idle earlier run when the marking run books a fill at its own opening sweep, whatever the clock says (ninth review probe)', async () => {
+    const storePath = withEarlierRun(
+      'idle-then-opening-fill',
+      `DROP TRIGGER IF EXISTS v2_fills_no_update;
+       UPDATE v2_fills SET recorded_at = '${SPLIT_DAY}T07:30:00.001Z'
+        WHERE trading_date = '${SPLIT_DAY}';`,
+      1,
+      options.storePath,
+    );
+    expect(
+      journalRows(
+        `SELECT s.first_fill_rowid < f.rowid AND f.rowid <= s.last_fill_rowid AS opening
+           FROM v2_fills f, v2_fill_sweeps s
+          WHERE f.trading_date = '${SPLIT_DAY}' AND f.book_id = 'debate/primary'
+            AND s.sweep_id = (SELECT MIN(sweep_id) FROM v2_fill_sweeps
+                               WHERE trading_date = '${SPLIT_DAY}' AND run_id <> 'earlier')`,
+        storePath,
+      ),
+    ).toEqual([{ opening: 1 }]);
+    const result = await replayFromFiles({ ...options, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toEqual([]);
+  });
+
   it('replays identical a date with a flatten pass that did nothing, before the cycle or after its marks', async () => {
     const storePath = withEarlierRun(
       'idle-flatten',
-      `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
-         VALUES ('later-flatten', '${SPLIT_DAY}', 99, '${SPLIT_DAY}T15:00:00.000Z');
+      `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+           order_rowid, book_day_rowid, recorded_at)
+         SELECT 'later-flatten', '${SPLIT_DAY}', MAX(rowid), MAX(rowid), 0,
+                (SELECT MAX(rowid) FROM v2_book_days), '${SPLIT_DAY}T00:00:00.000Z'
+           FROM v2_fills;
        INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
            recorded_at)
          VALUES ('later-flatten', '${SPLIT_DAY}', 'v2-debate-primary-${ENTRY_DAY}-UP', 0, NULL,
-                 '${SPLIT_DAY}T15:00:00.000Z');`,
+                 '${SPLIT_DAY}T00:00:00.000Z');`,
     );
     const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
     expect(result.divergences).toEqual([]);
@@ -535,17 +578,14 @@ describe('replay of an entry part filled at the venue before the journal booked 
     [
       'read an entry',
       `INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error, recorded_at)
-         VALUES ('earlier', '${SPLIT_DAY}', 'v2-debate-primary-${ENTRY_DAY}-UP', NULL, 'order read timed out', '${SPLIT_DAY}T07:29:00.000Z');`,
+         VALUES ('earlier', '${SPLIT_DAY}', 'v2-debate-primary-${ENTRY_DAY}-UP', NULL, 'order read timed out', '${SPLIT_DAY}T00:00:00.000Z');`,
+      1,
     ],
-    [
-      'swept again',
-      `INSERT INTO v2_fill_sweeps (run_id, trading_date, last_fill_rowid, recorded_at)
-         VALUES ('earlier', '${SPLIT_DAY}', 0, '${SPLIT_DAY}T07:29:01.000Z');`,
-    ],
-  ])(
+    ['swept again', '', 2],
+  ] as const)(
     'flags multiple_runs, not a mismatch, when an earlier run %s (David 2026-10-02, #1990)',
-    async (_what, extra) => {
-      const storePath = withEarlierRun(`earlier-${_what.replace(' ', '-')}`, extra);
+    async (what, extra, sweeps) => {
+      const storePath = withEarlierRun(`earlier-${what.replace(' ', '-')}`, extra, sweeps);
       const result = await replayFromFiles({ ...partOptions, storePath, tradingDate: SPLIT_DAY });
       expect(result.divergences).toEqual([
         { kind: 'multiple_runs', tradingDate: SPLIT_DAY, earlierRuns: ['earlier'] },

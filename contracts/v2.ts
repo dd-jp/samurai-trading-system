@@ -601,7 +601,8 @@ export interface DecisionJournal {
   partFilledEntries(bookId: string, before?: string): readonly JournalledOrder[];
   markCancelled(clientOrderId: string, detail: string): void;
   recordFillRead(read: JournalledFillRead): void;
-  recordFillSweep(runId: string, tradingDate: string): void;
+  lastFillRowid(): number;
+  recordFillSweep(runId: string, tradingDate: string, firstFillRowid: number): void;
   recordFill(fill: JournalledFill): boolean;
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[];
   recordSplit(split: JournalledSplit): void;
