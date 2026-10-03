@@ -22,6 +22,7 @@ const CAPTURED = {
   fx_quote_per_gbp: 1.25,
   fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
   fill_date: null,
+  broker_mode: 'paper',
 } as const;
 
 type WireType = keyof typeof V2_WIRE_FIELD_NAMES;
@@ -59,6 +60,7 @@ function recordSaxoFill(journal: Journal, orderId: string, side: 'buy' | 'sell',
     fx_quote_per_gbp: 1,
     fx_source: 'gbp',
     fill_date: FIXTURE_TRADING_DATE,
+    broker_mode: 'paper',
   });
 }
 
@@ -236,6 +238,8 @@ describe('the Evidence and Records routes the client reads, served over the seed
       book_ids: ['debate/primary'],
       diffs: [{ kind: 'position_qty', instrument: 'MSFT', order_id: null, store: 2, broker: 1 }],
       detail: 'position_qty MSFT store 2 broker 1',
+      broker_mode: 'paper',
+      cash_quote: null,
     });
     researchPath = join(routeDir, 'research.sqlite');
     const research = openSharedStore(researchPath);

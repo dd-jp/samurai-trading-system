@@ -107,7 +107,12 @@ const CLEAN_BROKER: BrokerBook = {
 };
 
 interface FakeAnchors extends CashAnchorLedger {
-  readonly recorded: { venue: Venue; cashQuote: number; tradingDate: string }[];
+  readonly recorded: {
+    venue: Venue;
+    brokerMode: BrokerMode;
+    cashQuote: number;
+    tradingDate: string;
+  }[];
 }
 
 function fakeAnchors(
@@ -119,16 +124,21 @@ function fakeAnchors(
   return {
     recorded,
     anchor: () => current,
-    recordAnchor: (venue, cashQuote, tradingDate) => {
-      recorded.push({ venue, cashQuote, tradingDate });
-      current = { currency: 'USD', cashQuote, fillRowid: 0 };
+    recordAnchor: (venue, brokerMode, cashQuote, tradingDate) => {
+      recorded.push({ venue, brokerMode, cashQuote, tradingDate });
+      current = { currency: 'USD', cashQuote, fillSeq: 0, brokerMode };
       return current;
     },
     storeFlowSince: () => flow,
   };
 }
 
-const ANCHORED_AT_CLEAN: CashAnchor = { currency: 'USD', cashQuote: 800 * FX, fillRowid: 0 };
+const ANCHORED_AT_CLEAN: CashAnchor = {
+  currency: 'USD',
+  cashQuote: 800 * FX,
+  fillSeq: 0,
+  brokerMode: 'live',
+};
 
 interface Harness {
   readonly deps: ReconcileDeps;
@@ -253,6 +263,8 @@ describe('reconcileBooks', () => {
         book_ids: [PRIMARY.id],
         diffs: [],
         detail: CASH_MATCHES,
+        broker_mode: 'live',
+        cash_quote: CLEAN_BROKER.cashQuote,
       },
       {
         trading_date: DATE,
@@ -262,6 +274,8 @@ describe('reconcileBooks', () => {
         book_ids: [PRIMARY.id, SHADOW.id],
         diffs: [],
         detail: 'simulated venue: the ledger is its book',
+        broker_mode: 'live',
+        cash_quote: null,
       },
       {
         trading_date: DATE,
@@ -271,6 +285,8 @@ describe('reconcileBooks', () => {
         book_ids: [PRIMARY.id, SHADOW.id],
         diffs: [],
         detail: 'simulated venue: the ledger is its book',
+        broker_mode: 'live',
+        cash_quote: null,
       },
       {
         trading_date: DATE,
@@ -280,6 +296,8 @@ describe('reconcileBooks', () => {
         book_ids: [PRIMARY.id, SHADOW.id],
         diffs: [],
         detail: 'simulated venue: the ledger is its book',
+        broker_mode: 'live',
+        cash_quote: null,
       },
       {
         trading_date: DATE,
@@ -289,6 +307,8 @@ describe('reconcileBooks', () => {
         book_ids: [SHADOW.id],
         diffs: [],
         detail: 'simulated venue: the ledger is its book',
+        broker_mode: 'live',
+        cash_quote: null,
       },
     ]);
   });
@@ -420,7 +440,9 @@ describe('reconcileBooks', () => {
     const { deps, reconciles, refusals } = harness(CLEAN_BROKER, { anchors });
     const outcome = await reconcileBooks(deps, DATE);
 
-    expect(anchors.recorded).toEqual([{ venue: 'alpaca', cashQuote: 800 * FX, tradingDate: DATE }]);
+    expect(anchors.recorded).toEqual([
+      { venue: 'alpaca', brokerMode: 'live', cashQuote: 800 * FX, tradingDate: DATE },
+    ]);
     expect(outcome.blockedBookIds.size).toBe(0);
     expect(refusals).toEqual([]);
     expect(reconciles[0]).toMatchObject({

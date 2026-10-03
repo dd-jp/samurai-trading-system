@@ -78,8 +78,8 @@ function journal(path: string, orders: readonly OrderSeed[], fills: readonly Fil
   }
   const fill = db.prepare(
     `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
-       side, qty, price_gbp, fee_gbp, recorded_at)
-     VALUES (?, ?, 'debate/primary', ?, 'AAA', 'alpaca', ?, ?, ?, ?, ?, '2026-09-02T00:00:00Z')`,
+       side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+     VALUES (?, ?, 'debate/primary', ?, 'AAA', 'alpaca', ?, ?, ?, ?, ?, '2026-09-02T00:00:00Z', 'paper')`,
   );
   for (const seed of fills) {
     const row = { ...FILL_DEFAULTS, ...seed };

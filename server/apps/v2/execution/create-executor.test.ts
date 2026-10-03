@@ -58,3 +58,15 @@ describe('createBrokerAccess: broker mode', () => {
     expect(() => createBrokerAccess(options({ dryRun: true, brokerMode: 'live' }))).not.toThrow();
   });
 });
+
+describe('createBrokerAccess: broker cash-in-lieu reader (#2001)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('reads Alpaca cash in lieu through the broker client, and has no reader on a dry run', () => {
+    paperCredentialsOnly();
+    expect(createBrokerAccess(options()).cashInLieu?.venue).toBe('alpaca');
+    expect(createBrokerAccess(options({ dryRun: true })).cashInLieu).toBeUndefined();
+  });
+});

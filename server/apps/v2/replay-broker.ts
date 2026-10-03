@@ -19,7 +19,7 @@ import type {
 import { toBrokerFillId } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { ProtectiveReplaceError } from './execution/index.js';
-import { markingRun } from './replay-book.js';
+import { MIRRORED_DIFF_KINDS, markingRun } from './replay-book.js';
 
 interface SentOrder {
   readonly outcome: string;
@@ -158,8 +158,8 @@ export class JournalReplayBroker implements BrokerAdapter {
         `SELECT fill_id, client_order_id, leg, qty, price_gbp, fee_gbp, filled_at, recorded_at
          FROM v2_fills
          WHERE trading_date = ? AND venue = ? AND substr(fill_id, 1, length(?)) <> ?
-           AND rowid <= ?
-         ORDER BY rowid`,
+           AND fill_seq <= ?
+         ORDER BY fill_seq`,
       )
       .all(tradingDate, venue, `${venue}:sim-`, `${venue}:sim-`, cut) as BrokerFillRow[];
     return Promise.resolve(
@@ -260,12 +260,12 @@ export class JournalReplayBroker implements BrokerAdapter {
     const { db, tradingDate } = this.day;
     const recorded = db
       .prepare(
-        `SELECT last_fill_rowid AS cut FROM v2_fill_sweeps
+        `SELECT last_fill_seq AS cut FROM v2_fill_sweeps
          WHERE trading_date = ? AND run_id = ? ORDER BY sweep_id`,
       )
       .all(tradingDate, markingRun(db, tradingDate)?.runId ?? null) as { cut: number }[];
     if (recorded.length === 0)
-      return sweep === 1 ? this.#rowidAt(this.#firstReconcileAt()) : ALL_ROWS;
+      return sweep === 1 ? this.#seqAt(this.#firstReconcileAt()) : ALL_ROWS;
     const row = recorded[sweep - 1];
     if (row === undefined) {
       throw new Error(`replay: row_missing: no journalled fill sweep ${sweep} on ${tradingDate}`);
@@ -273,9 +273,9 @@ export class JournalReplayBroker implements BrokerAdapter {
     return row.cut;
   }
 
-  #rowidAt(at: string): number {
+  #seqAt(at: string): number {
     const row = this.day.db
-      .prepare('SELECT COALESCE(MAX(rowid), 0) AS cut FROM v2_fills WHERE recorded_at <= ?')
+      .prepare('SELECT COALESCE(MAX(fill_seq), 0) AS cut FROM v2_fills WHERE recorded_at <= ?')
       .get(at) as { cut: number };
     return row.cut;
   }
@@ -301,11 +301,11 @@ export class JournalReplayBroker implements BrokerAdapter {
         `SELECT json_extract(o.payload, '$.size') AS size,
            (SELECT SUM(f.qty) FROM v2_fills f
              WHERE f.client_order_id = o.client_order_id
-               AND (f.trading_date < @date OR (f.trading_date = @date AND f.rowid <= @cut)))
+               AND (f.trading_date < @date OR (f.trading_date = @date AND f.fill_seq <= @cut)))
              AS filled,
            EXISTS (SELECT 1 FROM v2_fills f
              WHERE f.client_order_id = o.client_order_id AND f.trading_date = @date
-               AND f.rowid <= @cut) AS today
+               AND f.fill_seq <= @cut) AS today
          FROM v2_orders o WHERE o.client_order_id = @id`,
       )
       .get({ date: tradingDate, id: clientOrderId, cut: this.#sweepCut(1) }) as
@@ -333,12 +333,6 @@ function protectiveStops(positions: ReadonlyMap<string, number>): BrokerOpenOrde
     }));
 }
 
-const STALE_STOP_KINDS: ReadonlySet<string> = new Set([
-  'protective_qty',
-  'protective_price',
-  'position_unprotected',
-]);
-
 // A reconcile whose only differences were stale or missing stops is mirrored with those stops, so
 // the replay finds them and re-runs the replacement or re-arm the journalled cycle sent (#1990)
 function staleStop(stop: BrokerOpenOrder, diffs: readonly ReconcileDiff[]): BrokerOpenOrder {
@@ -353,11 +347,11 @@ function staleStop(stop: BrokerOpenOrder, diffs: readonly ReconcileDiff[]): Brok
   };
 }
 
-function staleStopsOnly(row: { status: string; diffs: string }): ReconcileDiff[] | undefined {
-  if (row.status !== 'mismatch') return undefined;
+function mirroredStaleStops(row: { status: string; diffs: string }): ReconcileDiff[] | undefined {
   const diffs = JSON.parse(row.diffs) as ReconcileDiff[];
-  const onlyStale = diffs.length > 0 && diffs.every((entry) => STALE_STOP_KINDS.has(entry.kind));
-  return onlyStale ? diffs : undefined;
+  const found = row.status === 'clean' || (row.status !== 'read_failed' && diffs.length > 0);
+  const mirrored = diffs.every((entry) => MIRRORED_DIFF_KINDS.has(entry.kind));
+  return found && mirrored ? diffs : undefined;
 }
 
 function mirroredStops(
@@ -372,8 +366,9 @@ function mirroredStops(
     .map((stop) => staleStop(stop, diffs));
 }
 
-// Only a clean journalled reconcile, or one that found only stale or missing stops, is mirrored;
-// any other status blocks the replayed books' entries as it blocked the journalled ones
+// Only a journalled reconcile whose positions and orders matched, or differed only by stale or
+// missing stops, is mirrored, with the broker cash it read, so the replay reruns its cash check;
+// any other blocks the replayed books' entries as it blocked the journalled ones
 export class JournalReplayBrokerBooks implements BrokerBookReader {
   constructor(
     private readonly db: StoreHandle,
@@ -384,15 +379,15 @@ export class JournalReplayBrokerBooks implements BrokerBookReader {
   read(venue: Venue): Promise<BrokerBook> {
     const row = this.db
       .prepare(
-        `SELECT status, detail, diffs FROM v2_reconciles
+        `SELECT status, detail, diffs, cash_quote FROM v2_reconciles
          WHERE trading_date = ? AND venue = ? AND source = 'broker'
          ORDER BY reconcile_id LIMIT 1`,
       )
       .get(this.tradingDate, venue) as
-      | { status: string; detail: string; diffs: string }
+      | { status: string; detail: string; diffs: string; cash_quote: number | null }
       | undefined;
-    const stale = row === undefined ? undefined : staleStopsOnly(row);
-    if (row?.status !== 'clean' && stale === undefined) {
+    const stale = row === undefined ? undefined : mirroredStaleStops(row);
+    if (row === undefined || stale === undefined) {
       const status = row === undefined ? 'not run' : `${row.status}: ${row.detail}`;
       return Promise.reject(
         new Error(`replay: the journalled ${venue} reconcile on ${this.tradingDate} was ${status}`),
@@ -401,8 +396,8 @@ export class JournalReplayBrokerBooks implements BrokerBookReader {
     const book = this.mirror(venue);
     return Promise.resolve({
       positions: [...book.positions].map(([instrument, qty]) => ({ instrument, qty })),
-      openOrders: [...book.openOrders, ...mirroredStops(book.positions, stale ?? [])],
-      cashQuote: 0,
+      openOrders: [...book.openOrders, ...mirroredStops(book.positions, stale)],
+      cashQuote: row.cash_quote ?? 0,
     });
   }
 }

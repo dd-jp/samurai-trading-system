@@ -203,6 +203,8 @@ describe('fault classification', () => {
     book_ids: ['debate/primary'],
     diffs: [],
     detail: '',
+    broker_mode: 'paper',
+    cash_quote: null,
     ...overrides,
   });
 

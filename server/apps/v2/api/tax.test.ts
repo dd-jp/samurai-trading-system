@@ -59,6 +59,7 @@ function trade(
     fx_quote_per_gbp: usd ? 1.3 : 1,
     fx_source: usd ? 'boe-xudluss:year-start:2026@2025-12-31' : 'gbp',
     fill_date: '2026-05-01',
+    broker_mode: 'paper',
     ...fill,
   });
 }
@@ -154,6 +155,7 @@ describe('TaxReader', () => {
           fx_source: 'boe-xudluss:2026-07-01',
           provisional: false,
           cash_in_lieu: false,
+          cash_in_lieu_activity: null,
         },
       ],
       held_out: [],
@@ -193,6 +195,49 @@ describe('TaxReader', () => {
       status: 'fed',
       rows: [{ qty: 20, cost_gbp: 900, proceeds_gbp: 1_000, gain_gbp: 100 }],
     });
+  });
+
+  it("reads the broker's journalled cash in lieu in place of the latest-close estimate (#2001)", () => {
+    const store = seeded();
+    trade(store, 'submitted', {
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      side: 'buy',
+      qty: 10,
+      price_native: 150,
+    });
+    trade(store, 'submitted', {
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      side: 'sell',
+      leg: 'cash_in_lieu',
+      qty: 0.5,
+      price_native: 170,
+      fill_date: '2026-07-01',
+    });
+    const reader = new TaxReader(store.db, clock, () => FX);
+    expect(reader.read({ year: 2026, format: 'json' }).disposals).toMatchObject({
+      rows: [{ proceeds_gbp: 85 / 1.3, cash_in_lieu: true, cash_in_lieu_activity: null }],
+    });
+    store.journal.recordCashInLieu({
+      venue: 'alpaca',
+      activity_id: 'cil-1',
+      instrument: 'AAPL',
+      activity_date: '2026-07-03',
+      qty: 0.5,
+      amount_native: 91,
+      currency: 'USD',
+      status: 'executed',
+      fx_quote_per_gbp: 1.3,
+      fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
+      trading_date: '2026-07-03',
+    });
+    expect(reader.read({ year: 2026, format: 'json' }).disposals).toMatchObject({
+      rows: [{ proceeds_gbp: 91 / 1.3, cash_in_lieu: true, cash_in_lieu_activity: 'alpaca:cil-1' }],
+    });
+    expect(reader.csv({ year: 2026, format: 'csv' }).body.split('\n')[1]).toMatch(
+      /,USD,1\.3,boe-xudluss:2026-07-01,false,true,alpaca:cil-1,$/,
+    );
   });
 
   it('serves a year with only held-out instruments as fed, so it never reads as no disposals', () => {
@@ -244,8 +289,8 @@ describe('TaxReader', () => {
     expect(csv.filename).toBe('samurai-tax-2026-27.csv');
     expect(csv.body.split('\n')).toEqual([
       'disposal_date,instrument,venue,qty,proceeds_gbp,cost_gbp,gain_gbp,rule,acquisition_date,' +
-        'currency,fx_quote_per_gbp,fx_source,provisional,cash_in_lieu,note',
-      '2026-07-01,VUSA,saxo,3,37.03,30.00,7.03,section-104,,GBP,1,gbp,false,false,',
+        'currency,fx_quote_per_gbp,fx_source,provisional,cash_in_lieu,cash_in_lieu_activity,note',
+      '2026-07-01,VUSA,saxo,3,37.03,30.00,7.03,section-104,,GBP,1,gbp,false,false,,',
       '',
     ]);
     expect(
@@ -264,7 +309,7 @@ describe('taxCsv', () => {
       gain_gbp: 0,
     });
     expect(body.split('\n').slice(1)).toEqual([
-      ',AAPL,alpaca,,,,,held_out,,,,,,,"2 fills held out: a ""quoted"", reason"',
+      ',AAPL,alpaca,,,,,held_out,,,,,,,,"2 fills held out: a ""quoted"", reason"',
       '',
     ]);
     expect(

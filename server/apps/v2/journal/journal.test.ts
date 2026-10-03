@@ -12,6 +12,7 @@ const CAPTURED = {
   fx_quote_per_gbp: 1.25,
   fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
   fill_date: null,
+  broker_mode: 'paper',
 } as const;
 
 const decision: SleeveDecision = {
@@ -494,6 +495,8 @@ describe('Journal.recordReconcile (#1872)', () => {
       book_ids: ['debate/primary'],
       diffs: [{ kind: 'position_qty', instrument: 'AAPL', order_id: null, store: 6, broker: 5 }],
       detail: 'position_qty AAPL store 6 broker 5',
+      broker_mode: 'paper',
+      cash_quote: null,
     });
 
     expect(
@@ -598,9 +601,10 @@ describe('decision and fill journal append-only (#1883)', () => {
     expect(
       db
         .prepare(
-          `INSERT OR REPLACE INTO v2_fills SELECT fill_id, client_order_id, book_id, trading_date,
-             instrument, venue, leg, side, 1, price_gbp, fee_gbp, recorded_at, currency,
-             price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date, filled_at
+          `INSERT OR REPLACE INTO v2_fills SELECT fill_seq, fill_id, client_order_id, book_id,
+             trading_date, instrument, venue, leg, side, 1, price_gbp, fee_gbp, recorded_at,
+             currency, price_native, fee_native, fx_quote_per_gbp, fx_source, fill_date, filled_at,
+             broker_mode
            FROM v2_fills`,
         )
         .run().changes,
@@ -628,6 +632,8 @@ describe('Journal.latestReconcile (#1941)', () => {
       book_ids: bookIds,
       diffs: [],
       detail: '',
+      broker_mode: 'paper',
+      cash_quote: null,
     });
   }
 
@@ -698,6 +704,7 @@ describe('tax capture on fills and the split journal (#1947)', () => {
       fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
       fill_date: '2026-10-01',
       filled_at: '2026-10-01T19:30:00.000Z',
+      broker_mode: 'paper',
     });
     expect(
       db

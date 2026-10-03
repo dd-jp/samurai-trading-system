@@ -331,7 +331,7 @@ function replayComposition(replay: ReplayCycle): CycleComposition {
     cfdCosts: inputs.cfdCosts ?? declaredCfdCosts(),
     quotedCfdBorrowPerDay: quotedBorrowPerDayFrom(inputs.catalogue),
     cfdEntryRefusal: gate,
-    brokerMode: 'paper',
+    brokerMode: day.brokerMode,
     venueSessions: journalledSessions(
       db,
       tradingDate,

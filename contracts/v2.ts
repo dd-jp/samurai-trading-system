@@ -468,6 +468,24 @@ export interface BrokerBookReader {
   read(venue: Venue): Promise<BrokerBook>;
 }
 
+export type BrokerActivityStatus = 'executed' | 'correct' | 'canceled';
+
+// amount is signed in the venue's currency, positive for cash paid to the account
+export interface BrokerCashInLieu {
+  readonly activity_id: string;
+  readonly instrument: string;
+  readonly activity_date: string;
+  readonly qty: number | null;
+  readonly amount: number;
+  readonly currency: string;
+  readonly status: BrokerActivityStatus;
+}
+
+export interface BrokerCashInLieuReader {
+  readonly venue: Venue;
+  read(sinceDate: string): Promise<readonly BrokerCashInLieu[]>;
+}
+
 export type BrokerMode = 'paper' | 'live';
 
 export type ReconcileSource = 'broker' | 'simulated';
@@ -502,6 +520,8 @@ export interface JournalledReconcile {
   readonly book_ids: readonly string[];
   readonly diffs: readonly ReconcileDiff[];
   readonly detail: string;
+  readonly broker_mode: BrokerMode;
+  readonly cash_quote: number | null;
 }
 
 export interface JournalledOrder {
@@ -537,6 +557,7 @@ export interface JournalledFill {
   readonly fx_source: string;
   readonly fill_date: string | null;
   readonly filled_at?: string | undefined;
+  readonly broker_mode: BrokerMode;
 }
 
 export interface JournalledSplit {
@@ -544,6 +565,20 @@ export interface JournalledSplit {
   readonly venue: string;
   readonly split_date: string;
   readonly ratio: number;
+  readonly trading_date: string;
+}
+
+export interface JournalledCashInLieu {
+  readonly venue: Venue;
+  readonly activity_id: string;
+  readonly instrument: string;
+  readonly activity_date: string;
+  readonly qty: number | null;
+  readonly amount_native: number;
+  readonly currency: string;
+  readonly status: BrokerActivityStatus;
+  readonly fx_quote_per_gbp: number;
+  readonly fx_source: string;
   readonly trading_date: string;
 }
 
@@ -607,8 +642,8 @@ export interface DecisionJournal {
   partFilledEntries(bookId: string, before?: string): readonly JournalledOrder[];
   markCancelled(clientOrderId: string, detail: string): void;
   recordFillRead(read: JournalledFillRead): void;
-  lastFillRowid(): number;
-  recordFillSweep(runId: string, tradingDate: string, firstFillRowid: number): void;
+  lastFillSeq(): number;
+  recordFillSweep(runId: string, tradingDate: string, firstFillSeq: number): void;
   recordFill(fill: JournalledFill): boolean;
   fillPartsOf(baseFillId: string): readonly RecordedFillPart[];
   recordSplit(split: JournalledSplit): void;

@@ -308,13 +308,13 @@ class Cycle {
   }
 
   async sweepFills(): Promise<void> {
-    const firstFillRowid = this.deps.journal.lastFillRowid();
+    const firstFillSeq = this.deps.journal.lastFillSeq();
     try {
       const sweep = await this.deps.executor.fetchNewFills(this.since());
       for (const failure of sweep.failures) this.log('warn', 'v2_fill_sweep_failed', failure);
       for (const fill of sweep.fills) this.ingest(fill);
     } finally {
-      this.deps.journal.recordFillSweep(this.runId, this.tradingDate, firstFillRowid);
+      this.deps.journal.recordFillSweep(this.runId, this.tradingDate, firstFillSeq);
     }
   }
 
@@ -362,6 +362,7 @@ class Cycle {
       fx_source: fillFx.source,
       fill_date: fill.filled_at === undefined ? null : londonDateOf(fill.filled_at),
       filled_at: fill.filled_at,
+      broker_mode: this.deps.brokerMode,
     });
     if (!recorded) return;
     this.tally.fills += 1;
@@ -652,8 +653,8 @@ class Cycle {
     });
   }
 
-  // The broker's cash-in-lieu amount is not read from any venue; the disposal books at the
-  // latest close, already in post-split units
+  // The books keep the latest close, already in post-split units; only the tax log takes the
+  // broker's amount, once read after the cycle (#2001)
   floorHeld(
     bookId: string,
     instrument: string,
@@ -694,6 +695,7 @@ class Cycle {
       fx_quote_per_gbp: fillFx.quotePerGbp,
       fx_source: fillFx.source,
       fill_date: disposalDate,
+      broker_mode: this.deps.brokerMode,
     });
     if (!recorded) return;
     this.deps.books.applyFill(bookId, {
@@ -710,7 +712,7 @@ class Cycle {
     this.log(
       'warn',
       'v2_split_cash_in_lieu',
-      `${bookId} ${held.instrument}: ${qty} share left by the split disposed as cash in lieu at ${priceGbp} GBP, the latest close; the broker's amount is not read`,
+      `${bookId} ${held.instrument}: ${qty} share left by the split disposed as cash in lieu at ${priceGbp} GBP, the latest close; the tax log takes the broker's amount once it is read`,
     );
   }
 

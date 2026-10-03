@@ -189,8 +189,8 @@ describe('readDailySummary', () => {
   ): void {
     db.prepare(
       `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg, side,
-         qty, price_gbp, fee_gbp, recorded_at)
-       VALUES (?, ?, ?, ?, 'UP', 'alpaca', ?, 'buy', 1, 10, 0, ?)`,
+         qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+       VALUES (?, ?, ?, ?, 'UP', 'alpaca', ?, 'buy', 1, 10, 0, ?, 'paper')`,
     ).run(fillId, orderId, bookId, DAY, leg, at);
   }
 

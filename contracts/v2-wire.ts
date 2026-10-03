@@ -389,6 +389,7 @@ export interface TaxDisposalWire {
   readonly fx_source: string;
   readonly provisional: boolean;
   readonly cash_in_lieu: boolean;
+  readonly cash_in_lieu_activity: string | null;
 }
 
 export interface TaxHeldOutWire {
@@ -656,6 +657,7 @@ export const V2_WIRE_FIELD_NAMES = {
     'fx_source',
     'provisional',
     'cash_in_lieu',
+    'cash_in_lieu_activity',
   ]),
   taxHeldOut: fieldsOf<TaxHeldOutWire>()(['instrument', 'venue', 'reason', 'fills']),
 };

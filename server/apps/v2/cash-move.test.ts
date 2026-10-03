@@ -56,7 +56,7 @@ describe('parseCashMoveArgs', () => {
     expect(() =>
       parseCashMoveArgs(['deposit', ...FLAGS.slice(0, 6), '--date', '2026-02-30']),
     ).toThrow(/--date 2026-02-30 is not a YYYY-MM-DD date/);
-    for (const amount of ['0x10', '1e3', ' 5', '-5', '']) {
+    for (const amount of ['0x10', '1e3', ' 5', '5 ', '1.', '.5', '-5', '']) {
       expect(() =>
         parseCashMoveArgs(['deposit', '--amount', amount, ...FLAGS.slice(0, 2), ...FLAGS.slice(4)]),
       ).toThrow(`--amount ${amount} is not a decimal`);
@@ -69,11 +69,12 @@ describe('parseCashMoveArgs', () => {
 describe('recordCashMove', () => {
   it('journals the move against the anchor through the v2 write guard', () => {
     const db = openSharedStore(':memory:');
-    new SqliteCashAnchors(db, clock).recordAnchor('alpaca', 12_000, '2026-10-01');
+    new SqliteCashAnchors(db, clock).recordAnchor('alpaca', 'live', 12_000, '2026-10-01');
     expect(recordCashMove(parseCashMoveArgs(['deposit', ...FLAGS]).move, db, clock)).toEqual({
       currency: 'USD',
       cashQuote: 13_000,
-      fillRowid: 0,
+      fillSeq: 0,
+      brokerMode: 'live',
     });
     db.close();
   });
@@ -84,13 +85,14 @@ describe('main', () => {
     const directory = mkdtempSync(join(tmpdir(), 'v2-cash-move-'));
     const store = join(directory, 'v2.sqlite');
     const seeded = openSharedStore(store);
-    new SqliteCashAnchors(seeded, clock).recordAnchor('alpaca', 12_000, '2026-10-01');
+    new SqliteCashAnchors(seeded, clock).recordAnchor('alpaca', 'live', 12_000, '2026-10-01');
     seeded.close();
     try {
       expect(main(['withdrawal', ...FLAGS, '--store', store], clock)).toEqual({
         currency: 'USD',
         cashQuote: 11_000,
-        fillRowid: 0,
+        fillSeq: 0,
+        brokerMode: 'live',
       });
       expect(() => main(['withdrawal', ...FLAGS, '--store', store], clock)).toThrow(/append-only/);
     } finally {

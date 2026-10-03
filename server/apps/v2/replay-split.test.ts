@@ -532,12 +532,12 @@ describe('replay of an entry part filled at the venue before the journal booked 
       { trading_date: SPLIT_DAY, outcome: 'submitted' },
     ]);
     const [opening, protecting] = rows(
-      `SELECT last_fill_rowid AS cut FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}'
+      `SELECT last_fill_seq AS cut FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}'
         ORDER BY sweep_id`,
     ) as { cut: number }[];
     expect(
       rows(
-        `SELECT rowid AS id FROM v2_fills WHERE book_id = 'debate/primary' AND trading_date = '${SPLIT_DAY}'`,
+        `SELECT fill_seq AS id FROM v2_fills WHERE book_id = 'debate/primary' AND trading_date = '${SPLIT_DAY}'`,
       ),
     ).toEqual([{ id: protecting?.cut }]);
     expect(opening?.cut).toBeLessThan(protecting?.cut ?? 0);
@@ -554,10 +554,10 @@ describe('replay of an entry part filled at the venue before the journal booked 
     const rows = Array.from(
       { length: sweeps },
       (_, k) =>
-        `INSERT INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_rowid,
-           last_fill_rowid, order_rowid, book_day_rowid, recorded_at)
-         SELECT MIN(sweep_id) - 1000 + ${k}, 'earlier', trading_date, first_fill_rowid,
-                first_fill_rowid, order_rowid, book_day_rowid, '${SPLIT_DAY}T23:5${k}:00.000Z'
+        `INSERT INTO v2_fill_sweeps (sweep_id, run_id, trading_date, first_fill_seq,
+           last_fill_seq, order_rowid, book_day_rowid, recorded_at)
+         SELECT MIN(sweep_id) - 1000 + ${k}, 'earlier', trading_date, first_fill_seq,
+                first_fill_seq, order_rowid, book_day_rowid, '${SPLIT_DAY}T23:5${k}:00.000Z'
            FROM v2_fill_sweeps WHERE trading_date = '${SPLIT_DAY}';`,
     );
     return {
@@ -598,7 +598,7 @@ describe('replay of an entry part filled at the venue before the journal booked 
     );
     expect(
       journalRows(
-        `SELECT s.first_fill_rowid < f.rowid AND f.rowid <= s.last_fill_rowid AS opening
+        `SELECT s.first_fill_seq < f.fill_seq AND f.fill_seq <= s.last_fill_seq AS opening
            FROM v2_fills f, v2_fill_sweeps s
           WHERE f.trading_date = '${SPLIT_DAY}' AND f.book_id = 'debate/primary'
             AND s.sweep_id = (SELECT MIN(sweep_id) FROM v2_fill_sweeps
@@ -613,9 +613,9 @@ describe('replay of an entry part filled at the venue before the journal booked 
   it('replays identical a date with a flatten pass that did nothing, before the cycle or after its marks', async () => {
     const storePath = withEarlierRun(
       'idle-flatten',
-      `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+      `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_seq, last_fill_seq,
            order_rowid, book_day_rowid, recorded_at)
-         SELECT 'later-flatten', '${SPLIT_DAY}', MAX(rowid), MAX(rowid), 0,
+         SELECT 'later-flatten', '${SPLIT_DAY}', MAX(fill_seq), MAX(fill_seq), 0,
                 (SELECT MAX(rowid) FROM v2_book_days), '${SPLIT_DAY}T00:00:00.000Z'
            FROM v2_fills;
        INSERT INTO v2_fill_reads (run_id, trading_date, client_order_id, filled_qty, error,
@@ -664,7 +664,7 @@ describe('replay of an entry part filled at the venue before the journal booked 
     const storePath = tamperedCopy(
       'late-sweep',
       `DROP TRIGGER v2_fill_sweeps_no_update;
-       UPDATE v2_fill_sweeps SET last_fill_rowid = 0
+       UPDATE v2_fill_sweeps SET last_fill_seq = 0
         WHERE sweep_id = (SELECT MIN(sweep_id) + 1 FROM v2_fill_sweeps
                            WHERE trading_date = '${SPLIT_DAY}');`,
       partOptions.storePath,

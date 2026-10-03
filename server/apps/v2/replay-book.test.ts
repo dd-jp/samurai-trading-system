@@ -178,7 +178,7 @@ describe('replay of sizing, orders, fills and marks', () => {
     expect(
       journalRows(
         `SELECT trading_date, leg FROM v2_fills
-          WHERE book_id = 'debate/primary' AND instrument = 'UP' ORDER BY rowid`,
+          WHERE book_id = 'debate/primary' AND instrument = 'UP' ORDER BY fill_seq`,
       ),
     ).toEqual([
       { trading_date: FILL_DAY, leg: 'entry' },
@@ -344,9 +344,9 @@ describe('rebuildBooks', () => {
     order.run('late', '2026-03-03', 'entry', 'buy', 'cancelled', '{"cancelled":"2026-03-04"}');
     db.prepare(
       `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
-         side, qty, price_gbp, fee_gbp, recorded_at)
+         side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
        VALUES ('alpaca:sim-entry', 'entry', 'debate/primary', '2026-03-02', 'UP', 'alpaca', 'entry',
-         'buy', 4, 10, 0.5, 'now')`,
+         'buy', 4, 10, 0.5, 'now', 'paper')`,
     ).run();
     const mark = db.prepare(
       `INSERT INTO v2_book_days (book_id, trading_date, equity_gbp, cash_gbp, invested_gbp,
@@ -421,6 +421,144 @@ describe('journalledDay', () => {
     expect(journalledDay(db, '2026-09-28').dryRun).toBe(true);
     expect(journalledDay(db, '2026-09-30').dryRun).toBe(true);
     db.close();
+  });
+});
+
+describe('live-mode replay inputs (#2035)', () => {
+  const DAY = '2026-10-05';
+  function store() {
+    const db = openSharedStore(':memory:');
+    db.exec(
+      `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+         VALUES ('debate/primary', 'debate', 'primary', 600, 600, 'now');
+       INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+         leg, side, dry_run, outcome, payload, recorded_at)
+         VALUES ('o1', NULL, 'debate/primary', '${DAY}', 'UP', 'alpaca', 'entry', 'buy', 0,
+           'submitted', '{}', '${DAY}T07:31:00.000Z');`,
+    );
+    return db;
+  }
+  const reconcile = (db: BetterSqlite3.Database, date: string, mode: string | null) =>
+    db
+      .prepare(
+        `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+           recorded_at, broker_mode, cash_quote)
+         VALUES (?, 'alpaca', 'broker', 'clean', '[]', '[]', 'd', ?, ?, 12000)`,
+      )
+      .run(date, `${date}T07:30:00.000Z`, mode);
+  const fill = (db: BetterSqlite3.Database, id: string, mode: string) =>
+    db
+      .prepare(
+        `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue,
+           leg, side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+         VALUES (?, 'o1', 'debate/primary', '${DAY}', 'UP', 'alpaca', 'entry', 'buy', 1, 10, 0,
+           '${DAY}T14:30:00.000Z', ?)`,
+      )
+      .run(id, mode);
+
+  it('takes the broker mode from the day reconcile, else its fills, else paper', () => {
+    const db = store();
+    expect(journalledDay(db, DAY).brokerMode).toBe('paper');
+    fill(db, 'f1', 'live');
+    expect(journalledDay(db, DAY).brokerMode).toBe('live');
+    reconcile(db, DAY, null);
+    expect(journalledDay(db, DAY).brokerMode).toBe('live');
+    reconcile(db, '2026-10-04', 'paper');
+    expect(journalledDay(db, DAY).brokerMode).toBe('live');
+    reconcile(db, DAY, 'paper');
+    expect(journalledDay(db, DAY).brokerMode).toBe('paper');
+    db.close();
+  });
+
+  it("rewinds an anchor taken on or after the day, and a move journalled after the venue's first reconcile, else the run start", () => {
+    const db = store();
+    const row = db.prepare(
+      `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+         trading_date, recorded_at, broker_mode) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+    );
+    row.run(
+      'saxo',
+      'anchor',
+      'GBP',
+      0,
+      'earlier',
+      '2026-10-02',
+      '2026-10-02T07:30:00.000Z',
+      'live',
+    );
+    row.run('alpaca', 'anchor', 'USD', 0, 'go-live', DAY, `${DAY}T07:30:05.000Z`, 'live');
+    row.run('saxo', 'deposit', 'GBP', null, 'known', DAY, `${DAY}T07:00:00.000Z`, null);
+    row.run('saxo', 'deposit', 'GBP', null, 'read', DAY, `${DAY}T07:40:00.000Z`, null);
+    row.run('saxo', 'deposit', 'GBP', null, 'later', '2026-10-03', `${DAY}T08:00:00.000Z`, null);
+    row.run('alpaca', 'deposit', 'USD', null, 'unread', DAY, `${DAY}T07:40:00.000Z`, null);
+    const reconcileAt = db.prepare(
+      `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+         recorded_at) VALUES (?, 'saxo', 'broker', 'clean', '[]', '[]', 'd', ?)`,
+    );
+    reconcileAt.run(DAY, `${DAY}T07:45:00.000Z`);
+    reconcileAt.run(DAY, `${DAY}T09:00:00.000Z`);
+    const copy = rewoundCopy(db, DAY, `${DAY}T07:30:00.000Z`);
+    expect(
+      copy.prepare('SELECT reference FROM v2_cash_anchors ORDER BY anchor_row_id').all(),
+    ).toEqual([{ reference: 'earlier' }, { reference: 'known' }, { reference: 'read' }]);
+    copy.close();
+    db.close();
+  });
+
+  it('holds the first mirrorable broker reconcile and the day anchor to the replay', () => {
+    const journal = store();
+    const replayed = store();
+    for (const db of [journal, replayed]) {
+      fill(db, 'f1', 'live');
+      db.prepare(
+        `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+           trading_date, recorded_at, broker_mode)
+         VALUES ('alpaca', 'anchor', 'USD', 12000, 1, 'go-live', ?, ?, 'live')`,
+      ).run(DAY, `${DAY}T07:30:00.000Z`);
+    }
+    reconcile(journal, DAY, 'live');
+    reconcile(journal, DAY, 'live');
+    const compare = () =>
+      tradingDivergences({
+        journal,
+        replayed,
+        tradingDate: DAY,
+        markedAt: undefined,
+        startedAt: undefined,
+      }).divergences.filter((entry) => entry.stage === 'reconciles' || entry.stage === 'anchors');
+    expect(compare()).toEqual([]);
+    replayed
+      .prepare(
+        `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+           recorded_at, broker_mode, cash_quote)
+         VALUES (?, 'alpaca', 'broker', 'clean', '[]', '[]', 'other', ?, 'live', 12000)`,
+      )
+      .run(DAY, `${DAY}T07:30:00.000Z`);
+    expect(compare()).toEqual([
+      {
+        kind: 'row_field',
+        stage: 'reconciles',
+        key: 'alpaca',
+        field: 'detail',
+        journalled: 'd',
+        replayed: 'other',
+      },
+    ]);
+    replayed.exec(`DROP TRIGGER v2_fills_replay_ignored; DROP TRIGGER v2_cash_anchors_no_delete;
+      DELETE FROM v2_cash_anchors;`);
+    expect(compare()).toEqual([
+      {
+        kind: 'row_field',
+        stage: 'reconciles',
+        key: 'alpaca',
+        field: 'detail',
+        journalled: 'd',
+        replayed: 'other',
+      },
+      { kind: 'row_missing', stage: 'anchors', key: 'alpaca' },
+    ]);
+    journal.close();
+    replayed.close();
   });
 });
 

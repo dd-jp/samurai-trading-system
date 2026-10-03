@@ -190,6 +190,7 @@ interface GroupResult {
   readonly status: ReconcileStatus;
   readonly diffs: readonly ReconcileDiff[];
   readonly detail: string;
+  readonly cashQuote?: number;
   readonly staleStops?: readonly StaleStop[];
 }
 
@@ -252,6 +253,7 @@ async function reconcileGroup(
     status: statusOf(diffs),
     diffs,
     detail: [...diffs.map(describeDiff), cash.note].join('; '),
+    cashQuote: read.cashQuote,
     staleStops: staleStopsOf(group.venue, bookDiffs, rearmable(store, read.view)),
   };
 }
@@ -321,6 +323,8 @@ export async function reconcileBooks(
       book_ids: group.books.map((book) => book.id),
       diffs: result.diffs,
       detail: result.detail,
+      broker_mode: deps.brokerMode,
+      cash_quote: result.cashQuote ?? null,
     });
     if (result.status === 'clean') continue;
     refusals.push(...blockGroup(deps, group, tradingDate, { ...result, status: result.status }));
@@ -346,7 +350,10 @@ export interface StepThrow {
   readonly error: unknown;
 }
 
-type ThrowDeps = Pick<ReconcileDeps, 'registry' | 'books' | 'executor' | 'journal' | 'logger'>;
+type ThrowDeps = Pick<
+  ReconcileDeps,
+  'registry' | 'books' | 'executor' | 'journal' | 'logger' | 'brokerMode'
+>;
 
 // The signals entry pass gates on the latest journalled reconcile for the date, so a throw must
 // supersede an earlier clean row from a same-date retry. Best effort: the journal may be the
@@ -362,6 +369,8 @@ function journalThrow(deps: ThrowDeps, tradingDate: string, summary: string): vo
         book_ids: group.books.map((book) => book.id),
         diffs: [],
         detail: summary,
+        broker_mode: deps.brokerMode,
+        cash_quote: null,
       });
     }
   } catch {
