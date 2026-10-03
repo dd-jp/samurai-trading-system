@@ -292,6 +292,29 @@ describe('XSearchClient', () => {
     }
   });
 
+  it('logs each dropped-item count under its own key', async () => {
+    const invented = `https://x.com/ghost/status/${statusIdAt(new Date(AS_OF.getTime() - 60_000))}`;
+    stubFetch(
+      responsesBody({
+        items: [item(), item({ url: invented }), item({ url: STALE_URL }), null, 'not an object'],
+        citations: [FRESH_URL, STALE_URL],
+      }),
+    );
+    const logger = recordingLogger();
+
+    await new XSearchClient({ ...OPTIONS, logger }).fetchSentiment('TSLA', AS_OF);
+
+    const dropped = logger.entries.find((entry) => entry.event === 'x_search_items_dropped');
+    expect(dropped?.payload).toEqual({
+      instrument: 'TSLA',
+      unevidenced: 1,
+      stale: 1,
+      unreadable_items: 2,
+      kept: 1,
+      citations: 2,
+    });
+  });
+
   it('drops a malformed ITEM without losing the well-formed ones beside it', async () => {
     stubFetch(
       responsesBody({
