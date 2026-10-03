@@ -1109,9 +1109,10 @@ describe('composeV2Root', () => {
     seeded
       .prepare(
         `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue,
-           leg, side, qty, price_gbp, fee_gbp, recorded_at, fill_date)
+           leg, side, qty, price_gbp, fee_gbp, recorded_at, fill_date, broker_mode)
          VALUES ('alpaca:cash-in-lieu:nvda', 'old-nvda', 'debate/primary', '2026-09-15', 'NVDA',
-           'alpaca', 'cash_in_lieu', 'sell', 0.5, 20, 0, '2026-09-15T07:00:00.000Z', '2026-09-15')`,
+           'alpaca', 'cash_in_lieu', 'sell', 0.5, 20, 0, '2026-09-15T07:00:00.000Z', '2026-09-15',
+           'paper')`,
       )
       .run();
     seeded.close();

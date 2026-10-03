@@ -196,23 +196,23 @@ export class Journal implements DecisionJournal {
       );
   }
 
-  lastFillRowid(): number {
-    const row = this.db.prepare('SELECT COALESCE(MAX(rowid), 0) AS id FROM v2_fills').get() as {
+  lastFillSeq(): number {
+    const row = this.db.prepare('SELECT COALESCE(MAX(fill_seq), 0) AS id FROM v2_fills').get() as {
       id: number;
     };
     return row.id;
   }
 
-  recordFillSweep(runId: string, tradingDate: string, firstFillRowid: number): void {
+  recordFillSweep(runId: string, tradingDate: string, firstFillSeq: number): void {
     this.db
       .prepare(
-        `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+        `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_seq, last_fill_seq,
            order_rowid, book_day_rowid, recorded_at)
-         VALUES (?, ?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+         VALUES (?, ?, ?, (SELECT COALESCE(MAX(fill_seq), 0) FROM v2_fills),
            (SELECT COALESCE(MAX(rowid), 0) FROM v2_orders),
            (SELECT COALESCE(MAX(rowid), 0) FROM v2_book_days), ?)`,
       )
-      .run(runId, tradingDate, firstFillRowid, this.#now());
+      .run(runId, tradingDate, firstFillSeq, this.#now());
   }
 
   markCancelled(clientOrderId: string, detail: string): void {
@@ -229,8 +229,8 @@ export class Journal implements DecisionJournal {
       .prepare(
         `INSERT OR IGNORE INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument,
            venue, leg, side, qty, price_gbp, fee_gbp, currency, price_native, fee_native,
-           fx_quote_per_gbp, fx_source, fill_date, filled_at, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           fx_quote_per_gbp, fx_source, fill_date, filled_at, broker_mode, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         fill.fill_id,
@@ -251,6 +251,7 @@ export class Journal implements DecisionJournal {
         fill.fx_source,
         fill.fill_date,
         fill.filled_at ?? null,
+        fill.broker_mode,
         this.#now(),
       );
     return result.changes === 1;
@@ -393,8 +394,8 @@ export class Journal implements DecisionJournal {
     this.db
       .prepare(
         `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
-           recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           broker_mode, cash_quote, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         run.trading_date,
@@ -404,6 +405,8 @@ export class Journal implements DecisionJournal {
         JSON.stringify(run.book_ids),
         JSON.stringify(run.diffs),
         run.detail,
+        run.broker_mode,
+        run.cash_quote,
         this.#now(),
       );
     for (const fault of reconcileFaults(run)) this.#recordFault(fault);

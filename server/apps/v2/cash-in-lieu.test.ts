@@ -35,9 +35,9 @@ function storeWithEstimate(
   ).run(venue, outcome);
   db.prepare(
     `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
-       side, qty, price_gbp, fee_gbp, recorded_at, fill_date)
+       side, qty, price_gbp, fee_gbp, recorded_at, fill_date, broker_mode)
      VALUES ('cil', 'o1', 'debate/primary', '2026-09-29', 'NVDA', ?, 'cash_in_lieu', 'sell', 0.5,
-       90, 0, '2026-09-29T07:00:00.000Z', ?)`,
+       90, 0, '2026-09-29T07:00:00.000Z', ?, 'paper')`,
   ).run(venue, fillDate);
   return db;
 }

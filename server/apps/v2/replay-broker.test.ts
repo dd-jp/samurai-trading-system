@@ -26,8 +26,8 @@ function fill(
 ): void {
   db.prepare(
     `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
-       side, qty, price_gbp, fee_gbp, recorded_at)
-     VALUES (?, ?, 'debate/primary', ?, 'UP', 'alpaca', 'entry', 'buy', ?, ?, ?, ?)`,
+       side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+     VALUES (?, ?, 'debate/primary', ?, 'UP', 'alpaca', 'entry', 'buy', ?, ?, ?, ?, 'paper')`,
   ).run(id, clientOrderId, day, qty, priceGbp, feeGbp, at);
 }
 
@@ -121,10 +121,10 @@ describe('JournalReplayBroker', () => {
   const swept = (runId = 'run-1', at = `${DAY}T07:30:00.000Z`) =>
     db
       .prepare(
-        `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+        `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_seq, last_fill_seq,
            order_rowid, book_day_rowid, recorded_at)
-         VALUES (?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
-           (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+         VALUES (?, ?, (SELECT COALESCE(MAX(fill_seq), 0) FROM v2_fills),
+           (SELECT COALESCE(MAX(fill_seq), 0) FROM v2_fills),
            (SELECT COALESCE(MAX(rowid), 0) FROM v2_orders),
            (SELECT COALESCE(MAX(rowid), 0) FROM v2_book_days), ?)`,
       )
@@ -423,6 +423,35 @@ describe('JournalReplayBrokerBooks', () => {
     ...fields,
   });
 
+  it('serves the broker cash the journalled reconcile read, and mirrors one whose only gap was cash (#2035)', async () => {
+    const withCash = (status: string, diffs: readonly Record<string, unknown>[]) =>
+      db
+        .prepare(
+          `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+             recorded_at, broker_mode, cash_quote)
+           VALUES (?, 'alpaca', 'broker', ?, '[]', ?, 'cash', 'now', 'live', 12500)`,
+        )
+        .run(DAY, status, JSON.stringify(diffs));
+    withCash('unverified', [diff('cash_unverified', { instrument: null, store: null })]);
+    const read = await books().read('alpaca');
+    expect(read.cashQuote).toBe(12_500);
+    expect(read.openOrders.map((order) => order.clientOrderId)).toEqual([
+      'rest',
+      'replay-UP-stop',
+      'replay-DN-stop',
+    ]);
+  });
+
+  it('mirrors a cash gap beside stale stops', async () => {
+    mismatched([diff('cash', { instrument: null }), diff('protective_qty', { broker: 2 })]);
+    await expect(books().read('alpaca')).resolves.toMatchObject({ cashQuote: 0 });
+  });
+
+  it('never mirrors a cash gap beside a position gap', async () => {
+    mismatched([diff('cash', { instrument: null }), diff('position_qty', { broker: 4 })]);
+    await expect(books().read('alpaca')).rejects.toThrow('was mismatch: stale');
+  });
+
   it('mirrors a reconcile that found only stale stops with those stops, so the replay re-finds them (#1990)', async () => {
     mismatched([
       diff('protective_qty', { broker: 2 }),
@@ -479,13 +508,13 @@ describe('which runs acted on a date, by journal position and never by clock (#1
 
   const sweep = (runId: string, book: () => void = () => {}) => {
     const first = (
-      db.prepare('SELECT COALESCE(MAX(rowid), 0) AS id FROM v2_fills').get() as { id: number }
+      db.prepare('SELECT COALESCE(MAX(fill_seq), 0) AS id FROM v2_fills').get() as { id: number }
     ).id;
     book();
     db.prepare(
-      `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+      `INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_seq, last_fill_seq,
          order_rowid, book_day_rowid, recorded_at)
-       VALUES (?, ?, ?, (SELECT COALESCE(MAX(rowid), 0) FROM v2_fills),
+       VALUES (?, ?, ?, (SELECT COALESCE(MAX(fill_seq), 0) FROM v2_fills),
          (SELECT COALESCE(MAX(rowid), 0) FROM v2_orders),
          (SELECT COALESCE(MAX(rowid), 0) FROM v2_book_days), ?)`,
     ).run(runId, DAY, first, skewed());

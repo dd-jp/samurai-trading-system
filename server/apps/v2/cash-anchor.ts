@@ -1,4 +1,4 @@
-import type { MarketData, ReconcileDiff, Venue } from '../../../contracts/index.js';
+import type { BrokerMode, MarketData, ReconcileDiff, Venue } from '../../../contracts/index.js';
 import type { Clock } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
@@ -8,7 +8,8 @@ import { type QuoteCurrency, quoteCurrencyOf } from './data/index.js';
 export interface CashAnchor {
   readonly currency: QuoteCurrency;
   readonly cashQuote: number;
-  readonly fillRowid: number;
+  readonly fillSeq: number;
+  readonly brokerMode: BrokerMode;
 }
 
 export type StoreFlow =
@@ -17,8 +18,13 @@ export type StoreFlow =
 
 export interface CashAnchorLedger {
   anchor(venue: Venue): CashAnchor | undefined;
-  recordAnchor(venue: Venue, cashQuote: number, tradingDate: string): CashAnchor;
-  storeFlowSince(venue: Venue, fillRowid: number): StoreFlow;
+  recordAnchor(
+    venue: Venue,
+    brokerMode: BrokerMode,
+    cashQuote: number,
+    tradingDate: string,
+  ): CashAnchor;
+  storeFlowSince(anchor: Pick<CashAnchor, 'brokerMode' | 'fillSeq'>, venue: Venue): StoreFlow;
 }
 
 export type CashMoveKind = 'deposit' | 'withdrawal';
@@ -36,13 +42,14 @@ const MOVE_SIGN: Readonly<Record<CashMoveKind, 1 | -1>> = { deposit: 1, withdraw
 const GO_LIVE_REFERENCE = 'go-live';
 
 // Shadow and control books never trade at a broker, so only fills of broker-routed orders move the
-// venue's cash (the tax log's BROKER_FILLS rule)
+// venue's cash (the tax log's BROKER_FILLS rule); a paper account's fills never move a live one's
 const STORE_FLOW = `
   SELECT SUM(f.price_native IS NULL OR f.fee_native IS NULL) AS unpriced,
     COALESCE(SUM(CASE f.side WHEN 'sell' THEN 1 ELSE -1 END * f.qty * f.price_native
       - f.fee_native), 0) AS flow
   FROM v2_fills f JOIN v2_orders o ON o.client_order_id = f.client_order_id
-  WHERE f.venue = ? AND f.rowid > ? AND o.outcome NOT IN ('simulated', 'refused_dry_run')`;
+  WHERE f.venue = ? AND f.broker_mode = ? AND f.fill_seq > ?
+    AND o.outcome NOT IN ('simulated', 'refused_dry_run')`;
 
 export class SqliteCashAnchors implements CashAnchorLedger {
   constructor(
@@ -53,23 +60,33 @@ export class SqliteCashAnchors implements CashAnchorLedger {
   anchor(venue: Venue): CashAnchor | undefined {
     const row = this.db
       .prepare(
-        `SELECT a.currency, a.fill_rowid,
+        `SELECT a.currency, a.fill_seq, a.broker_mode,
            (SELECT SUM(m.amount_quote) FROM v2_cash_anchors m WHERE m.venue = a.venue) AS cash_quote
          FROM v2_cash_anchors a WHERE a.venue = ? AND a.kind = 'anchor'`,
       )
       .get(venue) as
-      | { currency: QuoteCurrency; fill_rowid: number; cash_quote: number }
+      | { currency: QuoteCurrency; fill_seq: number; broker_mode: BrokerMode; cash_quote: number }
       | undefined;
     if (row === undefined) return undefined;
-    return { currency: row.currency, cashQuote: row.cash_quote, fillRowid: row.fill_rowid };
+    return {
+      currency: row.currency,
+      cashQuote: row.cash_quote,
+      fillSeq: row.fill_seq,
+      brokerMode: row.broker_mode,
+    };
   }
 
-  recordAnchor(venue: Venue, cashQuote: number, tradingDate: string): CashAnchor {
+  recordAnchor(
+    venue: Venue,
+    brokerMode: BrokerMode,
+    cashQuote: number,
+    tradingDate: string,
+  ): CashAnchor {
     this.db
       .prepare(
-        `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_rowid, reference,
-           trading_date, recorded_at)
-         SELECT ?, 'anchor', ?, ?, COALESCE(MAX(rowid), 0), ?, ?, ? FROM v2_fills`,
+        `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+           trading_date, broker_mode, recorded_at)
+         SELECT ?, 'anchor', ?, ?, COALESCE(MAX(fill_seq), 0), ?, ?, ?, ? FROM v2_fills`,
       )
       .run(
         venue,
@@ -77,6 +94,7 @@ export class SqliteCashAnchors implements CashAnchorLedger {
         cashQuote,
         GO_LIVE_REFERENCE,
         tradingDate,
+        brokerMode,
         toStoredTimestamp(this.clock.now()),
       );
     return this.anchor(venue) as CashAnchor;
@@ -93,7 +111,7 @@ export class SqliteCashAnchors implements CashAnchorLedger {
     }
     this.db
       .prepare(
-        `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_rowid, reference,
+        `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
            trading_date, recorded_at)
          VALUES (?, ?, ?, ?, NULL, ?, ?, ?)`,
       )
@@ -109,8 +127,8 @@ export class SqliteCashAnchors implements CashAnchorLedger {
     return this.anchor(move.venue) as CashAnchor;
   }
 
-  storeFlowSince(venue: Venue, fillRowid: number): StoreFlow {
-    const row = this.db.prepare(STORE_FLOW).get(venue, fillRowid) as {
+  storeFlowSince(anchor: Pick<CashAnchor, 'brokerMode' | 'fillSeq'>, venue: Venue): StoreFlow {
+    const row = this.db.prepare(STORE_FLOW).get(venue, anchor.brokerMode, anchor.fillSeq) as {
       unpriced: number | null;
       flow: number;
     };
@@ -186,6 +204,7 @@ export function anchorCashCheck(compare: AnchorCompare): CashCheck {
 }
 
 export interface LiveCashDeps {
+  readonly brokerMode: BrokerMode;
   readonly cashAnchors?: CashAnchorLedger | undefined;
   readonly market: Pick<MarketData, 'gbpUsdOnDay'>;
   readonly reconcileCashToleranceGbp: number | undefined;
@@ -199,14 +218,19 @@ export interface BrokerCash {
 
 // An anchor taken while positions or orders disagree would hold a fill the store has not booked,
 // and every later run would carry that gap
-function firstAnchor(ledger: CashAnchorLedger, broker: BrokerCash, tradingDate: string): CashCheck {
+function firstAnchor(
+  ledger: CashAnchorLedger,
+  brokerMode: BrokerMode,
+  broker: BrokerCash,
+  tradingDate: string,
+): CashCheck {
   if (!broker.booksMatch) {
     return unverified(
       broker.cashQuote,
       'no cash anchor yet: it is recorded at the first live reconcile whose positions and orders match',
     );
   }
-  const anchor = ledger.recordAnchor(broker.venue, broker.cashQuote, tradingDate);
+  const anchor = ledger.recordAnchor(broker.venue, brokerMode, broker.cashQuote, tradingDate);
   return {
     diffs: [],
     note: `cash anchor recorded: ${money(anchor.cashQuote)} ${anchor.currency} (#1927)`,
@@ -225,11 +249,17 @@ export function liveCashCheck(
   }
   if (ledger === undefined) return unverified(broker.cashQuote, 'no cash anchor ledger');
   const anchor = ledger.anchor(broker.venue);
-  if (anchor === undefined) return firstAnchor(ledger, broker, tradingDate);
+  if (anchor === undefined) return firstAnchor(ledger, deps.brokerMode, broker, tradingDate);
+  if (anchor.brokerMode !== deps.brokerMode) {
+    return unverified(
+      broker.cashQuote,
+      `the ${broker.venue} cash anchor is the ${anchor.brokerMode} account's, not ${deps.brokerMode}'s`,
+    );
+  }
   return anchorCashCheck({
     brokerCashQuote: broker.cashQuote,
     anchor,
-    storeFlow: ledger.storeFlowSince(broker.venue, anchor.fillRowid),
+    storeFlow: ledger.storeFlowSince(anchor, broker.venue),
     rate: dayRateFor(deps.market, broker.venue, tradingDate),
     toleranceGbp,
   });

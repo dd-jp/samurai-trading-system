@@ -81,7 +81,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 62;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 91;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 92;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -595,6 +595,96 @@ describe('openSharedStore', () => {
       );
       expect(() => rescale(0)).toThrow(/CHECK constraint/);
       expect(() => rescale(2, 'guess')).toThrow(/CHECK constraint/);
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0092 keeps every fill rowid as its fill_seq and marks the legacy journal paper (#2035)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 91;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw.exec(
+        `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+           leg, side, dry_run, outcome, payload, recorded_at)
+           VALUES ('o1', NULL, 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'entry', 'buy', 0,
+             'submitted', '{}', '2026-09-29T07:00:00.000Z');
+         INSERT INTO v2_fills (rowid, fill_id, client_order_id, book_id, trading_date, instrument,
+           venue, leg, side, qty, price_gbp, fee_gbp, recorded_at)
+           VALUES (3, 'alpaca:f1', 'o1', 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'entry',
+             'buy', 3, 80, 0.1, 't'),
+                  (7, 'alpaca:f2', 'o1', 'debate/primary', '2026-09-29', 'AAPL', 'alpaca', 'entry',
+             'buy', 1, 80, 0.1, 't');
+         INSERT INTO v2_fill_sweeps (run_id, trading_date, first_fill_rowid, last_fill_rowid,
+           order_rowid, book_day_rowid, recorded_at)
+           VALUES ('r1', '2026-09-29', 3, 7, 1, 0, 't');
+         INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_rowid, reference,
+           trading_date, recorded_at)
+           VALUES ('alpaca', 'anchor', 'USD', 12000, 3, 'go-live', '2026-09-29', 't'),
+                  ('alpaca', 'deposit', 'USD', 500, NULL, 'wire-1', '2026-09-30', 't');
+         INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
+           recorded_at)
+           VALUES ('2026-09-29', 'alpaca', 'broker', 'clean', '[]', '[]', 'a', 't');`,
+      );
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(
+        raw.prepare('SELECT fill_seq, rowid AS row, fill_id, broker_mode FROM v2_fills').all(),
+      ).toEqual([
+        { fill_seq: 3, row: 3, fill_id: 'alpaca:f1', broker_mode: 'paper' },
+        { fill_seq: 7, row: 7, fill_id: 'alpaca:f2', broker_mode: 'paper' },
+      ]);
+      expect(raw.prepare('SELECT first_fill_seq, last_fill_seq FROM v2_fill_sweeps').all()).toEqual(
+        [{ first_fill_seq: 3, last_fill_seq: 7 }],
+      );
+      expect(raw.prepare('SELECT kind, fill_seq, broker_mode FROM v2_cash_anchors').all()).toEqual([
+        { kind: 'anchor', fill_seq: 3, broker_mode: 'live' },
+        { kind: 'deposit', fill_seq: null, broker_mode: null },
+      ]);
+      expect(raw.prepare('SELECT broker_mode, cash_quote FROM v2_reconciles').all()).toEqual([
+        { broker_mode: null, cash_quote: null },
+      ]);
+      expect(raw.pragma('foreign_key_check')).toEqual([]);
+
+      raw.exec(
+        `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue,
+           leg, side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+           VALUES ('alpaca:f3', 'o1', 'debate/primary', '2026-09-30', 'AAPL', 'alpaca', 'exit',
+             'sell', 4, 81, 0.1, 't', 'live');
+         INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue,
+           leg, side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+           VALUES ('alpaca:f1', 'o1', 'debate/primary', '2026-09-30', 'AAPL', 'alpaca', 'exit',
+             'sell', 9, 1, 0, 't', 'live');`,
+      );
+      expect(
+        raw.prepare('SELECT fill_seq, fill_id FROM v2_fills WHERE fill_seq > 3').all(),
+      ).toEqual([
+        { fill_seq: 7, fill_id: 'alpaca:f2' },
+        { fill_seq: 8, fill_id: 'alpaca:f3' },
+      ]);
+      expect(() => raw.prepare("UPDATE v2_fills SET broker_mode = 'live'").run()).toThrow(
+        'v2_fills is append-only',
+      );
+      expect(() => raw.prepare('DELETE FROM v2_fills').run()).toThrow('v2_fills is append-only');
+      expect(() => raw.prepare("UPDATE v2_cash_anchors SET broker_mode = 'paper'").run()).toThrow(
+        'v2_cash_anchors is append-only',
+      );
+      expect(() =>
+        raw
+          .prepare(
+            `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument,
+               venue, leg, side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+               VALUES ('alpaca:f4', 'o1', 'debate/primary', '2026-09-30', 'AAPL', 'alpaca', 'exit',
+                 'sell', 1, 81, 0.1, 't', 'demo')`,
+          )
+          .run(),
+      ).toThrow(/CHECK constraint/);
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

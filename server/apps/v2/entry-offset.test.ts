@@ -26,8 +26,8 @@ function seed(
   }
   const fill = db.prepare(
     `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
-       side, qty, price_gbp, fee_gbp, recorded_at)
-     SELECT ?, client_order_id, book_id, '2026-10-05', instrument, venue, ?, 'buy', 1, 100, 0, 'x'
+       side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+     SELECT ?, client_order_id, book_id, '2026-10-05', instrument, venue, ?, 'buy', 1, 100, 0, 'x', 'paper'
        FROM v2_orders WHERE client_order_id = ?`,
   );
   for (const [id, orderId, leg] of fills) fill.run(id, leg, orderId);

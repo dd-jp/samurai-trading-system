@@ -48,6 +48,8 @@ describe('ReconcileReader', () => {
         book_ids: ['debate/primary'],
         diffs: day === count - 1 ? [DIFF] : [],
         detail: '',
+        broker_mode: 'paper',
+        cash_quote: null,
       });
     }
   }

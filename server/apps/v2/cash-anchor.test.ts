@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Venue } from '../../../contracts/index.js';
+import type { BrokerMode, Venue } from '../../../contracts/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import {
@@ -23,6 +23,7 @@ interface Fill {
   readonly fee?: number;
   readonly venue?: Venue;
   readonly outcome?: string;
+  readonly mode?: BrokerMode;
 }
 
 function store(): { db: StoreHandle; anchors: SqliteCashAnchors; fill: (fill: Fill) => void } {
@@ -35,6 +36,7 @@ function store(): { db: StoreHandle; anchors: SqliteCashAnchors; fill: (fill: Fi
     fee = 0,
     venue = 'alpaca',
     outcome = 'submitted',
+    mode = 'live',
   }: Fill) => {
     db.prepare(
       `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
@@ -43,12 +45,16 @@ function store(): { db: StoreHandle; anchors: SqliteCashAnchors; fill: (fill: Fi
     ).run(`order-${id}`, DATE, venue, side, outcome);
     db.prepare(
       `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
-         side, qty, price_gbp, fee_gbp, currency, price_native, fee_native, recorded_at)
-       VALUES (?, ?, 'debate/primary', ?, 'AAPL', ?, 'entry', ?, ?, 0, 0, 'USD', ?, ?, 't')`,
-    ).run(id, `order-${id}`, DATE, venue, side, qty, price, price === null ? null : fee);
+         side, qty, price_gbp, fee_gbp, currency, price_native, fee_native, broker_mode,
+         recorded_at)
+       VALUES (?, ?, 'debate/primary', ?, 'AAPL', ?, 'entry', ?, ?, 0, 0, 'USD', ?, ?, ?, 't')`,
+    ).run(id, `order-${id}`, DATE, venue, side, qty, price, price === null ? null : fee, mode);
   };
   return { db, anchors: new SqliteCashAnchors(db, clock), fill };
 }
+
+const LIVE_AT = (fillSeq: number) => ({ brokerMode: 'live' as const, fillSeq });
+const FILL_SEQS = 'SELECT fill_seq, rowid AS row, fill_id FROM v2_fills ORDER BY fill_seq';
 
 const USD_FIX = { gbpUsdOnDay: () => ({ gbpUsd: FX, fixDate: '2026-10-02' }) };
 
@@ -58,10 +64,11 @@ describe('SqliteCashAnchors', () => {
     fill({ id: 'before', side: 'buy', qty: 1, price: 10 });
 
     expect(anchors.anchor('alpaca')).toBeUndefined();
-    expect(anchors.recordAnchor('alpaca', 12_000, DATE)).toEqual({
+    expect(anchors.recordAnchor('alpaca', 'live', 12_000, DATE)).toEqual({
       currency: 'USD',
       cashQuote: 12_000,
-      fillRowid: 1,
+      fillSeq: 1,
+      brokerMode: 'live',
     });
     expect(db.prepare('SELECT * FROM v2_cash_anchors').all()).toEqual([
       {
@@ -70,22 +77,24 @@ describe('SqliteCashAnchors', () => {
         kind: 'anchor',
         currency: 'USD',
         amount_quote: 12_000,
-        fill_rowid: 1,
+        fill_seq: 1,
         reference: 'go-live',
         trading_date: DATE,
         recorded_at: '2026-10-05T07:00:00.000Z',
+        broker_mode: 'live',
       },
     ]);
-    expect(anchors.storeFlowSince('alpaca', 1)).toEqual({ ok: true, quote: 0 });
-    expect(() => anchors.recordAnchor('alpaca', 1, DATE)).toThrow(/append-only/);
+    expect(anchors.storeFlowSince(LIVE_AT(1), 'alpaca')).toEqual({ ok: true, quote: 0 });
+    expect(() => anchors.recordAnchor('alpaca', 'live', 1, DATE)).toThrow(/append-only/);
   });
 
-  it('anchors at fill rowid 0 when nothing has filled yet, and keeps one anchor per venue', () => {
+  it('anchors at fill seq 0 when nothing has filled yet, and keeps one anchor per venue', () => {
     const { anchors } = store();
-    expect(anchors.recordAnchor('saxo', 500, DATE)).toEqual({
+    expect(anchors.recordAnchor('saxo', 'live', 500, DATE)).toEqual({
       currency: 'GBP',
       cashQuote: 500,
-      fillRowid: 0,
+      fillSeq: 0,
+      brokerMode: 'live',
     });
     expect(anchors.anchor('alpaca')).toBeUndefined();
   });
@@ -93,7 +102,7 @@ describe('SqliteCashAnchors', () => {
   it("sums the venue's broker-routed fills after the anchor, in its currency, net of fees", () => {
     const { anchors, fill } = store();
     fill({ id: 'pre', side: 'buy', qty: 100, price: 100 });
-    anchors.recordAnchor('alpaca', 12_000, DATE);
+    anchors.recordAnchor('alpaca', 'live', 12_000, DATE);
     fill({ id: 'buy', side: 'buy', qty: 6, price: 20, fee: 1 });
     fill({ id: 'sell', side: 'sell', qty: 2, price: 25, fee: 0.5 });
     fill({ id: 'shadow', side: 'buy', qty: 9, price: 9, outcome: 'simulated' });
@@ -101,13 +110,64 @@ describe('SqliteCashAnchors', () => {
     fill({ id: 'saxo', side: 'buy', qty: 9, price: 9, venue: 'saxo' });
     fill({ id: 'cancelled', side: 'sell', qty: 1, price: 30, outcome: 'cancelled' });
 
-    expect(anchors.storeFlowSince('alpaca', 1)).toEqual({ ok: true, quote: -121 + 49.5 + 30 });
+    expect(anchors.storeFlowSince(LIVE_AT(1), 'alpaca')).toEqual({
+      ok: true,
+      quote: -121 + 49.5 + 30,
+    });
+  });
+
+  it('refuses an anchor without its broker mode, and a move that carries one', () => {
+    const { db } = store();
+    const insert = (kind: string, mode: string | null) =>
+      db
+        .prepare(
+          `INSERT INTO v2_cash_anchors (venue, kind, currency, amount_quote, fill_seq, reference,
+             trading_date, recorded_at, broker_mode) VALUES ('alpaca', ?, 'USD', 1, ?, ?, ?, 't', ?)`,
+        )
+        .run(kind, kind === 'anchor' ? 0 : null, `${kind}-${mode}`, DATE, mode);
+    const message = /a cash anchor, and only an anchor, records its broker mode/;
+    expect(() => insert('anchor', null)).toThrow(message);
+    expect(() => insert('deposit', 'live')).toThrow(message);
+    expect(() => insert('anchor', 'live')).not.toThrow();
+    expect(() => insert('deposit', null)).not.toThrow();
+  });
+
+  it("counts only the anchor's own account: paper fills in the same store never move live cash", () => {
+    const { anchors, fill } = store();
+    anchors.recordAnchor('alpaca', 'live', 12_000, DATE);
+    fill({ id: 'live', side: 'buy', qty: 6, price: 20, fee: 1 });
+    fill({ id: 'paper', side: 'buy', qty: 50, price: 20, mode: 'paper' });
+
+    expect(anchors.storeFlowSince(LIVE_AT(0), 'alpaca')).toEqual({ ok: true, quote: -121 });
+    expect(anchors.storeFlowSince({ brokerMode: 'paper', fillSeq: 0 }, 'alpaca')).toEqual({
+      ok: true,
+      quote: -1_000,
+    });
+  });
+
+  it('pins the anchor to fill_seq, the rowid itself, so a VACUUM leaves the anchor and flow alone', () => {
+    const { db, anchors, fill } = store();
+    fill({ id: 'pre', side: 'buy', qty: 100, price: 100 });
+    anchors.recordAnchor('alpaca', 'live', 12_000, DATE);
+    fill({ id: 'buy', side: 'buy', qty: 6, price: 20, fee: 1 });
+    fill({ id: 'sell', side: 'sell', qty: 2, price: 25, fee: 0.5 });
+    const before = { anchor: anchors.anchor('alpaca'), seqs: db.prepare(FILL_SEQS).all() };
+    const flow = anchors.storeFlowSince(before.anchor ?? LIVE_AT(0), 'alpaca');
+
+    db.exec('VACUUM');
+
+    expect(
+      db.prepare("SELECT pk FROM pragma_table_info('v2_fills') WHERE name = 'fill_seq'").get(),
+    ).toEqual({ pk: 1 });
+    expect({ anchor: anchors.anchor('alpaca'), seqs: db.prepare(FILL_SEQS).all() }).toEqual(before);
+    expect(anchors.storeFlowSince(anchors.anchor('alpaca') ?? LIVE_AT(0), 'alpaca')).toEqual(flow);
+    expect(flow).toEqual({ ok: true, quote: -121 + 49.5 });
   });
 
   it('refuses a flow it cannot price in the venue currency', () => {
     const { anchors, fill } = store();
     fill({ id: 'old', side: 'buy', qty: 1, price: null });
-    expect(anchors.storeFlowSince('alpaca', 0)).toEqual({
+    expect(anchors.storeFlowSince(LIVE_AT(0), 'alpaca')).toEqual({
       ok: false,
       reason: '1 alpaca fill(s) since the anchor carry no native price (migration 0085)',
     });
@@ -115,7 +175,7 @@ describe('SqliteCashAnchors', () => {
 
   it('moves the anchor by each journalled deposit and withdrawal', () => {
     const { db, anchors } = store();
-    anchors.recordAnchor('alpaca', 12_000, DATE);
+    anchors.recordAnchor('alpaca', 'live', 12_000, DATE);
     const move = { venue: 'alpaca' as const, tradingDate: '2026-10-06' };
 
     expect(
@@ -125,11 +185,31 @@ describe('SqliteCashAnchors', () => {
       anchors.recordMove({ ...move, kind: 'withdrawal', amountQuote: 250, reference: 'out-1' }),
     ).toMatchObject({ cashQuote: 12_750 });
     expect(
-      db.prepare('SELECT kind, amount_quote, fill_rowid, reference FROM v2_cash_anchors').all(),
+      db
+        .prepare('SELECT kind, amount_quote, fill_seq, reference, broker_mode FROM v2_cash_anchors')
+        .all(),
     ).toEqual([
-      { kind: 'anchor', amount_quote: 12_000, fill_rowid: 0, reference: 'go-live' },
-      { kind: 'deposit', amount_quote: 1_000, fill_rowid: null, reference: 'wire-1' },
-      { kind: 'withdrawal', amount_quote: -250, fill_rowid: null, reference: 'out-1' },
+      {
+        kind: 'anchor',
+        amount_quote: 12_000,
+        fill_seq: 0,
+        reference: 'go-live',
+        broker_mode: 'live',
+      },
+      {
+        kind: 'deposit',
+        amount_quote: 1_000,
+        fill_seq: null,
+        reference: 'wire-1',
+        broker_mode: null,
+      },
+      {
+        kind: 'withdrawal',
+        amount_quote: -250,
+        fill_seq: null,
+        reference: 'out-1',
+        broker_mode: null,
+      },
     ]);
     expect(() =>
       anchors.recordMove({ ...move, kind: 'deposit', amountQuote: 1_000, reference: 'wire-1' }),
@@ -147,7 +227,7 @@ describe('SqliteCashAnchors', () => {
     expect(() => anchors.recordMove({ ...deposit, amountQuote: 10 })).toThrow(
       'no cash anchor for alpaca yet: the first clean live reconcile records the broker cash, deposits before it included',
     );
-    anchors.recordAnchor('alpaca', 1, DATE);
+    anchors.recordAnchor('alpaca', 'live', 1, DATE);
     for (const amountQuote of [0, -5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => anchors.recordMove({ ...deposit, amountQuote })).toThrow(
         `a deposit must be a positive amount, not ${amountQuote}`,
@@ -189,7 +269,7 @@ describe('dayRateFor', () => {
 describe('anchorCashCheck (David 2026-10-02, #1927 item 5)', () => {
   const compare = (brokerCashQuote: number, flow: number, quotePerGbp = 1): AnchorCompare => ({
     brokerCashQuote,
-    anchor: { currency: 'GBP', cashQuote: 10_000, fillRowid: 0 },
+    anchor: { currency: 'GBP', cashQuote: 10_000, fillSeq: 0, brokerMode: 'live' },
     storeFlow: { ok: true, quote: flow },
     rate: { ok: true, quotePerGbp, source: 's' },
     toleranceGbp: 5,
@@ -251,6 +331,7 @@ describe('anchorCashCheck (David 2026-10-02, #1927 item 5)', () => {
 describe('liveCashCheck', () => {
   const broker = { venue: 'alpaca' as const, cashQuote: 12_000, booksMatch: true };
   const deps = (cashAnchors: CashAnchorLedger | undefined, tolerance?: number) => ({
+    brokerMode: 'live' as const,
     cashAnchors,
     market: USD_FIX,
     reconcileCashToleranceGbp: tolerance,
@@ -282,7 +363,21 @@ describe('liveCashCheck', () => {
       diffs: [],
       note: 'cash anchor recorded: 12000.00 USD (#1927)',
     });
-    expect(anchors.anchor('alpaca')).toEqual({ currency: 'USD', cashQuote: 12_000, fillRowid: 0 });
+    expect(anchors.anchor('alpaca')).toEqual({
+      currency: 'USD',
+      cashQuote: 12_000,
+      fillSeq: 0,
+      brokerMode: 'live',
+    });
+  });
+
+  it("is unverified against an anchor another account's run recorded, recording none", () => {
+    const { db, anchors } = store();
+    anchors.recordAnchor('alpaca', 'paper', 12_000, DATE);
+    expect(liveCashCheck(deps(anchors, 5), broker, DATE)).toEqual(
+      unverified("the alpaca cash anchor is the paper account's, not live's"),
+    );
+    expect(db.prepare('SELECT COUNT(*) AS n FROM v2_cash_anchors').get()).toEqual({ n: 1 });
   });
 
   it('with no anchor yet, waits while positions or orders disagree', () => {

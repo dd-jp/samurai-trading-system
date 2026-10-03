@@ -18,6 +18,7 @@ const CAPTURED = {
   fx_quote_per_gbp: 1.25,
   fx_source: 'boe-xudluss:year-start:2026@2025-12-31',
   fill_date: null,
+  broker_mode: 'paper',
 } as const;
 
 const clock = { now: () => new Date('2026-10-06T21:40:00.000Z') };

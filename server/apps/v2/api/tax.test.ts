@@ -59,6 +59,7 @@ function trade(
     fx_quote_per_gbp: usd ? 1.3 : 1,
     fx_source: usd ? 'boe-xudluss:year-start:2026@2025-12-31' : 'gbp',
     fill_date: '2026-05-01',
+    broker_mode: 'paper',
     ...fill,
   });
 }
