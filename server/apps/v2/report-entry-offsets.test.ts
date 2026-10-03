@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import {
   inMemoryCopyOf,
@@ -12,7 +12,11 @@ import {
 import { main, readJournalledEntries, reportEntryOffsets } from './report-entry-offsets.js';
 
 const dirs: string[] = [];
-const migrated = openSharedStore(':memory:');
+let migrated: StoreHandle;
+
+beforeAll(() => {
+  migrated = openSharedStore(':memory:');
+});
 
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), 'entry-offsets-'));
