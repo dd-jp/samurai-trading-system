@@ -258,7 +258,7 @@ The v2 alpaca-adapter.test.ts (§4.6) had three cases that drove the adapter thr
 
 The config edits are as listed, plus one more: the v2 `.oxlintrc.json` regex that kept server/pipeline/execution behind v2 execution goes, together with its fixture in `server/apps/v2/boundaries.test.ts`, because nothing is left for it to match. The v1 execution barrel pattern was the only `**/execution/**` group in the non-v2 blocks, so there it stays with its message re-pointed at v2 execution. Exports left unused were trimmed until `fallow dead-code` was clean. That also removed the shared declarations only wave 3 used, and two Saxo error classifiers that only the bracket adapter called (`isDuplicateRequestRefusal`, `isOrderNotFound`; tag v1-final keeps them). Wave 5's store/closed-trade-row.ts went early, once fallow reported it unused. The `MINIMUM_EVENT_ASSIGNMENTS` floor in `server/shared/types/log-event-code.test.ts` drops from 120 to 80, because the scan now finds 84 assignments.
 
-v2 share matching covers what the v1 matcher's tests pinned. That covers the same-day, 30-day and section 104 rules, the window boundary, disposal ordering and the tax year. The v1 tests that went with nothing to replace them tested the v1 report layer: the annual exempt amount, the read-only store opener, and the fill source's join across closed and open lots. That report was already deleted in wave 1.
+v2 share matching covers what the v1 matcher's tests pinned. That covers the same-day, 30-day and section 104 rules, the window boundary, disposal ordering and the tax year. The v1 tests that went with nothing to replace them tested the v1 report layer: the annual exempt amount, the read-only store opener, and the fill source's join across closed and open lots. That report was already deleted in wave 1. The fill-source tests also pinned pence (GBX) to pounds conversion, refusal of a zero or negative FX rate, exclusion of control-arm and crypto rows, and refusal of sell lots. v2's tax log holds out any currency other than GBP or USD, so it is safe today, but once Saxo LSE fills arrive (#1916) GBX disposals stay held out until that conversion is rebuilt in v2.
 
 Not in a wave: the moved transport, server/apps/v2/execution/saxo/saxo-client.ts, saxo-broker-errors.ts and saxo-http-client.ts. Under option C it stays for #1916 part 2. Nothing in v2 calls it yet.
 
@@ -291,14 +291,14 @@ Not in a wave: the moved transport, server/apps/v2/execution/saxo/saxo-client.ts
 
 ### Wave 5: dead shared helpers and v1 wire contracts
 
-17 production files (1,122 lines) and 10 test files (997 lines). Trims `server/shared/index.ts`, `server/shared/store/index.ts` and `contracts/index.ts`. contracts/snapshot.ts, metrics.ts, pipeline.ts and providers.ts are the v1 dashboard wire, and §8 confirms the client reads none of them. No migration is touched; the dead store files are row mappers and stores. nous-responses.ts, book-currency.ts and store/fill-row.ts are not here: the first is kept under G18, the other two are held (§6).
+17 production files (1,122 lines) and 10 test files (997 lines) at the original run; the re-run on wave 3's head finds 18 production files, without store/closed-trade-row.ts (deleted early in wave 3), and wave 5 refreshes this table from its own base. Trims `server/shared/index.ts`, `server/shared/store/index.ts` and `contracts/index.ts`. contracts/snapshot.ts, metrics.ts, pipeline.ts and providers.ts are the v1 dashboard wire, and §8 confirms the client reads none of them. No migration is touched; the dead store files are row mappers and stores. nous-responses.ts, book-currency.ts and store/fill-row.ts are not here: the first is kept under G18, the other two are held (§6).
 
 | Directory | Files (lines) |
 |---|---|
 | contracts/ | metrics.ts (26), pipeline.ts (83), providers.ts (34), snapshot.ts (302) |
 | server/shared/ | decision-records.ts (65), median.ts (7), no-data-marker.ts (1), parse-json-column.ts (13), stdout-fault-guard.ts (54), threshold-bounds.ts (119) |
 | server/shared/http/ | polygon-aggregates.ts (28) |
-| server/shared/store/ | closed-trade-row.ts (38), key-scheme-guard.ts (66), open-position-row.ts (101), prune-llm-call-log.ts (12), sqlite-decision-record-stores.ts (141), sqlite-llm-spend-cap-store.ts (32) |
+| server/shared/store/ | key-scheme-guard.ts (66), open-position-row.ts (101), prune-llm-call-log.ts (12), sqlite-decision-record-stores.ts (141), sqlite-llm-spend-cap-store.ts (32) |
 
 <details><summary>Wave 5 tests (10)</summary>
 
