@@ -9,6 +9,15 @@ import type { SaxoOrderRequest } from './saxo-client.js';
 import { saxoAccountKeyEnvVar } from './saxo-environment.js';
 import { SAXO_CREDENTIAL_ENV_VARS, SaxoHttpBrokerClient } from './saxo-http-client.js';
 
+beforeEach(() => {
+  vi.stubEnv('SAXO_SIM_ACCOUNT_KEY', '');
+  vi.stubEnv('SAXO_LIVE_ACCOUNT_KEY', '');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function permissiveLimiter(): TokenBucket {
   return new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 });
 }
@@ -1494,14 +1503,47 @@ describe('SaxoHttpBrokerClient', () => {
       expect(calledPath(fetchMock, 1)).toContain('AccountKey=fake-cfd-acct');
     });
 
-    it("does not read the other environment's account key", async () => {
-      vi.stubEnv('SAXO_LIVE_ACCOUNT_KEY', 'fake-cfd-acct');
-      vi.stubEnv('SAXO_SIM_ACCOUNT_KEY', '');
+    it.each([
+      ['sim', 'SAXO_LIVE_ACCOUNT_KEY', 'SAXO_SIM_ACCOUNT_KEY'],
+      ['live', 'SAXO_SIM_ACCOUNT_KEY', 'SAXO_LIVE_ACCOUNT_KEY'],
+    ] as const)('%s ignores %s', async (environment, other, own) => {
+      vi.stubEnv(other, 'fake-cfd-acct');
       twoAccountFetch();
 
-      await expect(envClient('sim').listOpenOrders()).rejects.toThrow(
-        'Saxo: 2 accounts are visible; set SAXO_SIM_ACCOUNT_KEY or pass { accountKey } to pick the trading one.',
+      await expect(envClient(environment).listOpenOrders()).rejects.toThrow(
+        `Saxo: 2 accounts are visible; set ${own} or pass { accountKey } to pick the trading one.`,
       );
+    });
+
+    it.each(['', '   '])(
+      'treats an explicit accountKey of %j as unset and falls back to the environment',
+      async (blank) => {
+        vi.stubEnv('SAXO_SIM_ACCOUNT_KEY', 'fake-cfd-acct');
+        const fetchMock = twoAccountFetch();
+
+        await envClient('sim', blank).listOpenOrders();
+
+        expect(calledPath(fetchMock, 1)).toContain('AccountKey=fake-cfd-acct');
+      },
+    );
+
+    it.each(['', '   '])(
+      'refuses 2+ accounts when the explicit accountKey is %j and the variable is unset',
+      async (blank) => {
+        twoAccountFetch();
+
+        await expect(envClient('sim', blank).listOpenOrders()).rejects.toThrow(
+          /2 accounts are visible; set SAXO_SIM_ACCOUNT_KEY/,
+        );
+      },
+    );
+
+    it('trims an explicit accountKey', async () => {
+      const fetchMock = twoAccountFetch();
+
+      await envClient('sim', '  fake-gia-acct  ').listOpenOrders();
+
+      expect(calledPath(fetchMock, 1)).toContain('AccountKey=fake-gia-acct');
     });
 
     it('still refuses 2+ accounts when the variable is blank', async () => {

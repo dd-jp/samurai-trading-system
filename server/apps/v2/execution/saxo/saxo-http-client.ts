@@ -339,9 +339,13 @@ function validateIdentity(
   return only;
 }
 
-function saxoFromEnv(name: string): string | undefined {
-  const value = process.env[name]?.trim();
+function nonBlank(raw: string | undefined): string | undefined {
+  const value = raw?.trim();
   return value === undefined || value.length === 0 ? undefined : value;
+}
+
+function saxoFromEnv(name: string): string | undefined {
+  return nonBlank(process.env[name]);
 }
 
 function resolveSaxoTokenSource(
@@ -421,7 +425,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     this.tokenSource = resolveSaxoTokenSource(options, environment, names.token);
     this.baseUrl = resolveSaxoBaseUrl(options, names.gateway, environment);
     this.accountKeyEnvVar = saxoAccountKeyEnvVar(environment);
-    this.pinnedAccountKey = options.accountKey ?? saxoFromEnv(this.accountKeyEnvVar);
+    this.pinnedAccountKey = nonBlank(options.accountKey) ?? saxoFromEnv(this.accountKeyEnvVar);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
     this.rateLimiter = resolveSaxoRateLimiter(options);
