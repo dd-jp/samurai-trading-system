@@ -118,7 +118,7 @@ class FakeAlpaca extends DryRunBrokerAdapter {
       price: 25,
       qty,
       fee: 0,
-      timestamp: MID_DAY,
+      timestamp: MID_DAY.toISOString(),
     });
   }
 }

@@ -11,7 +11,7 @@ function rawFill(overrides: Partial<NormalizedFill> & { qty: number }): Normaliz
     leg: 'entry',
     price: 100,
     fee: 1,
-    timestamp: new Date(0),
+    timestamp: '1970-01-01T00:00:00.000Z',
     qty_is_cumulative: true,
     ...overrides,
   };

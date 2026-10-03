@@ -132,7 +132,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       unpricedFillAlerts: recordingAlerts(),
       logger: recordingLogger(),
     });
-    const fills = await second.fetchNewFills(SINCE);
+    const fills = await second.fetchNewFills(SINCE.toISOString());
 
     expect(fills).toHaveLength(1);
     expect(fills[0]).toMatchObject({ client_order_id: 'idem-1', leg: 'entry' });
@@ -169,11 +169,11 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       unpricedFillAlerts: recordingAlerts(),
       logger: recordingLogger(),
     });
-    expect(await second.fetchNewFills(SINCE)).toEqual([]);
+    expect(await second.fetchNewFills(SINCE.toISOString())).toEqual([]);
 
     await second.getOrder('idem-1', 'AAPL');
 
-    expect(await second.fetchNewFills(SINCE)).toHaveLength(1);
+    expect(await second.fetchNewFills(SINCE.toISOString())).toHaveLength(1);
     expect(new SqliteBrokerStateStore(db).loadBrackets('alpaca')[0]?.entry_order_id).toBe(
       'parent-1',
     );
@@ -205,7 +205,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
     });
     await first.submitBracket(STOCK_REQUEST);
 
-    await first.fetchNewFills(SINCE).catch(() => undefined);
+    await first.fetchNewFills(SINCE.toISOString()).catch(() => undefined);
     expect(firstAlerts.posted).toEqual([]);
 
     const secondAlerts = recordingAlerts();
@@ -219,7 +219,7 @@ describe('AlpacaBrokerAdapter across a restart', () => {
       clock: fixedClock(new Date(FIRST_SEEN.getTime() + AGE_OUT_MS)),
     });
 
-    await second.fetchNewFills(SINCE).catch(() => undefined);
+    await second.fetchNewFills(SINCE.toISOString()).catch(() => undefined);
 
     expect(secondAlerts.posted).toMatchObject([
       {

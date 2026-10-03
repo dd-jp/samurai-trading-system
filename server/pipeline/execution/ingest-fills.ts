@@ -325,84 +325,95 @@ async function persistUnattributedSplits(
   splitFills: readonly NormalizedFill[],
   failures: ContainedFailure[],
 ): Promise<void> {
-  const { store } = input;
   const now = input.clock.now();
   for (const fill of splitFills) {
-    if (fill.timestamp.getTime() > now.getTime()) continue;
-    try {
-      if (await store.hasFill({ idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id })) {
-        continue;
-      }
-      await store.applyLotAdvance({
-        idempotency_key: lotKey,
-        fills: [toFill(fill, lotKey, NO_MODELLED_LOT_COSTS)],
-      });
-    } catch (error) {
-      logCaughtFailure(
-        input.logger,
-        {
-          trace_id: input.trace_id,
-          stage: 'execution',
-          event: 'unattributed_flatten_fill_persist_failed',
-          level: 'error',
-          message: UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED,
-        },
-        error,
-        {
-          flatten_client_order_id: clientOrderId,
-          idempotency_key: lotKey,
-          broker_fill_id: fill.broker_fill_id,
-          qty: fill.qty,
-        },
-      );
-      failures.push({ scope: 'lot-advance', key: lotKey, instrument: null, error });
-      continue;
+    if (Date.parse(fill.timestamp) > now.getTime()) continue;
+    await persistUnattributedSplit(input, attribution, clientOrderId, lotKey, fill, failures);
+  }
+}
+
+async function persistUnattributedSplit(
+  input: FillIngestInput,
+  attribution: FlattenAttribution,
+  clientOrderId: string,
+  lotKey: string,
+  fill: NormalizedFill,
+  failures: ContainedFailure[],
+): Promise<void> {
+  const { store } = input;
+  try {
+    if (await store.hasFill({ idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id })) {
+      return;
     }
-
-    await warnOnNonSterlingFee(
-      input,
-      { idempotency_key: lotKey, instrument: attribution.instrument },
-      fill,
-    );
-
-    safeLog(input.logger, {
-      trace_id: input.trace_id,
-      stage: 'execution',
-      event: 'unattributed_flatten_fill',
-      level: 'error',
-      message: UNATTRIBUTED_FLATTEN_FILL,
-      payload: {
+    await store.applyLotAdvance({
+      idempotency_key: lotKey,
+      fills: [toFill(fill, lotKey, NO_MODELLED_LOT_COSTS)],
+    });
+  } catch (error) {
+    logCaughtFailure(
+      input.logger,
+      {
+        trace_id: input.trace_id,
+        stage: 'execution',
+        event: 'unattributed_flatten_fill_persist_failed',
+        level: 'error',
+        message: UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED,
+      },
+      error,
+      {
         flatten_client_order_id: clientOrderId,
         idempotency_key: lotKey,
         broker_fill_id: fill.broker_fill_id,
         qty: fill.qty,
       },
-    });
+    );
+    failures.push({ scope: 'lot-advance', key: lotKey, instrument: null, error });
+    return;
+  }
 
-    if (input.unattributedFlattenFillAlerts === undefined) continue;
-    try {
-      await input.unattributedFlattenFillAlerts.postUnattributedFlattenFillAlert({
-        trace_id: input.trace_id,
-        flatten_idempotency_key: clientOrderId,
-        lot_idempotency_key: lotKey,
-        instrument: attribution.instrument,
-        side: attribution.side,
-        broker_fill_id: fill.broker_fill_id,
-        qty: fill.qty,
-        observed_at: input.clock.now(),
-      });
-    } catch {
-      safeLog(input.logger, {
-        trace_id: input.trace_id,
-        stage: 'execution',
-        event: 'unattributed_flatten_fill_alert_send_failed',
-        level: 'warn',
-        message:
-          'postUnattributedFlattenFillAlert delivery failed — see the ' +
-          'unattributed_flatten_fill entry above for the fill this concerns',
-        payload: { idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id },
-      });
-    }
+  await warnOnNonSterlingFee(
+    input,
+    { idempotency_key: lotKey, instrument: attribution.instrument },
+    fill,
+  );
+
+  safeLog(input.logger, {
+    trace_id: input.trace_id,
+    stage: 'execution',
+    event: 'unattributed_flatten_fill',
+    level: 'error',
+    message: UNATTRIBUTED_FLATTEN_FILL,
+    payload: {
+      flatten_client_order_id: clientOrderId,
+      idempotency_key: lotKey,
+      broker_fill_id: fill.broker_fill_id,
+      qty: fill.qty,
+    },
+  });
+
+  if (input.unattributedFlattenFillAlerts === undefined) return;
+  try {
+    await input.unattributedFlattenFillAlerts.postUnattributedFlattenFillAlert({
+      trace_id: input.trace_id,
+      flatten_idempotency_key: clientOrderId,
+      lot_idempotency_key: lotKey,
+      instrument: attribution.instrument,
+      side: attribution.side,
+      broker_fill_id: fill.broker_fill_id,
+      qty: fill.qty,
+      observed_at: input.clock.now(),
+    });
+  } catch {
+    safeLog(input.logger, {
+      trace_id: input.trace_id,
+      stage: 'execution',
+      event: 'unattributed_flatten_fill_alert_send_failed',
+      level: 'warn',
+      message:
+        'postUnattributedFlattenFillAlert delivery failed — see the ' +
+        'unattributed_flatten_fill entry above for the fill this concerns',
+      payload: { idempotency_key: lotKey, broker_fill_id: fill.broker_fill_id },
+    });
   }
 }
 
@@ -523,7 +534,7 @@ async function advanceLot(
 ): Promise<void> {
   const { broker, store } = input;
 
-  const lotFills = fills.filter((fill) => fill.timestamp.getTime() <= now.getTime());
+  const lotFills = fills.filter((fill) => Date.parse(fill.timestamp) <= now.getTime());
 
   const collected = await collectNewFillsForLot(input, position, lotFills);
   const { newFills } = collected;
@@ -538,10 +549,7 @@ async function advanceLot(
     return;
   }
 
-  const recorded = [
-    ...(persisted ?? (await store.getFills(position.idempotency_key))),
-    ...newFills,
-  ];
+  const recorded = [...(await recordedFills(store, position, persisted)), ...newFills];
   const filledSize = totalQty(recorded.filter((fill) => fill.leg === 'entry'));
   if (filledSize === 0) {
     await store.applyLotAdvance({ idempotency_key: position.idempotency_key, fills: newFills });
@@ -572,12 +580,24 @@ async function advanceLot(
       avg_entry_price: avgEntryPrice,
       order_state: orderState,
     },
-    ...(flat
-      ? {
-          closed_trade: closedTrade(position, { filledSize, avgEntryPrice, entryFills, exitFills }),
-        }
-      : {}),
+    ...closedTradeIfFlat(flat, position, { filledSize, avgEntryPrice, entryFills, exitFills }),
   });
+}
+
+async function recordedFills(
+  store: FillIngestInput['store'],
+  position: OpenPosition,
+  persisted: readonly Fill[] | null,
+): Promise<readonly Fill[]> {
+  return persisted ?? (await store.getFills(position.idempotency_key));
+}
+
+function closedTradeIfFlat(
+  flat: boolean,
+  position: OpenPosition,
+  lot: Parameters<typeof closedTrade>[1],
+): { closed_trade?: ReturnType<typeof closedTrade> } {
+  return flat ? { closed_trade: closedTrade(position, lot) } : {};
 }
 
 async function clearFillZeroSizeWarning(
@@ -752,7 +772,7 @@ function toFill(
     price: fill.price,
     qty: fill.qty,
     fee: chargedFee,
-    timestamp: fill.timestamp,
+    timestamp: new Date(fill.timestamp),
     ...(costBreakdown === undefined ? {} : { cost_breakdown: costBreakdown }),
     ...optionalFillFields(fill),
   };
@@ -773,6 +793,6 @@ function modelledLegCostFor(
   }
 }
 
-function earliest(dates: readonly Date[]): Date {
-  return dates.reduce((min, date) => (date.getTime() < min.getTime() ? date : min));
+function earliest(dates: readonly Date[]): string {
+  return new Date(Math.min(...dates.map((date) => date.getTime()))).toISOString();
 }

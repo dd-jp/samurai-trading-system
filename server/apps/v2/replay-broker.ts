@@ -170,7 +170,7 @@ export class JournalReplayBroker implements BrokerAdapter {
         price: nativeAmountFor(row.price_gbp, quotePerGbp),
         qty: row.qty,
         fee: nativeAmountFor(row.fee_gbp, quotePerGbp),
-        timestamp: new Date(row.filled_at ?? row.recorded_at),
+        timestamp: new Date(row.filled_at ?? row.recorded_at).toISOString(),
       })),
     );
   }

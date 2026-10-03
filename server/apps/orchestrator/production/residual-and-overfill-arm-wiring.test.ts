@@ -98,8 +98,8 @@ class ScriptedLiveBroker implements BrokerAdapter {
   async submitBracket(): Promise<BrokerAck> {
     throw new Error('ScriptedLiveBroker.submitBracket: positions are seeded directly, not placed');
   }
-  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
-    return this.scriptedFills.filter((fill) => fill.timestamp.getTime() >= since.getTime());
+  async fetchNewFills(since: string): Promise<NormalizedFill[]> {
+    return this.scriptedFills.filter((fill) => Date.parse(fill.timestamp) >= Date.parse(since));
   }
   async resizeProtectiveLegs(): Promise<void> {}
   async rearmProtectiveLegs(): Promise<void> {
@@ -130,7 +130,7 @@ function fill(overrides: Partial<NormalizedFill> = {}): NormalizedFill {
     price: 100,
     qty: 5,
     fee: 1,
-    timestamp: new Date('2026-07-20T15:00:00Z'),
+    timestamp: '2026-07-20T15:00:00.000Z',
     ...overrides,
   };
 }
@@ -293,7 +293,7 @@ describe('residual-exposure and flatten-overfill alerts name the arm that raised
         leg: 'exit',
         qty: 4,
         price: 98,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
     broker.rearmFailure = new Error('venue rejected the OCO order');
@@ -348,7 +348,7 @@ describe('residual-exposure and flatten-overfill alerts name the arm that raised
         broker_fill_id: toBrokerFillId('f1'),
         leg: 'exit',
         qty: 10,
-        timestamp: new Date('2026-07-20T15:30:00Z'),
+        timestamp: '2026-07-20T15:30:00.000Z',
       }),
     ]);
 

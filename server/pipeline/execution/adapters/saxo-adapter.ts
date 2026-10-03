@@ -22,7 +22,13 @@ import type {
   SaxoOrderRequest,
 } from '../../../apps/v2/execution/saxo/saxo-client.js';
 import type { Clock, Logger } from '../../../shared/index.js';
-import { escalatesAt, isBookCurrency, safeLog, toBrokerFillId } from '../../../shared/index.js';
+import {
+  escalatesAt,
+  isBookCurrency,
+  parseIsoInstant,
+  safeLog,
+  toBrokerFillId,
+} from '../../../shared/index.js';
 import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
 import type { DormantLegsUnresolvedAlertChannel } from '../dormant-legs-unresolved-alert.js';
 import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
@@ -336,7 +342,8 @@ export class SaxoBrokerAdapter implements BrokerAdapter {
     return order.normalized;
   }
 
-  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
+  async fetchNewFills(sinceIso: string): Promise<NormalizedFill[]> {
+    const since = parseIsoInstant(sinceIso);
     const activities = await this.call('fetchNewFills', () =>
       this.client.listOrderActivities(since),
     );
@@ -1195,6 +1202,6 @@ function toCashFill(fill: QuotedFill, ref: SaxoInstrumentRef): NormalizedFill {
     fee: price * fill.qty * SAXO_COMMISSION_RATE,
     fee_currency: ref.currency,
     ...(isBookCurrency(ref.currency) ? {} : { fx_rate_to_gbp_source: 'not_reported_by_venue' }),
-    timestamp: fill.timestamp,
+    timestamp: fill.timestamp.toISOString(),
   };
 }

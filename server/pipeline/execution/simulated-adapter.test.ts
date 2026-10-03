@@ -148,8 +148,8 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
 
     await plain.submitBracket(makeBracket());
     await saxo.submitBracket(makeBracket());
-    const [plainFill] = await plain.fetchNewFills(NOW);
-    const [saxoFill] = await saxo.fetchNewFills(NOW);
+    const [plainFill] = await plain.fetchNewFills(NOW.toISOString());
+    const [saxoFill] = await saxo.fetchNewFills(NOW.toISOString());
 
     expect(plainFill?.cost_breakdown?.commission).toBeCloseTo(5, 10);
     expect(saxoFill?.cost_breakdown?.commission).toBeCloseTo(8, 10);
@@ -196,13 +196,13 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     const adapter = makeAdapter();
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
     expect(fills).toHaveLength(1);
     expect(fills[0]).toMatchObject({
       client_order_id: 'key-aapl-1355',
       leg: 'entry',
       qty: 100,
-      timestamp: NOW,
+      timestamp: NOW.toISOString(),
     });
     expect(fills[0]?.price).toBeGreaterThan(100);
     expect(fills[0]?.fee).toBeCloseTo(5, 10);
@@ -216,7 +216,7 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
       await adapter.submitBracket(makeBracket());
     }
 
-    expect(await adapter.fetchNewFills(new Date(0))).toHaveLength(1);
+    expect(await adapter.fetchNewFills('1970-01-01T00:00:00.000Z')).toHaveLength(1);
   });
 
   it('acks a duplicate submit idempotently rather than erroring', async () => {
@@ -232,7 +232,7 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     const priceOf = async () => {
       const adapter = makeAdapter();
       await adapter.submitBracket(makeBracket());
-      return (await adapter.fetchNewFills(new Date(0)))[0]?.price;
+      return (await adapter.fetchNewFills('1970-01-01T00:00:00.000Z'))[0]?.price;
     };
 
     expect(await priceOf()).toBe(await priceOf());
@@ -242,16 +242,36 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     const adapter = makeAdapter();
     await adapter.submitBracket(makeBracket({ side: 'sell' }));
 
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
     expect(fills[0]?.price).toBeLessThan(100);
   });
+
+  it('stamps the fill as the millisecond UTC instant of simulated T and filters on it exactly', async () => {
+    const adapter = makeAdapter();
+    await adapter.submitBracket(makeBracket());
+
+    const [fill] = await adapter.fetchNewFills(NOW.toISOString());
+
+    expect(fill?.timestamp).toBe(NOW.toISOString());
+    expect(await adapter.fetchNewFills(new Date(NOW.getTime() + 1).toISOString())).toEqual([]);
+  });
+
+  it.each(['2026-01-01', '2026-01-01T00:00:00Z', 'not a date'])(
+    'rejects a non-canonical `since` %j',
+    async (since) => {
+      const adapter = makeAdapter();
+      await adapter.submitBracket(makeBracket());
+
+      await expect(adapter.fetchNewFills(since)).rejects.toThrow(RangeError);
+    },
+  );
 
   it('stamps the fill at or before simulated T', async () => {
     const adapter = makeAdapter();
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(new Date(0));
-    expect(fills[0]?.timestamp.getTime()).toBeLessThanOrEqual(NOW.getTime());
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+    expect(Date.parse(fills[0]?.timestamp ?? '')).toBeLessThanOrEqual(NOW.getTime());
   });
 
   it("never stamps a fill earlier than the order's own submit time, even when the priced mark lags", async () => {
@@ -268,17 +288,17 @@ describe('SimulatedBrokerAdapter.submitBracket', () => {
     const adapter = makeAdapter(marketData);
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(new Date(0));
-    expect(fills[0]?.timestamp.getTime()).toBeGreaterThanOrEqual(NOW.getTime());
-    expect(await adapter.fetchNewFills(NOW)).toHaveLength(1);
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
+    expect(Date.parse(fills[0]?.timestamp ?? '')).toBeGreaterThanOrEqual(NOW.getTime());
+    expect(await adapter.fetchNewFills(NOW.toISOString())).toHaveLength(1);
   });
 
   it('serves fills from the poll cursor forward', async () => {
     const adapter = makeAdapter();
     await adapter.submitBracket(makeBracket());
 
-    expect(await adapter.fetchNewFills(NOW)).toHaveLength(1);
-    expect(await adapter.fetchNewFills(new Date(NOW.getTime() + 1))).toHaveLength(0);
+    expect(await adapter.fetchNewFills(NOW.toISOString())).toHaveLength(1);
+    expect(await adapter.fetchNewFills(new Date(NOW.getTime() + 1).toISOString())).toHaveLength(0);
   });
 });
 
@@ -300,7 +320,7 @@ describe('SimulatedBrokerAdapter — intervention path (#429)', () => {
     const adapter = makeAdapter();
 
     const ack = await adapter.submitFlatten('AAPL', 'sell', 40, 'flatten-1');
-    const fills = await adapter.fetchNewFills(new Date(0));
+    const fills = await adapter.fetchNewFills('1970-01-01T00:00:00.000Z');
 
     expect(ack.client_order_id).toBe('flatten-1');
     expect(fills.map((fill) => fill.broker_fill_id)).toContain('flatten-1:flatten');
@@ -312,7 +332,7 @@ describe('SimulatedBrokerAdapter — intervention path (#429)', () => {
     await adapter.submitFlatten('AAPL', 'sell', 40, 'flatten-1');
     await adapter.submitFlatten('AAPL', 'sell', 40, 'flatten-1');
 
-    expect(await adapter.fetchNewFills(new Date(0))).toHaveLength(1);
+    expect(await adapter.fetchNewFills('1970-01-01T00:00:00.000Z')).toHaveLength(1);
   });
 
   it('nets positions per instrument rather than reporting one row per lot', async () => {

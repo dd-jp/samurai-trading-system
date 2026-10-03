@@ -1801,7 +1801,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     const { adapter } = makeAdapter(client);
     await adapter.submitBracket(makeBracket());
 
-    const fills = await adapter.fetchNewFills(since);
+    const fills = await adapter.fetchNewFills(since.toISOString());
 
     expect(client.listOrderActivities).toHaveBeenCalledWith(since);
     expect(fills).toEqual([
@@ -1814,7 +1814,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         fee: expect.closeTo(0.024048, 6),
         fee_currency: 'USD',
         fx_rate_to_gbp_source: 'not_reported_by_venue',
-        timestamp: new Date('2026-09-05T08:31:00Z'),
+        timestamp: '2026-09-05T08:31:00.000Z',
       },
       {
         client_order_id: 'key-3usl-0930',
@@ -1825,7 +1825,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
         fee: expect.closeTo(0.021552, 6),
         fee_currency: 'USD',
         fx_rate_to_gbp_source: 'not_reported_by_venue',
-        timestamp: new Date('2026-09-05T10:00:00Z'),
+        timestamp: '2026-09-05T10:00:00.000Z',
       },
     ]);
   });
@@ -1850,12 +1850,59 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     const { adapter } = makeAdapter(client);
     await adapter.submitFlatten('3USL', 'sell', 3, 'flat-1');
 
-    const fills = await adapter.fetchNewFills(since);
+    const fills = await adapter.fetchNewFills(since.toISOString());
 
     expect(fills).toEqual([
       expect.objectContaining({ client_order_id: 'flat-1', leg: 'exit', qty: 3 }),
     ]);
   });
+
+  it.each([
+    ['microseconds', '2026-09-05T08:31:00.456789Z', '2026-09-05T08:31:00.456Z'],
+    ['an offset', '2026-09-05T09:31:00.456+01:00', '2026-09-05T08:31:00.456Z'],
+  ])(
+    'stamps a fill dated with %s as a millisecond UTC instant',
+    async (_label, activityTime, expected) => {
+      const client = makeClient({
+        listOrderActivities: vi.fn().mockResolvedValue([
+          activity({
+            LogId: 'log-fill',
+            Status: 'Filled',
+            FillAmount: 3,
+            AveragePrice: 10,
+            ActivityTime: activityTime,
+          }),
+        ]),
+      });
+      const { adapter } = makeAdapter(client);
+      await adapter.submitBracket(makeBracket());
+
+      const [fill] = await adapter.fetchNewFills(since.toISOString());
+
+      expect(fill?.timestamp).toBe(expected);
+      expect(new Date(fill?.timestamp ?? '').toISOString()).toBe(expected);
+    },
+  );
+
+  it('passes the venue the exact millisecond of a canonical `since`', async () => {
+    const listOrderActivities = vi.fn().mockResolvedValue([]);
+    const { adapter } = makeAdapter(makeClient({ listOrderActivities }));
+
+    await adapter.fetchNewFills('2026-09-05T08:00:00.789Z');
+
+    expect(listOrderActivities).toHaveBeenCalledWith(new Date(Date.UTC(2026, 8, 5, 8, 0, 0, 789)));
+  });
+
+  it.each(['2026-09-05', '2026-09-05T08:00:00Z', '2026-09-05T09:00:00.000+01:00', 'not a date'])(
+    'rejects a non-canonical `since` %j before calling the venue',
+    async (bad) => {
+      const listOrderActivities = vi.fn().mockResolvedValue([]);
+      const { adapter } = makeAdapter(makeClient({ listOrderActivities }));
+
+      await expect(adapter.fetchNewFills(bad)).rejects.toThrow(RangeError);
+      expect(listOrderActivities).not.toHaveBeenCalled();
+    },
+  );
 
   it('never dates a fill before `since`', async () => {
     const client = makeClient({
@@ -1872,9 +1919,9 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     const { adapter } = makeAdapter(client);
     await adapter.submitBracket(makeBracket());
 
-    const [fill] = await adapter.fetchNewFills(since);
+    const [fill] = await adapter.fetchNewFills(since.toISOString());
 
-    expect(fill?.timestamp).toEqual(since);
+    expect(fill?.timestamp).toBe(since.toISOString());
   });
 
   it('fails the sweep on a fill whose Uic resolves to no pool line, booking neither it nor its batch', async () => {
@@ -1902,7 +1949,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     const { adapter } = makeAdapter(client);
     await adapter.submitBracket(makeBracket());
 
-    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/log-fill/);
+    await expect(adapter.fetchNewFills(since.toISOString())).rejects.toThrow(/log-fill/);
   });
 
   it('throws on a Filled activity that carries no fill amount or price rather than dropping it', async () => {
@@ -1914,7 +1961,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     const { adapter } = makeAdapter(client);
     await adapter.submitBracket(makeBracket());
 
-    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/log-fill/);
+    await expect(adapter.fetchNewFills(since.toISOString())).rejects.toThrow(/log-fill/);
   });
 
   it("throws on the venue's own FinalFill row carrying no fill amount or price — the shape a Filled-only guard would have dropped (#1216)", async () => {
@@ -1926,7 +1973,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     const { adapter } = makeAdapter(client);
     await adapter.submitBracket(makeBracket());
 
-    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/log-fill/);
+    await expect(adapter.fetchNewFills(since.toISOString())).rejects.toThrow(/log-fill/);
   });
 
   it('sweeps brackets journalled before a restart', async () => {
@@ -1957,7 +2004,7 @@ describe('SaxoBrokerAdapter.fetchNewFills', () => {
     });
     const { adapter } = makeAdapter(client, state);
 
-    const fills = await adapter.fetchNewFills(since);
+    const fills = await adapter.fetchNewFills(since.toISOString());
 
     expect(fills).toEqual([expect.objectContaining({ client_order_id: 'key-old', leg: 'target' })]);
   });
@@ -2098,7 +2145,7 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     const { adapter } = makeAdapter(client, new InMemoryBrokerStateStore(), GBX_RESOLVER);
     await adapter.submitBracket(GBX_BRACKET);
 
-    const [fill] = await adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'));
+    const [fill] = await adapter.fetchNewFills('2026-09-05T08:00:00.000Z');
 
     expect(fill?.price).toBeCloseTo(311.51, 8);
     expect(fill?.fee).toBeCloseTo(311.51 * SAXO_COMMISSION_RATE, 8);
@@ -2169,7 +2216,7 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     );
     await adapter.submitBracket(GBX_BRACKET);
 
-    await expect(adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'))).rejects.toThrow(
+    await expect(adapter.fetchNewFills('2026-09-05T08:00:00.000Z')).rejects.toThrow(
       /resolves to no pool line/,
     );
     expect(priceUnitAlerts.alerts).toEqual([
@@ -2213,12 +2260,16 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     const since = new Date('2026-09-05T08:00:00Z');
 
     for (let poll = 0; poll < PRICE_UNIT_ALERT_REPEAT_EVERY; poll += 1) {
-      await expect(adapter.fetchNewFills(since)).rejects.toThrow(/resolves to no pool line/);
+      await expect(adapter.fetchNewFills(since.toISOString())).rejects.toThrow(
+        /resolves to no pool line/,
+      );
     }
 
     expect(priceUnitAlerts.alerts.map((alert) => alert.broker_fill_id)).toEqual(['log-1']);
 
-    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/resolves to no pool line/);
+    await expect(adapter.fetchNewFills(since.toISOString())).rejects.toThrow(
+      /resolves to no pool line/,
+    );
 
     expect(priceUnitAlerts.alerts.map((alert) => alert.broker_fill_id)).toEqual([
       'log-1',
@@ -2250,8 +2301,12 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     await adapter.submitBracket(GBX_BRACKET);
     const since = new Date('2026-09-05T08:00:00Z');
 
-    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/resolves to no pool line/);
-    await expect(adapter.fetchNewFills(since)).rejects.toThrow(/resolves to no pool line/);
+    await expect(adapter.fetchNewFills(since.toISOString())).rejects.toThrow(
+      /resolves to no pool line/,
+    );
+    await expect(adapter.fetchNewFills(since.toISOString())).rejects.toThrow(
+      /resolves to no pool line/,
+    );
 
     expect(priceUnitAlerts.alerts.map((alert) => alert.uic)).toEqual([999999, 888888]);
   });
@@ -2317,7 +2372,7 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     await adapter.submitBracket(GBX_BRACKET);
     await adapter.submitBracket(other);
 
-    const fills = await adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'));
+    const fills = await adapter.fetchNewFills('2026-09-05T08:00:00.000Z');
 
     expect(fills.map((fill) => fill.broker_fill_id)).toEqual(['log-fill']);
     expect(fills[0]?.price).toBeCloseTo(311.51, 8);
@@ -2334,7 +2389,7 @@ describe('SaxoBrokerAdapter GBX price unit (#1302)', () => {
     const { adapter } = makeAdapter(client);
 
     await adapter.submitBracket(makeBracket());
-    const [fill] = await adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'));
+    const [fill] = await adapter.fetchNewFills('2026-09-05T08:00:00.000Z');
 
     expect(vi.mocked(client.placeOrder).mock.calls[0]?.[0].OrderPrice).toBe(10);
     expect(fill?.price).toBe(10.25);
@@ -2528,7 +2583,7 @@ describe('SaxoBrokerAdapter Saxo ExternalReference derivation (#1510)', () => {
     const { adapter } = makeAdapter(client);
     await adapter.submitBracket(makeBracket({ client_order_id: HEX_64_KEY }));
 
-    const [fill] = await adapter.fetchNewFills(new Date('2026-09-05T08:00:00Z'));
+    const [fill] = await adapter.fetchNewFills('2026-09-05T08:00:00.000Z');
 
     expect(fill?.client_order_id).toBe(HEX_64_KEY);
     expect(fill?.leg).toBe('entry');

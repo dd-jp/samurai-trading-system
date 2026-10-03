@@ -771,7 +771,7 @@ describe('buildProductionComponents', () => {
         legs: [],
       })) as unknown as typeof config.alpacaBrokerClient.getOrder;
 
-      await components.broker.fetchNewFills(new Date(0)).catch(() => undefined);
+      await components.broker.fetchNewFills('1970-01-01T00:00:00.000Z').catch(() => undefined);
 
       expect(
         logger.entries.some(

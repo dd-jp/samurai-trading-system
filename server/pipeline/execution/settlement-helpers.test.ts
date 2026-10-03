@@ -28,7 +28,7 @@ function fill(id: string): NormalizedFill {
     price: 100,
     qty: 1,
     fee: 0,
-    timestamp: new Date('2026-07-15T14:00:00Z'),
+    timestamp: '2026-07-15T14:00:00.000Z',
   };
 }
 

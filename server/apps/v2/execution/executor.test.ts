@@ -532,7 +532,7 @@ describe('V2OrderExecutor', () => {
       price: 20,
       qty: 6,
       fee: 0.5,
-      timestamp: new Date('2026-09-25T15:00:00.000Z'),
+      timestamp: '2026-09-25T15:00:00.000Z',
       qty_is_cumulative: true,
     };
     const alpaca = fakeBroker('alpaca', [fill]);
@@ -560,7 +560,7 @@ describe('V2OrderExecutor', () => {
       ],
       failures: [expect.stringContaining('saxo down')],
     });
-    expect(alpaca.fetchNewFills).toHaveBeenCalledWith(new Date('2026-09-24T21:00:00.000Z'));
+    expect(alpaca.fetchNewFills).toHaveBeenCalledWith('2026-09-24T21:00:00.000Z');
     expect(simulated.fetchNewFills).toHaveBeenCalledTimes(1);
     const dry = new V2OrderExecutor({
       brokers: { alpaca: asAdapter(alpaca) },

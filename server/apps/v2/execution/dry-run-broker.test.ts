@@ -23,7 +23,7 @@ describe('DryRunBrokerAdapter', () => {
     await expect(broker.submitFlatten('AAPL', 'sell', 3, 'f1')).rejects.toThrow(
       new DryRunRefusedError({ client_order_id: 'f1', instrument: 'AAPL', kind: 'flatten' }),
     );
-    expect(await broker.fetchNewFills(new Date(0))).toEqual([]);
+    expect(await broker.fetchNewFills('1970-01-01T00:00:00.000Z')).toEqual([]);
     expect(await broker.getOpenPositions()).toEqual([]);
     expect(await broker.getOrder('o1', 'AAPL')).toBeNull();
     expect(await broker.resumeFlatten('f1', 'AAPL')).toBeNull();

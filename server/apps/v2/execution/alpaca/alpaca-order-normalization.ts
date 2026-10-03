@@ -66,7 +66,7 @@ export function collectFill(
     price: Number.parseFloat(order.filled_avg_price),
     qty: filledQty,
     fee: 0,
-    timestamp: filledAt,
+    timestamp: filledAt.toISOString(),
     qty_is_cumulative: true,
   });
 }

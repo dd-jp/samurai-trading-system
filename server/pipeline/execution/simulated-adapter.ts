@@ -1,6 +1,6 @@
 import type { MarketDataService } from '../../providers/market-data-service/index.js';
 import type { Clock, OrderState } from '../../shared/index.js';
-import { toBrokerFillId } from '../../shared/index.js';
+import { parseIsoInstant, toBrokerFillId } from '../../shared/index.js';
 import type { CostModel, FillRequest, MarketState } from '../../tools/backtest/index.js';
 import type {
   BrokerAck,
@@ -61,7 +61,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       price: result.fill_price,
       qty: result.filled_size,
       fee: result.cost_breakdown.commission,
-      timestamp: now,
+      timestamp: now.toISOString(),
       cost_breakdown: result.cost_breakdown,
     });
 
@@ -92,8 +92,9 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
     return this.getOrder(clientOrderId, instrument);
   }
 
-  async fetchNewFills(since: Date): Promise<NormalizedFill[]> {
-    return this.fills.filter((fill) => fill.timestamp.getTime() >= since.getTime());
+  async fetchNewFills(sinceIso: string): Promise<NormalizedFill[]> {
+    const since = parseIsoInstant(sinceIso).getTime();
+    return this.fills.filter((fill) => Date.parse(fill.timestamp) >= since);
   }
 
   async resizeProtectiveLegs(clientOrderId: string, filledQty: number): Promise<void> {
@@ -155,7 +156,7 @@ export class SimulatedBrokerAdapter implements BrokerAdapter {
       price: result.fill_price,
       qty: result.filled_size,
       fee: result.cost_breakdown.commission,
-      timestamp: now,
+      timestamp: now.toISOString(),
       cost_breakdown: result.cost_breakdown,
     });
 

@@ -142,7 +142,7 @@ class SweepBroker implements BrokerAdapter {
       order_state: 'submitted',
     };
   }
-  async fetchNewFills(_since: Date): Promise<NormalizedFill[]> {
+  async fetchNewFills(_since: string): Promise<NormalizedFill[]> {
     return [];
   }
   async resizeProtectiveLegs(): Promise<void> {}
@@ -311,7 +311,7 @@ describe('residual-protection sweep (#549)', () => {
             price: 104,
             qty: 4,
             fee: 0.4,
-            timestamp: new Date('2026-08-07T15:30:00Z'),
+            timestamp: '2026-08-07T15:30:00.000Z',
           },
         ];
       }
@@ -351,7 +351,7 @@ describe('residual-protection sweep (#549)', () => {
             price: 100,
             qty: 10,
             fee: 1,
-            timestamp: new Date('2026-08-07T15:00:00Z'),
+            timestamp: '2026-08-07T15:00:00.000Z',
           },
           {
             client_order_id: LOT,
@@ -360,7 +360,7 @@ describe('residual-protection sweep (#549)', () => {
             price: 104,
             qty: 4,
             fee: 0.4,
-            timestamp: new Date('2026-08-07T15:30:00Z'),
+            timestamp: '2026-08-07T15:30:00.000Z',
           },
         ];
       }
