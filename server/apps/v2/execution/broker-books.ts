@@ -5,7 +5,7 @@ import type {
   BrokerPosition,
   Venue,
 } from '../../../../contracts/index.js';
-import type { AlpacaBrokerClient, AlpacaOrder } from '../../../pipeline/execution/index.js';
+import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca/alpaca-client.js';
 
 function finite(value: string, what: string): number {
   const parsed = Number(value);

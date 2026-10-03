@@ -1,3 +1,4 @@
+import { ProtectiveRearmUnsupportedError } from '../../apps/v2/execution/alpaca/protective-rearm-unsupported.js';
 import type {
   MarketDataService,
   TradingCalendar,
@@ -9,7 +10,6 @@ import { recordingLogger } from '../../shared/recording-logger.js';
 import type { CostModel } from '../../tools/backtest/index.js';
 import { ExecutionImpl } from './execute.js';
 import { FilledZeroSizeThrottle } from './filled-zero-size-throttle.js';
-import { ProtectiveRearmUnsupportedError } from './protective-rearm-unsupported.js';
 import { MAX_RESIDUAL_REFLATTEN_ATTEMPTS } from './residual-reflatten.js';
 import { openTestExecutionStore, TestExecutionStore } from './sqlite-store-harness.js';
 import type {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AlpacaBrokerClient } from '../../../pipeline/execution/index.js';
+import type { AlpacaBrokerClient } from './alpaca/alpaca-client.js';
 import { AlpacaBrokerBooks, NO_BROKER_BOOKS } from './broker-books.js';
 
 function client(overrides: {

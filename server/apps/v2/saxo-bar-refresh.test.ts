@@ -4,12 +4,6 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { writeTokenFile } from '../../pipeline/execution/adapters/saxo-token-file.js';
-import {
-  readKeepAliveState,
-  SaxoSessionLostError,
-  writeKeepAliveState,
-} from '../../pipeline/execution/index.js';
 import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import {
@@ -29,6 +23,9 @@ import {
 } from './bar-refresh-core.js';
 import { cfdCatalogueRefreshFor } from './cfd-catalogue-refresh.js';
 import { saxoSessionRefusal } from './execution/index.js';
+import { readKeepAliveState, writeKeepAliveState } from './execution/saxo/saxo-keepalive-state.js';
+import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
+import { SaxoSessionLostError } from './execution/saxo/saxo-token-source.js';
 import {
   historyRescaleFactor,
   refreshSaxoBars,

@@ -6,7 +6,7 @@ import type {
   FetchLike,
   SaxoKeepAliveState,
   SaxoSessionState,
-} from '../pipeline/execution/index.js';
+} from '../apps/v2/execution/index.js';
 import {
   clearKeepAliveState,
   readKeepAliveState,
@@ -14,7 +14,7 @@ import {
   SaxoTokenRefresher,
   tokenFilePath,
   writeKeepAliveState,
-} from '../pipeline/execution/index.js';
+} from '../apps/v2/execution/index.js';
 import type { Clock, LogEntry, Logger } from '../shared/index.js';
 import { maskCredentials, SystemClock } from '../shared/index.js';
 import { runWhenInvoked } from './cli-entrypoint.js';

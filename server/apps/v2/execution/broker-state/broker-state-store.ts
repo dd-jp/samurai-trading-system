@@ -1,4 +1,4 @@
-import type { NativeBracketRequest, NormalizedFill } from './types.js';
+import type { NativeBracketRequest, NormalizedFill } from '../../../../shared/index.js';
 
 export type BrokerVenue = 'alpaca' | 'saxo';
 

@@ -1,4 +1,4 @@
-import { readTokenFile, tokenFilePath } from '../../../pipeline/execution/index.js';
+import { readTokenFile, tokenFilePath } from './saxo/saxo-token-file.js';
 
 const ENVIRONMENTS = ['sim', 'live'] as const;
 

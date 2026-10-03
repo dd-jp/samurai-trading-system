@@ -1,30 +1,16 @@
 import { createHash } from 'node:crypto';
-import type { Clock, Logger } from '../../../shared/index.js';
-import { escalatesAt, isBookCurrency, safeLog, toBrokerFillId } from '../../../shared/index.js';
-import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
-import { sanitizeBrokerError } from '../broker-error.js';
+import { sanitizeBrokerError } from '../../../apps/v2/execution/alpaca/broker-error.js';
+import { ProtectiveRearmUnsupportedError } from '../../../apps/v2/execution/alpaca/protective-rearm-unsupported.js';
 import {
   type BrokerStateStore,
   InMemoryBrokerStateStore,
   toRequestFields,
-} from '../broker-state-store.js';
-import type { DormantLegsUnresolvedAlertChannel } from '../dormant-legs-unresolved-alert.js';
-import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
-import { ProtectiveRearmUnsupportedError } from '../protective-rearm-unsupported.js';
-import type {
-  BrokerAck,
-  BrokerAdapter,
-  NativeBracketRequest,
-  NormalizedFill,
-  NormalizedOrder,
-  NormalizedPosition,
-} from '../types.js';
-import type { UnresolvedPriceUnitAlertChannel } from '../unresolved-price-unit-alert.js';
+} from '../../../apps/v2/execution/broker-state/broker-state-store.js';
 import {
   isDuplicateRequestRefusal,
   isOrderNotFound,
   SaxoBrokerProviderError,
-} from './saxo-broker-errors.js';
+} from '../../../apps/v2/execution/saxo/saxo-broker-errors.js';
 import type {
   SaxoAssetType,
   SaxoBuySell,
@@ -34,7 +20,21 @@ import type {
   SaxoOrderActivity,
   SaxoOrderPlacement,
   SaxoOrderRequest,
-} from './saxo-client.js';
+} from '../../../apps/v2/execution/saxo/saxo-client.js';
+import type { Clock, Logger } from '../../../shared/index.js';
+import { escalatesAt, isBookCurrency, safeLog, toBrokerFillId } from '../../../shared/index.js';
+import { SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
+import type { DormantLegsUnresolvedAlertChannel } from '../dormant-legs-unresolved-alert.js';
+import type { LegResizeUnverifiedAlertChannel } from '../leg-resize-unverified-alert.js';
+import type {
+  BrokerAck,
+  BrokerAdapter,
+  NativeBracketRequest,
+  NormalizedFill,
+  NormalizedOrder,
+  NormalizedPosition,
+} from '../types.js';
+import type { UnresolvedPriceUnitAlertChannel } from '../unresolved-price-unit-alert.js';
 import { type SaxoQuoteUnit, saxoCashPerShare, saxoQuotedPrice } from './saxo-price-unit.js';
 
 const SAXO_DUPLICATE_WINDOW_MS = 15_000;

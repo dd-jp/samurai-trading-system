@@ -1,4 +1,4 @@
-import * as shared from '../../../shared/index.js';
+import * as shared from '../../../../shared/index.js';
 import { AlpacaBrokerProviderError, AlpacaBrokerRateLimitError } from './alpaca-broker-errors.js';
 import type { AlpacaBracketOrderRequest, AlpacaMarketOrderRequest } from './alpaca-client.js';
 import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';

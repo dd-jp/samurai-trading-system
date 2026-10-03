@@ -2,17 +2,17 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeTokenFile } from '../../pipeline/execution/adapters/saxo-token-file.js';
-import type {
-  AlpacaAccount,
-  AlpacaBrokerClient,
-  AlpacaOrder,
-} from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import type { LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import type {
+  AlpacaAccount,
+  AlpacaBrokerClient,
+  AlpacaOrder,
+} from './execution/alpaca/alpaca-client.js';
+import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
 import { composeV2Root, rootOptionsFor, type V2Root } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
 import { isLseInstrument } from './signal/index.js';
@@ -21,8 +21,8 @@ import { SECRET_ENV_NAMES } from './signal/secret-guard.js';
 
 const tokenFiles = vi.hoisted(() => ({ directory: undefined as string | undefined }));
 
-vi.mock('../../pipeline/execution/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../pipeline/execution/index.js')>();
+vi.mock('./execution/saxo/saxo-token-file.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./execution/saxo/saxo-token-file.js')>();
   return {
     ...actual,
     tokenFilePath: (environment: Parameters<typeof actual.tokenFilePath>[0]) =>

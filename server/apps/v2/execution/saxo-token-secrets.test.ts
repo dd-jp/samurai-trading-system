@@ -2,13 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeTokenFile } from '../../../pipeline/execution/adapters/saxo-token-file.js';
+import { writeTokenFile } from './saxo/saxo-token-file.js';
 import { saxoTokenSecrets } from './saxo-token-secrets.js';
 
 const tokenFiles = vi.hoisted(() => ({ directory: '' }));
 
-vi.mock('../../../pipeline/execution/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../pipeline/execution/index.js')>();
+vi.mock('./saxo/saxo-token-file.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./saxo/saxo-token-file.js')>();
   return {
     ...actual,
     tokenFilePath: (environment: string) => join(tokenFiles.directory, `${environment}.json`),

@@ -7,10 +7,10 @@ import {
   keepAliveStatePath,
   readKeepAliveState,
   writeKeepAliveState,
-} from '../pipeline/execution/adapters/saxo-keepalive-state.js';
-import type { FetchLike } from '../pipeline/execution/adapters/saxo-oauth.js';
-import type { SaxoTokenFileRecord } from '../pipeline/execution/adapters/saxo-token-file.js';
-import { readTokenFile, writeTokenFile } from '../pipeline/execution/adapters/saxo-token-file.js';
+} from '../apps/v2/execution/saxo/saxo-keepalive-state.js';
+import type { FetchLike } from '../apps/v2/execution/saxo/saxo-oauth.js';
+import type { SaxoTokenFileRecord } from '../apps/v2/execution/saxo/saxo-token-file.js';
+import { readTokenFile, writeTokenFile } from '../apps/v2/execution/saxo/saxo-token-file.js';
 import type { LogEntry, Logger } from '../shared/index.js';
 import { recordingLogger } from '../shared/recording-logger.js';
 import {

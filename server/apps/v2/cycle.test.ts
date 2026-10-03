@@ -16,7 +16,6 @@ import type {
   SleeveSpec,
 } from '../../../contracts/index.js';
 import { CfdCostModelUnsetError } from '../../../contracts/index.js';
-import { ProtectiveReplaceError } from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { type InstrumentDetails, LSE_MOMENTUM_LINES } from '../../providers/saxo-bars/index.js';
@@ -45,6 +44,7 @@ import {
   vetoApplied,
 } from './cycle.js';
 import { addDays, BarsMarketData, TABLE_VENUE_SESSIONS } from './data/index.js';
+import { ProtectiveReplaceError } from './execution/alpaca/protective-replace-error.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import type { FillPricing } from './execution/simulated-costs.js';
