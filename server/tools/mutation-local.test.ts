@@ -32,13 +32,13 @@ import {
 
 describe('isMutableProductionFile', () => {
   it.each([
-    ['server/pipeline/risk-manager/breakers.ts', true],
+    ['server/apps/v2/risk/breakers.ts', true],
     ['contracts/pipeline.ts', true],
-    ['server/pipeline/risk-manager/breakers.test.ts', false],
+    ['server/apps/v2/risk/breakers.test.ts', false],
     ['client/src/App.tsx', false],
     ['server/tools/mutation-local.ts', false],
     ['docs/coding-standards.md', false],
-    ['server/pipeline/risk-manager/README', false],
+    ['server/apps/v2/risk/README', false],
   ])('%s -> %s', (path, expected) => {
     expect(isMutableProductionFile(path)).toBe(expected);
   });
@@ -50,9 +50,8 @@ describe('isTradingPathFile', () => {
   });
 
   it.each([
-    'server/pipeline/analysts/index.ts',
     'server/pipeline/debate-engine/index.ts',
-    'server/pipeline/feedback-loop/index.ts',
+    'server/pipeline/momentum/index.ts',
     'server/providers/market-data-service/index.ts',
   ])('%s is not trading-path', (path) => {
     expect(isTradingPathFile(path)).toBe(false);
@@ -67,7 +66,6 @@ describe('risk, sizing and loss-budget paths', () => {
     'server/apps/v2/reconcile.ts',
     'server/apps/v2/reconcile-compare.ts',
     'server/apps/v2/cash-anchor.ts',
-    'server/pipeline/momentum/loss-budget.ts',
     'server/pipeline/momentum/sizing.ts',
   ])('%s is trading-path', (path) => {
     expect(isTradingPathFile(path)).toBe(true);
@@ -77,7 +75,7 @@ describe('risk, sizing and loss-budget paths', () => {
     'server/apps/v2/execution/alpaca/alpaca-adapter.ts',
     'server/apps/v2/execution/broker-state/sqlite-broker-state-store.ts',
     'server/apps/v2/execution/saxo/saxo-token-source.ts',
-  ])('%s, moved out of server/pipeline/execution, is trading-path', (path) => {
+  ])('%s is trading-path', (path) => {
     expect(isTradingPathFile(path)).toBe(true);
   });
 
@@ -420,14 +418,14 @@ describe('runMutationGate', () => {
 
   it('lists the changed trading-path ranges and mutates nothing', () => {
     const { deps, lines, baseRefs, runs } = gateDeps({
-      changed: ['server/pipeline/execution/execute.ts', 'server/pipeline/analysts/index.ts'],
+      changed: ['server/apps/v2/execution/alpaca/execute.ts', 'server/apps/v2/daily-summary.ts'],
       ranges: {
-        'server/pipeline/execution/execute.ts': [{ start: 3, end: 5 }],
-        'server/pipeline/analysts/index.ts': [{ start: 1, end: 1 }],
+        'server/apps/v2/execution/alpaca/execute.ts': [{ start: 3, end: 5 }],
+        'server/apps/v2/daily-summary.ts': [{ start: 1, end: 1 }],
       },
     });
     expect(runMutationGate(['--list', 'base'], deps)).toBe(0);
-    expect(lines).toEqual(['server/pipeline/execution/execute.ts:3-5']);
+    expect(lines).toEqual(['server/apps/v2/execution/alpaca/execute.ts:3-5']);
     expect(baseRefs).toEqual(['base']);
     expect(runs).toEqual([]);
   });
@@ -453,7 +451,7 @@ describe('runMutationGate', () => {
   });
 
   it('skips Stryker when no trading-path file changed', () => {
-    const { deps, lines, runs } = gateDeps({ changed: ['server/pipeline/analysts/index.ts'] });
+    const { deps, lines, runs } = gateDeps({ changed: ['server/apps/v2/daily-summary.ts'] });
     expect(runMutationGate(['base'], deps)).toBe(0);
     expect(runs).toEqual([]);
     expect(lines.at(-1)).toBe(
@@ -649,19 +647,19 @@ describe('parseChangedFiles', () => {
 describe('partitionChangedFiles', () => {
   it('separates trading-path files from advisory-only files and drops non-mutable ones', () => {
     const result = partitionChangedFiles([
-      'server/pipeline/risk-manager/breakers.ts',
-      'server/pipeline/execution/execute.ts',
-      'server/pipeline/analysts/index.ts',
-      'server/pipeline/risk-manager/breakers.test.ts',
+      'server/apps/v2/risk/breakers.ts',
+      'server/apps/v2/execution/alpaca/execute.ts',
+      'server/apps/v2/daily-summary.ts',
+      'server/apps/v2/risk/breakers.test.ts',
       'client/src/App.tsx',
       'server/tools/mutation-local.ts',
     ]);
 
     expect(result.tradingPath).toEqual([
-      'server/pipeline/risk-manager/breakers.ts',
-      'server/pipeline/execution/execute.ts',
+      'server/apps/v2/risk/breakers.ts',
+      'server/apps/v2/execution/alpaca/execute.ts',
     ]);
-    expect(result.advisory).toEqual(['server/pipeline/analysts/index.ts']);
+    expect(result.advisory).toEqual(['server/apps/v2/daily-summary.ts']);
   });
 
   it('is empty in both arms when nothing mutable changed', () => {
@@ -692,8 +690,8 @@ describe('getChangedFiles against a real git repo (#1634)', () => {
     gitIn(repo, 'init', '-q');
     gitIn(repo, 'config', 'user.email', 'test@example.com');
     gitIn(repo, 'config', 'user.name', 'Test');
-    writeIn(repo, 'server/pipeline/risk-manager/breakers.ts', 'export const x = 1;\n');
-    writeIn(repo, 'server/pipeline/risk-manager/breakers.test.ts', 'it("x", () => {});\n');
+    writeIn(repo, 'server/apps/v2/risk/breakers.ts', 'export const x = 1;\n');
+    writeIn(repo, 'server/apps/v2/risk/breakers.test.ts', 'it("x", () => {});\n');
     writeIn(repo, 'README.md', 'hello\n');
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'base');
@@ -705,8 +703,8 @@ describe('getChangedFiles against a real git repo (#1634)', () => {
   });
 
   it('lists only files changed since baseRef, not the whole tree', () => {
-    writeIn(repo, 'server/pipeline/risk-manager/breakers.ts', 'export const x = 2;\n');
-    writeIn(repo, 'server/pipeline/execution/execute.ts', 'export const y = 1;\n');
+    writeIn(repo, 'server/apps/v2/risk/breakers.ts', 'export const x = 2;\n');
+    writeIn(repo, 'server/apps/v2/execution/alpaca/execute.ts', 'export const y = 1;\n');
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'change');
 
@@ -714,8 +712,8 @@ describe('getChangedFiles against a real git repo (#1634)', () => {
 
     expect(changed).toEqual(
       expect.arrayContaining([
-        'server/pipeline/risk-manager/breakers.ts',
-        'server/pipeline/execution/execute.ts',
+        'server/apps/v2/risk/breakers.ts',
+        'server/apps/v2/execution/alpaca/execute.ts',
       ]),
     );
     expect(changed).not.toContain('README.md');
@@ -723,14 +721,14 @@ describe('getChangedFiles against a real git repo (#1634)', () => {
 
   it('excludes a file that was changed then deleted before the diff is read', () => {
     gitIn(repo, 'checkout', '-q', '-b', 'delete-branch', 'base-ref');
-    writeIn(repo, 'server/pipeline/verdict/index.ts', 'export const z = 1;\n');
+    writeIn(repo, 'server/apps/v2/risk/verdict.ts', 'export const z = 1;\n');
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'add then delete');
-    rmSync(join(repo, 'server/pipeline/verdict/index.ts'));
+    rmSync(join(repo, 'server/apps/v2/risk/verdict.ts'));
 
     const changed = getChangedFiles('base-ref', repo);
 
-    expect(changed).not.toContain('server/pipeline/verdict/index.ts');
+    expect(changed).not.toContain('server/apps/v2/risk/verdict.ts');
   });
 });
 
@@ -748,19 +746,23 @@ describe('getChangedFiles resolves the merge-base, not a bare diff against baseR
       encoding: 'utf8',
     }).trim();
 
-    writeIn(repo, 'server/pipeline/execution/shared.ts', 'export const shared = "root";\n');
+    writeIn(repo, 'server/apps/v2/execution/saxo/shared.ts', 'export const shared = "root";\n');
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'root');
     rootSha = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     gitIn(repo, 'branch', 'base-ref');
 
     gitIn(repo, 'checkout', '-q', 'base-ref');
-    writeIn(repo, 'server/pipeline/execution/shared.ts', 'export const shared = "main-drift";\n');
+    writeIn(
+      repo,
+      'server/apps/v2/execution/saxo/shared.ts',
+      'export const shared = "main-drift";\n',
+    );
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'main drift');
 
     gitIn(repo, 'checkout', '-q', headBranch);
-    writeIn(repo, 'server/pipeline/execution/own-change.ts', 'export const own = 1;\n');
+    writeIn(repo, 'server/apps/v2/execution/saxo/own-change.ts', 'export const own = 1;\n');
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'feature change');
   });
@@ -776,16 +778,16 @@ describe('getChangedFiles resolves the merge-base, not a bare diff against baseR
   it('excludes a file baseRef modified after the branch point but this branch never touched', () => {
     const changed = getChangedFiles('base-ref', repo);
 
-    expect(changed).toContain('server/pipeline/execution/own-change.ts');
-    expect(changed).not.toContain('server/pipeline/execution/shared.ts');
+    expect(changed).toContain('server/apps/v2/execution/saxo/own-change.ts');
+    expect(changed).not.toContain('server/apps/v2/execution/saxo/shared.ts');
   });
 
   it('still includes an uncommitted edit to an already-tracked file', () => {
-    writeIn(repo, 'server/pipeline/execution/own-change.ts', 'export const own = 2;\n');
+    writeIn(repo, 'server/apps/v2/execution/saxo/own-change.ts', 'export const own = 2;\n');
 
     const changed = getChangedFiles('base-ref', repo);
 
-    expect(changed).toContain('server/pipeline/execution/own-change.ts');
+    expect(changed).toContain('server/apps/v2/execution/saxo/own-change.ts');
   });
 });
 
@@ -798,14 +800,14 @@ describe('getAddedLineRanges against a real git repo', () => {
     gitIn(repo, 'config', 'user.email', 'test@example.com');
     gitIn(repo, 'config', 'user.name', 'Test');
     gitIn(repo, 'config', 'diff.noprefix', 'true');
-    writeIn(repo, 'server/pipeline/verdict/index.ts', 'a\nb\nc\nd\n');
+    writeIn(repo, 'server/apps/v2/risk/verdict.ts', 'a\nb\nc\nd\n');
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'base');
     gitIn(repo, 'branch', 'base-ref');
-    writeIn(repo, 'server/pipeline/verdict/index.ts', 'a\nB\nc\nd\ne\n');
+    writeIn(repo, 'server/apps/v2/risk/verdict.ts', 'a\nB\nc\nd\ne\n');
     gitIn(repo, 'add', '-A');
     gitIn(repo, 'commit', '-q', '-m', 'change');
-    writeIn(repo, 'server/pipeline/verdict/index.ts', 'A\nB\nc\nd\ne\n');
+    writeIn(repo, 'server/apps/v2/risk/verdict.ts', 'A\nB\nc\nd\ne\n');
   });
 
   afterAll(() => {
@@ -813,7 +815,7 @@ describe('getAddedLineRanges against a real git repo', () => {
   });
 
   it('returns the committed and uncommitted added lines since the merge-base, whatever the diff prefix config', () => {
-    expect(getAddedLineRanges('base-ref', repo).get('server/pipeline/verdict/index.ts')).toEqual([
+    expect(getAddedLineRanges('base-ref', repo).get('server/apps/v2/risk/verdict.ts')).toEqual([
       { start: 1, end: 2 },
       { start: 5, end: 5 },
     ]);

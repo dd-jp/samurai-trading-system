@@ -19,9 +19,9 @@ So: the arithmetic is sound, and bullish *can* clear the floor whenever a bullis
 
 | Step | Where | What it does |
 |---|---|---|
-| Gate | `server/pipeline/trader/decide.ts:170` | `debate.confidence < config.conviction_floor` skips with `below_conviction_floor` (strict `<`) |
-| Floor | `server/pipeline/trader/types.ts:41` | `conviction_floor: 0.55` |
-| Score | `server/pipeline/debate-engine/conviction-score.ts:24` | `0.6 × directional + 0.4 × evidence`, clamped to [0, 1] (weights at `:5-6`) |
+| Gate | `server/pipeline/trader/decide.ts:170` | `debate.confidence < config.conviction_floor` skips with `below_conviction_floor` (strict `<`) | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
+| Floor | `server/pipeline/trader/types.ts:41` | `conviction_floor: 0.55` | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
+| Score | `server/pipeline/debate-engine/conviction-score.ts:24` | `0.6 × directional + 0.4 × evidence`, clamped to [0, 1] (weights at `:5-6`) | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 | Directional | `conviction-score.ts:41-61` | `abs(mean)` of analyst final positions on −1/0/+1, with the mediator verdict added as one more participant (`:57-60`) |
 | #683 carve-out | `conviction-score.ts:53-55` | analysts' own mean exactly 0 ⇒ directional = 0, mediator excluded |
 | Evidence | `conviction-score.ts:77-91` | over analysts not marked `NO DATA`: mean of `min(1, avg key points / 3)` and avg confidence |
@@ -140,7 +140,7 @@ Both figures are USD, not GBP — the book is Alpaca paper and the basis is `LIV
 **5b. Control-arm oversizing has three causes.**
 
 1. *Before 2026-09-08:* no ceiling. `risk_log.equity` reads 99,877–123,476 and `per_trade_size_cap` (5% of equity, `server/apps/orchestrator/paper-profile.ts:181-183`) bound at ~$5,000.
-2. *After:* the Trader sizes on the clamped $1,270 (`server/apps/orchestrator/production/direct-bind.ts:118-120`), purely by risk — `size = equity × riskFraction / stopDistance` (`server/pipeline/trader/build-bracket.ts:119`), with no notional cap. The Risk gate's notional caps still evaluate against raw account equity (`risk_log.equity` stays ~$100k; zero binding constraints from 09-08 on), and the D5 cash cap only arms for D5-classified instruments (`server/pipeline/risk-manager/index.ts:366-383`), which the US paper names are not. Nothing caps notional: 49 of 68 post-ceiling control lots exceed the $444.50 D5 index cap, and 14 exceed the entire $1,270 book (largest $2,826, QQQ on a 0.71% stop).
+2. *After:* the Trader sizes on the clamped $1,270 (`server/apps/orchestrator/production/direct-bind.ts:118-120`), purely by risk — `size = equity × riskFraction / stopDistance` (`server/pipeline/trader/build-bracket.ts:119`), with no notional cap. The Risk gate's notional caps still evaluate against raw account equity (`risk_log.equity` stays ~$100k; zero binding constraints from 09-08 on), and the D5 cash cap only arms for D5-classified instruments (`server/pipeline/risk-manager/index.ts:366-383`), which the US paper names are not. Nothing caps notional: 49 of 68 post-ceiling control lots exceed the $444.50 D5 index cap, and 14 exceed the entire $1,270 book (largest $2,826, QQQ on a 0.71% stop). <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 3. *The arms are not risk-matched.* Arm 2 passes the technical confidence as conviction and hard-codes `converged: true` (`server/pipeline/control-arm/axis-vote-decision.ts:25-30`). Joined to `trader_log`, control lots average conviction multiplier 0.853 with no haircut; live lots average 0.418 with the 0.5 non-converged haircut. The control risks ~4× the live arm per trade (average notional 839 vs 166). Return and drawdown comparisons between the arms are therefore sizing comparisons first.
 
 The 50.2% control drawdown on the sample follows from (2) and (3).

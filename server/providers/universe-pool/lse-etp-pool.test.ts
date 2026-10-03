@@ -1,9 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ADR_0018_SUBCLASS_BRACKETS,
-  resolveSubclassBracket,
-  SubclassBracketUnresolvableError,
-} from '../../pipeline/trader/subclass-bracket.js';
 import { isBookCurrency } from '../../shared/index.js';
 import {
   assertKnownSubclass,
@@ -490,7 +485,7 @@ describe('liveSizingSubclassFor — #903 excludes the four unmeasured index_etp_
     }
   });
 
-  it('a subclassOf map built the way #751 must build it (via liveSizingSubclassFor, keyed on lse_ticker — the same key buildRoutingMap and UniverseInstrument.asset use) omits the 4 unmeasured rows entirely', () => {
+  it('a subclassOf map built via liveSizingSubclassFor, keyed on lse_ticker, omits the 4 unmeasured rows entirely', () => {
     const subclassOf = Object.fromEntries(
       LSE_ETP_POOL.flatMap((row) => {
         const subclass = liveSizingSubclassFor(row);
@@ -502,22 +497,6 @@ describe('liveSizingSubclassFor — #903 excludes the four unmeasured index_etp_
       expect(Object.hasOwn(subclassOf, ticker)).toBe(false);
     }
     expect(Object.keys(subclassOf).length).toBe(LSE_ETP_POOL.length - 4);
-
-    for (const ticker of UNMEASURED_TICKERS) {
-      expect(() => resolveSubclassBracket(ticker, subclassOf, ADR_0018_SUBCLASS_BRACKETS)).toThrow(
-        SubclassBracketUnresolvableError,
-      );
-    }
-
-    const resolved = resolveSubclassBracket('3USL', subclassOf, ADR_0018_SUBCLASS_BRACKETS);
-    expect(resolved).toBe(ADR_0018_SUBCLASS_BRACKETS.index_etp_3x);
-
-    const resolvedSingleStock = resolveSubclassBracket(
-      '3LTS',
-      subclassOf,
-      ADR_0018_SUBCLASS_BRACKETS,
-    );
-    expect(resolvedSingleStock).toBe(ADR_0018_SUBCLASS_BRACKETS.single_stock_etp_3x);
   });
 
   it('screening/ranking is unaffected: the full pool and its rankable-underlying count are unchanged by the sizing exclusion', () => {

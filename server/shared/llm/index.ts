@@ -9,7 +9,7 @@ export {
 } from './in-flight-gate.js';
 export type { NousChatOptions, NousChatResult } from './nous-chat.js';
 export { NousApiError, NousRefusalError, NousTruncatedError, nousChat } from './nous-chat.js';
-export { tryNousCredentials, tryNousEndpoint } from './nous-config.js';
+export { tryNousEndpoint } from './nous-config.js';
 export type { NousCitation } from './nous-responses.js';
 export { nousResponses } from './nous-responses.js';
 export type { AnthropicUsage } from './pricing.js';

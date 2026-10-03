@@ -1,6 +1,1 @@
-export {
-  buildRoutingMap,
-  LSE_ETP_POOL,
-  resolveMiSubject,
-  screeningInstrumentFor,
-} from './lse-etp-pool.js';
+export { buildRoutingMap, LSE_ETP_POOL, resolveMiSubject } from './lse-etp-pool.js';

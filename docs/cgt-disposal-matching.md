@@ -12,7 +12,9 @@
 
 The v2 runtime keeps its own per-disposal GBP log for share and ETF fills at
 both venues (the Saxo GIA and the Alpaca account). The sections after this one
-describe the v1 report, whose matching rules it reuses.
+describe the v1 report, whose matching rules it reuses. The v1 matcher and
+its fill source were deleted in v1 teardown wave 3 (#1748, ruling Q3); tag
+v1-final keeps them.
 
 - **Matching.** `server/apps/v2/share-matching.ts` ports v1's matcher in the
   same order (same day, then acquisitions in the next 30 days earliest first,
@@ -99,13 +101,13 @@ entirely on 2026-08-16).
 
 Every fill was already captured with acquisition/disposal date, price,
 quantity, fee and (since migration 0054) fee currency at execution time —
-`fills` since `0001_init.sql`, `server/pipeline/execution/ingest-fills.ts`.
+`fills` since `0001_init.sql`, `server/pipeline/execution/ingest-fills.ts`. <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 **No new capture and no migration was needed for this ticket**: what was
 missing was the matching/export layer, not the record. `instrument` is not a
 column on `fills` itself; it is resolved by an exact join on
 `idempotency_key` against whichever of `closed_trades` (a round-tripped lot)
 or `open_positions` (a still-open one) carries the row — see
-`server/pipeline/cgt/sqlite-cgt-fill-source.ts`'s header for why both tables
+`server/pipeline/cgt/sqlite-cgt-fill-source.ts`'s header for why both tables <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 must be read.
 
 One qualification to "already captured": `fills.fee` is not a broker-
@@ -118,7 +120,7 @@ a contract-note one; verifying against the operator's actual contract notes
 
 ## How matching works
 
-`server/pipeline/cgt/cgt-disposal-matching.ts` is a pure module implementing
+`server/pipeline/cgt/cgt-disposal-matching.ts` is a pure module implementing <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 HMRC's statutory share-identification order (TCGA92 ss105-106A, restated in
 the CGT manual), applied in this order to every disposal:
 

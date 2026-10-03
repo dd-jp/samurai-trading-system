@@ -43,16 +43,8 @@ KEEP_G18 = [
     'server/providers/market-intelligence/grok/nous-sentiment-client.ts',
     'server/providers/market-intelligence/grok/x-search-client.ts',
 ]
-HOLD = {
-    'Q3 CGT matcher (#1947)': [
-        'server/pipeline/cgt/cgt-disposal-matching.ts',
-        'server/pipeline/cgt/open-readonly-cgt-store.ts', 'server/pipeline/cgt/sqlite-cgt-fill-source.ts',
-    ],
-    'Q2 Saxo bracket adapter': ['server/pipeline/execution/adapters/saxo-adapter.ts'],
-}
-HOLD_CUTS = {
-    ('server/pipeline/execution/adapters/saxo-adapter.ts', 'server/tools/backtest/cost-model.ts'): 'SAXO_COMMISSION_RATE',
-}
+HOLD = {}
+HOLD_CUTS = {}
 WAVE_CUTS = {
     ('server/tools/backtest/types.ts', 'server/apps/orchestrator/'): 'TickOutcome',
 }
@@ -60,7 +52,7 @@ KEEP_TESTS = {
     'server/pipeline/debate-engine/llm/prompt-caching.test.ts',
     'server/apps/v2/execution/broker-state/broker-state-persistence.test.ts',
 }
-HOLD_TESTS = {'server/pipeline/execution/adapters/saxo-per-request-pacing.test.ts': 'Q2 Saxo bracket adapter'}
+HOLD_TESTS = {}
 V2_SCRIPTS = {
     'dev:web', 'build:web', 'typecheck', 'test', 'test:coverage', 'test:local', 'test:watch', 'mutation:local',
     'crap', 'crap:report', 'e2e', 'check:citations', 'check:live-gates', 'lint:oxlint', 'lint:oxlint:fix',

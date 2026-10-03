@@ -1,6 +1,5 @@
 import type { Database } from 'better-sqlite3';
 import type { OrderState } from '../../../contracts/index.js';
-import type { OpenPosition } from '../types/records.js';
 
 export const TERMINAL_ORDER_STATES: readonly OrderState[] = [
   'closed',
@@ -9,17 +8,6 @@ export const TERMINAL_ORDER_STATES: readonly OrderState[] = [
   'expired',
   'abandoned',
 ];
-
-export const IN_FLIGHT_ORDER_STATES: readonly OrderState[] = ['pending', 'submitted'];
-
-export function isWedgedZeroFillLot(
-  position: Pick<OpenPosition, 'order_state' | 'filled_size'>,
-): boolean {
-  return (
-    (position.order_state === 'filled' || position.order_state === 'partially_filled') &&
-    position.filled_size === 0
-  );
-}
 
 export interface StaleKeySchemeLot {
   idempotency_key: string;

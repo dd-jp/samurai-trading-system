@@ -183,7 +183,7 @@ as reported, the slopes as fitted.)
 cash** — the same invariant §2.1 records for the read direction, applied symmetrically to the
 write direction. On the GBX line `OrderPrice: 1000` commits €11.64 ≈ £10, not €1,164 ≈ £1,000; and
 `OrderPrice: 30000` — today's market in pence — commits £300, which is what one LQQ3 share costs.
-`saxoQuotedPrice` in `server/pipeline/execution/adapters/saxo-price-unit.ts` divides cash by the
+`saxoQuotedPrice` in `server/pipeline/execution/adapters/saxo-price-unit.ts` divides cash by the <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 factor to reach the venue's number, and that is **confirmed, not corrected**. EUR cannot be
 confused with either GBX or GBP, so the 100× question cannot hide in the units here the way it
 hides in a `Price` read back off `/port/v1/orders/me`.
@@ -438,7 +438,7 @@ spread input; it now has one available.
 
 **Where a delayed quote would actually bite, read off the code rather than assumed.** Nothing in
 the pipeline triggers an entry from a quote. `getQuote` has exactly two non-test callers, both
-inside execution: `captureSubmitSnapshot` (`server/pipeline/execution/execute.ts:409`), which is
+inside execution: `captureSubmitSnapshot` (`server/pipeline/execution/execute.ts:409`), which is <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 best-effort instrumentation that logs and proceeds on failure, and `getSpreadEstimate`
 (`execute.ts:485`, `simulated-adapter.ts:348`), which feeds the cost model at submit time. The
 signal path — every analyst, the trader, the risk manager's correlation and invalidation checks
@@ -576,7 +576,7 @@ consistent with ADR-0015. The scare is defused.
 marketing page and a sales conversation, and `Commissions` is a **live gateway field group**. One
 `infoprices` call on the live token, at `Amount=1`, settles it against the venue's own pricing
 engine before a single pound is at risk. Also unresolved and now sharper: the adapter's own
-comment (`server/pipeline/execution/adapters/saxo-adapter.ts`, `toCashFill`) hard-codes
+comment (`server/pipeline/execution/adapters/saxo-adapter.ts`, `toCashFill`) hard-codes <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 *"the published GBP-ETP tariff (ADR-0015 §"Saxo", 0.08 %, no minimum)"* — a modelled constant,
 never verified against a fill, and structurally unable to represent a floor if one exists.
 
@@ -1200,7 +1200,7 @@ At ADR-0018 D5 against the £1,000 book, with `MinimumLotSize 1.0`, `OddLotsNotA
 | 3KOR | (none — **unsizeable**, see below) | — | £20.49 | — |
 | 3KWE | (none — **unsizeable**, see below) | — | £3.90 | — |
 
-3KOR and 3KWE carry no subclass, and that does NOT fall back to the generic ATR path: `resolveSubclassBracket` (`server/pipeline/trader/subclass-bracket.ts`) uses generic ATR only when `subclass_of` is empty and otherwise throws `SubclassBracketUnresolvableError` for an instrument the map lacks (`lse-etp-pool.test.ts` pins that throw for 3KOR/3KWE). With three of five lines populated, the map is non-empty, so a `go` on either line throws at sizing. Where that throw surfaces at tick time was not traced in this run; it is a third AC3 blocker, recorded in §6.9.
+3KOR and 3KWE carry no subclass, and that does NOT fall back to the generic ATR path: `resolveSubclassBracket` (`server/pipeline/trader/subclass-bracket.ts`) uses generic ATR only when `subclass_of` is empty and otherwise throws `SubclassBracketUnresolvableError` for an instrument the map lacks (`lse-etp-pool.test.ts` pins that throw for 3KOR/3KWE). With three of five lines populated, the map is non-empty, so a `go` on either line throws at sizing. Where that throw surfaces at tick time was not traced in this run; it is a third AC3 blocker, recorded in §6.9. <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 
 LQQ3 admits exactly one share and has no room for a partial-fill resize. Were it ever
 reclassified to the £250 single-stock bracket it would become **unenterable at any conviction**.

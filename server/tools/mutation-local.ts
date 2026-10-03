@@ -9,10 +9,6 @@ export const REPORT_DIR = 'reports/mutation';
 export const INCREMENTAL_FILE = `${REPORT_DIR}/incremental.json`;
 
 export const TRADING_PATH_PREFIXES = [
-  'server/pipeline/trader/',
-  'server/pipeline/risk-manager/',
-  'server/pipeline/verdict/',
-  'server/pipeline/execution/',
   'server/apps/v2/risk/',
   'server/apps/v2/execution/alpaca/',
   'server/apps/v2/execution/broker-state/',
@@ -22,7 +18,6 @@ export const TRADING_PATH_PREFIXES = [
   'server/apps/v2/reconcile.ts',
   'server/apps/v2/reconcile-compare.ts',
   'server/apps/v2/cash-anchor.ts',
-  'server/pipeline/momentum/loss-budget.ts',
   'server/pipeline/momentum/sizing.ts',
 ] as const;
 

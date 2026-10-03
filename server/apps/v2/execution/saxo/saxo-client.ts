@@ -12,7 +12,7 @@ export interface SaxoInstrumentDetails {
 
 type SaxoOrderType = 'Market' | 'Limit' | 'StopIfTraded';
 
-export type SaxoDurationType = 'DayOrder' | 'GoodTillCancel' | 'ImmediateOrCancel' | 'FillOrKill';
+type SaxoDurationType = 'DayOrder' | 'GoodTillCancel' | 'ImmediateOrCancel' | 'FillOrKill';
 
 interface SaxoOrderDuration {
   readonly DurationType: SaxoDurationType;

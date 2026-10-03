@@ -22,13 +22,13 @@ Market Data Service ─┐
 |-------|-----------|-------------|
 | Market Data Service | `server/providers/market-data-service/` | OHLCV bars + deterministic technical indicators (RSI, ATR, moving averages) with point-in-time discipline. Sources: Alpaca (equities+crypto), ccxt, IBKR, routed by asset class |
 | Market Intelligence | `server/providers/market-intelligence/` | Sentiment/news context via the Grok agent over Nous; WorldMonitor CII consumer (adapter parked until `WORLDMONITOR_API_KEY` is set) |
-| Analysts | `server/pipeline/analysts/` | Stateless per-tick agents (technical, fundamental, sentiment). Pure function of data + weight |
+| Analysts | `server/pipeline/analysts/` | Stateless per-tick agents (technical, fundamental, sentiment). Pure function of data + weight | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 | Debate Engine | `server/pipeline/debate-engine/` | Bull/Bear/Mediator personas, round orchestration, semantic disagreement detection, weighted conviction scoring, LLM rate limiting + spend cap |
-| Trader | `server/pipeline/trader/` | Consolidates debate result into broker-agnostic bracket (OrderIntent). Position-aware branching, setup vectors, cosine precedent lookup |
-| Risk Manager | `server/pipeline/risk-manager/` | Position-size caps, drawdown/volatility circuit breakers, portfolio exposure limits, correlation checks, CII mapping, live-read risk thresholds, and the Risk Critic (`server/pipeline/risk-manager/critic.ts`) |
-| Verdict | `server/pipeline/verdict/` | Final go/no-go gate. Idempotency dedup, market-open check, kill-switch re-check, Telegram notification + approval callbacks |
-| Execution | `server/pipeline/execution/` | Broker abstraction (Alpaca MVP, Simulated for backtest; ccxt/IBKR sources exist, adapters are long-term). Bracket expansion, fill ingestion, reconcile-on-restart, unpriced-fill alerting |
-| Feedback Loop | `server/pipeline/feedback-loop/` | Post-trade attribution, bounded weight adjustment, daily cycle, metrics suite (Sharpe/Sortino/etc.), kill-threshold guardrails |
+| Trader | `server/pipeline/trader/` | Consolidates debate result into broker-agnostic bracket (OrderIntent). Position-aware branching, setup vectors, cosine precedent lookup | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
+| Risk Manager | `server/pipeline/risk-manager/` | Position-size caps, drawdown/volatility circuit breakers, portfolio exposure limits, correlation checks, CII mapping, live-read risk thresholds, and the Risk Critic (`server/pipeline/risk-manager/critic.ts`) | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
+| Verdict | `server/pipeline/verdict/` | Final go/no-go gate. Idempotency dedup, market-open check, kill-switch re-check, Telegram notification + approval callbacks | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
+| Execution | `server/pipeline/execution/` | Broker abstraction (Alpaca MVP, Simulated for backtest; ccxt/IBKR sources exist, adapters are long-term). Bracket expansion, fill ingestion, reconcile-on-restart, unpriced-fill alerting | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
+| Feedback Loop | `server/pipeline/feedback-loop/` | Post-trade attribution, bounded weight adjustment, daily cycle, metrics suite (Sharpe/Sortino/etc.), kill-threshold guardrails | <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 | Cost Model / Backtest | `server/tools/backtest/` | Pessimistic fill simulation, full validation suite (walk-forward, CPCV, PBO, MinBTL, DSR), injected-clock replay, Stage-2 selection + verdict |
 | Orchestrator | `server/apps/orchestrator/` | Tick loop scheduler, trace-ID propagation, audit log, dead-man's-switch heartbeat, alert channels, rotating log sink, production composition root (ADR-0004). Opens no socket | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
 | Service API | `server/apps/service-api/` | Read-only HTTP backend on `:8787`: `GET /api/snapshot` plus the built client bundle. Pipeline lanes per instrument, positions, verdicts, provider-status tiles | <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at tag v1-final -->
@@ -209,7 +209,7 @@ npm run test:local
 npx vitest run server/pipeline/debate-engine/
 ```
 
-The suite is **7197 tests across 350 files** (7196 passing; one `describe.skipIf` integration test — `server/pipeline/debate-engine/disagreement-detector.integration.test.ts` — that runs only when live LLM credentials are present). Measured 2026-09-17 on `npm run test`.
+The suite is **7197 tests across 350 files** (7196 passing; one `describe.skipIf` integration test — `server/pipeline/debate-engine/disagreement-detector.integration.test.ts` — that runs only when live LLM credentials are present). Measured 2026-09-17 on `npm run test`. <!-- cite-exempt: historical — deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 
 `vitest.config.ts` also writes a durable, machine-readable per-test record to
 `.vitest-reports/junit.xml` (gitignored) on every run, alongside the normal

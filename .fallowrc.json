@@ -50,8 +50,6 @@
     "dueFor",
     "fetchEventMarket",
     "fetchPriceHistory",
-    "lastKnown",
-    "isRetryableFlattenError",
-    "getUnprotectedResidualLots"
+    "lastKnown"
   ]
 }

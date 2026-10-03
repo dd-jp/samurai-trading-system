@@ -16,7 +16,6 @@ export type {
   AgentIntelligence,
   AssetClass,
   Duration,
-  IntelligenceItem,
   MarketContext,
   MarketContextCallback,
 } from './types.js';

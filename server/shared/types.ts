@@ -8,13 +8,7 @@ export type {
   ProtectedExitRequest,
   ProtectiveReplaceRequest,
 } from './types/broker.js';
-export type {
-  ClosedTradeStore,
-  DebateLogStore,
-  SetupStore,
-  TuningStore,
-  VerdictLogStore,
-} from './types/ports.js';
+export type { DebateLogStore } from './types/ports.js';
 export type {
   AssetClass,
   InstrumentSubclass,
@@ -22,22 +16,14 @@ export type {
   LogEntryTemplate,
   LogEventCode,
   Logger,
-  TradingArm,
 } from './types/primitives.js';
 export type {
-  BrokerFillId,
-  ClosedTrade,
   DebateLog,
   DebateRoundLogEntry,
-  DebateTermination,
   DebateTerminationCause,
   ExitReason,
   Fill,
   OpenPosition,
-  OrderIntent,
   OrderState,
-  SetupNeighbor,
-  SetupVector,
-  VerdictLog,
 } from './types/records.js';
 export { toBrokerFillId } from './types/records.js';
