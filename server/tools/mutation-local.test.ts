@@ -5,8 +5,11 @@ import { dirname, join } from 'node:path';
 import {
   assignShards,
   breakThresholdOf,
+  dropTypeOnlyTargets,
+  erasedLines,
   getAddedLineRanges,
   getChangedFiles,
+  hasRuntimeCode,
   INCREMENTAL_FILE,
   isMutableProductionFile,
   isTradingPathFile,
@@ -124,9 +127,18 @@ interface GateFixture {
   readonly ranges?: Readonly<Record<string, readonly LineRange[]>>;
   readonly status?: number | null;
   readonly reports?: Readonly<Record<string, MutationReport>>;
+  readonly sources?: Readonly<Record<string, string>>;
 }
 
-function gateDeps({ changed = [], ranges = {}, status = 0, reports = {} }: GateFixture = {}) {
+const RUNTIME_SOURCE = 'export const x = 1;\n'.repeat(40);
+
+function gateDeps({
+  changed = [],
+  ranges = {},
+  status = 0,
+  reports = {},
+  sources = {},
+}: GateFixture = {}) {
   const lines: string[] = [];
   const baseRefs: string[] = [];
   const runs: StrykerRun[] = [];
@@ -137,6 +149,7 @@ function gateDeps({ changed = [], ranges = {}, status = 0, reports = {} }: GateF
       return changed;
     },
     addedLines: () => new Map(Object.entries(ranges)),
+    readSource: (file) => sources[file] ?? RUNTIME_SOURCE,
     stryker: (run) => {
       runs.push(run);
       return { status };
@@ -455,7 +468,7 @@ describe('runMutationGate', () => {
     expect(runMutationGate(['base'], deps)).toBe(0);
     expect(runs).toEqual([]);
     expect(lines.at(-1)).toBe(
-      'No trading-path lines changed vs base in this run — mutation gate skipped.',
+      'No runtime trading-path lines changed vs base in this run — mutation gate skipped.',
     );
   });
 
@@ -629,8 +642,129 @@ describe('runMutationGate', () => {
     it('passes with nothing to merge when no trading-path line changed', () => {
       const { deps, lines } = gateDeps();
       expect(runMutationGate(['--merge', '4'], deps)).toBe(0);
-      expect(lines.at(-1)).toBe('No trading-path lines changed — mutation gate skipped.');
+      expect(lines.at(-1)).toBe('No runtime trading-path lines changed — mutation gate skipped.');
     });
+  });
+});
+
+const MIXED_SOURCE = [
+  "import type { Order } from './order.js';",
+  "export type Side = 'Buy' | 'Sell';",
+  'export interface Leg {',
+  '  readonly side: Side;',
+  '}',
+  'declare const clock: () => number;',
+  "export type { Order } from './order.js';",
+  'export const MAX_LEGS = 2;',
+  'export function legCount(order: Order): number {',
+  '  return Math.min(order.legs, MAX_LEGS);',
+  '}',
+  '',
+].join('\n');
+
+function target(file: string, start: number, end = start): MutateTarget {
+  return { file, range: { start, end } };
+}
+
+describe('type-only change detection (doc 66, 2026-10-03)', () => {
+  it.each([
+    [1, 1],
+    [2, 2],
+    [3, 5],
+    [6, 6],
+    [7, 7],
+    [1, 7],
+  ])('lines %i-%i hold only type-level code', (start, end) => {
+    expect(hasRuntimeCode(erasedLines(MIXED_SOURCE), { start, end })).toBe(false);
+  });
+
+  it.each([
+    [8, 8],
+    [9, 9],
+    [10, 10],
+    [7, 8],
+  ])('lines %i-%i hold runtime code', (start, end) => {
+    expect(hasRuntimeCode(erasedLines(MIXED_SOURCE), { start, end })).toBe(true);
+  });
+
+  it('treats a file type stripping cannot erase as runtime code throughout', () => {
+    const erased = erasedLines('export enum Side {\n  Buy,\n}\n');
+    expect(erased).toBeUndefined();
+    expect(hasRuntimeCode(erased, { start: 1, end: 1 })).toBe(true);
+  });
+
+  it('drops a file whose changed ranges are all type-only and names it', () => {
+    const typeOnlyFile = 'server/apps/v2/execution/saxo/saxo-client.ts';
+    const { targets, typeOnly } = dropTypeOnlyTargets(
+      [target(typeOnlyFile, 2), target(typeOnlyFile, 7), target(GATE, 8)],
+      (file) => (file === typeOnlyFile ? MIXED_SOURCE : RUNTIME_SOURCE),
+    );
+    expect(targets).toEqual([target(GATE, 8)]);
+    expect(typeOnly).toEqual([typeOnlyFile]);
+  });
+
+  it('keeps the runtime range of a mixed file and drops its type alias range', () => {
+    const { targets, typeOnly } = dropTypeOnlyTargets(
+      [target(GATE, 2), target(GATE, 9, 11)],
+      () => MIXED_SOURCE,
+    );
+    expect(targets).toEqual([target(GATE, 9, 11)]);
+    expect(typeOnly).toEqual([]);
+  });
+
+  it('reads each file once', () => {
+    const reads: string[] = [];
+    dropTypeOnlyTargets([target(GATE, 1), target(GATE, 8)], (file) => {
+      reads.push(file);
+      return MIXED_SOURCE;
+    });
+    expect(reads).toEqual([GATE]);
+  });
+
+  it('skips the run with an explicit message when only type-level lines changed', () => {
+    const { deps, lines, runs } = gateDeps({
+      changed: [GATE],
+      ranges: { [GATE]: [{ start: 2, end: 2 }] },
+      sources: { [GATE]: MIXED_SOURCE },
+    });
+    expect(runMutationGate(['base'], deps)).toBe(0);
+    expect(runs).toEqual([]);
+    expect(lines).toEqual([
+      `Advisory — ${GATE}: type-only, nothing to mutate`,
+      'No runtime trading-path lines changed vs base in this run — mutation gate skipped.',
+    ]);
+  });
+
+  it('lists nothing for a type-only change, so CI skips every shard and the merge', () => {
+    const fixture = {
+      changed: [GATE],
+      ranges: { [GATE]: [{ start: 7, end: 7 }] },
+      sources: { [GATE]: MIXED_SOURCE },
+    };
+    const listed = gateDeps(fixture);
+    runMutationGate(['--list', '--shard', '1/4', 'base'], listed.deps);
+    expect(listed.lines).toEqual([]);
+    const merged = gateDeps(fixture);
+    expect(runMutationGate(['--merge', '4', 'base'], merged.deps)).toBe(0);
+    expect(merged.lines).toEqual([
+      'No runtime trading-path lines changed — mutation gate skipped.',
+    ]);
+  });
+
+  it('still mutates the runtime range of a mixed file', () => {
+    const { deps, runs } = gateDeps({
+      changed: [GATE],
+      ranges: {
+        [GATE]: [
+          { start: 2, end: 2 },
+          { start: 10, end: 10 },
+        ],
+      },
+      sources: { [GATE]: MIXED_SOURCE },
+      status: 1,
+    });
+    expect(runMutationGate(['base'], deps)).toBe(1);
+    expect(runs).toEqual([{ patterns: [`${GATE}:10-10`], incrementalFile: INCREMENTAL_FILE }]);
   });
 });
 

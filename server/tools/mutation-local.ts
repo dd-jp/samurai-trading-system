@@ -1,5 +1,6 @@
 import { execFileSync, type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { stripTypeScriptTypes } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -121,6 +122,37 @@ export function mutateTargets(
   ranges: ReadonlyMap<string, readonly LineRange[]>,
 ): readonly MutateTarget[] {
   return files.flatMap((file) => (ranges.get(file) ?? []).map((range) => ({ file, range })));
+}
+
+export function erasedLines(source: string): readonly string[] | undefined {
+  try {
+    return stripTypeScriptTypes(source).split('\n');
+  } catch {
+    return undefined;
+  }
+}
+
+export function hasRuntimeCode(erased: readonly string[] | undefined, range: LineRange): boolean {
+  return (
+    erased === undefined ||
+    erased.slice(range.start - 1, range.end).some((line) => line.trim().length > 0)
+  );
+}
+
+export interface RuntimeTargets {
+  readonly targets: readonly MutateTarget[];
+  readonly typeOnly: readonly string[];
+}
+
+export function dropTypeOnlyTargets(
+  targets: readonly MutateTarget[],
+  readSource: (file: string) => string,
+): RuntimeTargets {
+  const files = [...new Set(targets.map(({ file }) => file))];
+  const erased = new Map(files.map((file) => [file, erasedLines(readSource(file))]));
+  const kept = targets.filter(({ file, range }) => hasRuntimeCode(erased.get(file), range));
+  const keptFiles = new Set(kept.map(({ file }) => file));
+  return { targets: kept, typeOnly: files.filter((file) => !keptFiles.has(file)) };
 }
 
 export function mutatePattern({ file, range }: MutateTarget): string {
@@ -331,6 +363,10 @@ excluded; uncommitted edits to tracked files are included. Trading-path packages
 ${TRADING_PATH_PREFIXES.map((prefix) => `  ${prefix}`).join('\n')}
 
 Non-trading-path changes are listed but not mutated — no score bar applies.
+A changed range whose lines are all erased by TypeScript type stripping (type
+aliases, interfaces, type-only imports and exports, declare) has nothing for
+Stryker to mutate, so it is dropped (doc 66, 2026-10-03); a file left with no
+range is listed as type-only.
 
   --list         print the mutate ranges (of shard i/n with --shard) and run nothing
   --shard i/n    run only shard i of n; the score bar is applied by --merge instead
@@ -348,10 +384,12 @@ covering test lives elsewhere (e.g. an orchestrator wiring test) reads as
 uncovered. Check for that before treating a red gate as a real regression.`);
 }
 
-function logAdvisory(advisory: readonly string[], log: (line: string) => void): void {
-  if (advisory.length === 0) return;
-  log(`Advisory — changed but not mutated (no score bar), ${advisory.length} file(s):`);
-  for (const file of advisory) log(`  ${file}`);
+function logAdvisory(scope: GateScope, log: (line: string) => void): void {
+  if (scope.advisory.length > 0) {
+    log(`Advisory — changed but not mutated (no score bar), ${scope.advisory.length} file(s):`);
+    for (const file of scope.advisory) log(`  ${file}`);
+  }
+  for (const file of scope.typeOnly) log(`Advisory — ${file}: type-only, nothing to mutate`);
 }
 
 export interface StrykerRun {
@@ -382,6 +420,7 @@ function runStryker(root: string, run: StrykerRun): SpawnSyncReturns<Buffer> {
 export interface MutationGateDeps {
   readonly changedFiles: (baseRef: string) => readonly string[];
   readonly addedLines: (baseRef: string) => ReadonlyMap<string, readonly LineRange[]>;
+  readonly readSource: (file: string) => string;
   readonly stryker: (run: StrykerRun) => Pick<SpawnSyncReturns<Buffer>, 'error' | 'status'>;
   readonly readReport: (path: string) => MutationReport | undefined;
   readonly writeReport: (path: string, report: MutationReport) => void;
@@ -450,16 +489,15 @@ function strykerExitCode(result: Pick<SpawnSyncReturns<Buffer>, 'error' | 'statu
   return result.status ?? 1;
 }
 
-interface GateScope {
-  readonly targets: readonly MutateTarget[];
+interface GateScope extends RuntimeTargets {
   readonly advisory: readonly string[];
 }
 
 function gateScope(baseRef: string, deps: MutationGateDeps): GateScope {
   const { tradingPath, advisory } = partitionChangedFiles(deps.changedFiles(baseRef));
-  const targets =
+  const changed =
     tradingPath.length === 0 ? [] : mutateTargets(tradingPath, deps.addedLines(baseRef));
-  return { targets, advisory };
+  return { ...dropTypeOnlyTargets(changed, deps.readSource), advisory };
 }
 
 function shardTargets(
@@ -515,11 +553,11 @@ function scoreReports(scoped: readonly ScopedReport[], deps: MutationGateDeps): 
 }
 
 function mutateChanged(args: GateArgs, scope: GateScope, deps: MutationGateDeps): number {
-  logAdvisory(scope.advisory, deps.log);
+  logAdvisory(scope, deps.log);
   const targets = shardTargets(scope.targets, args.shard);
   if (targets.length === 0) {
     deps.log(
-      `No trading-path lines changed vs ${args.baseRef} in this run — mutation gate skipped.`,
+      `No runtime trading-path lines changed vs ${args.baseRef} in this run — mutation gate skipped.`,
     );
     return 0;
   }
@@ -533,7 +571,7 @@ function mergeShards(count: number, scope: GateScope, deps: MutationGateDeps): n
     .map((targets, i) => ({ targets, path: shardReportFile(i + 1) }))
     .filter(({ targets }) => targets.length > 0);
   if (shards.length === 0) {
-    deps.log('No trading-path lines changed — mutation gate skipped.');
+    deps.log('No runtime trading-path lines changed — mutation gate skipped.');
     return 0;
   }
   return scoreReports(shards, deps);
@@ -581,6 +619,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.exitCode = runMutationGate(process.argv.slice(2), {
     changedFiles: (baseRef) => getChangedFiles(baseRef, root),
     addedLines: (baseRef) => getAddedLineRanges(baseRef, root),
+    readSource: (file) => readFileSync(join(root, file), 'utf8'),
     stryker: (run) => runStryker(root, run),
     readReport: (path) => readReport(root, path),
     writeReport: (path, report) => writeReport(root, path, report),
