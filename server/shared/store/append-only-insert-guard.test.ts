@@ -265,6 +265,24 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    table: 'v2_cash_in_lieu',
+    seed: `INSERT INTO v2_cash_in_lieu (venue, activity_id, instrument, activity_date, qty,
+        amount_native, currency, status, fx_quote_per_gbp, fx_source, trading_date, recorded_at)
+      VALUES ('alpaca', 'cil-1', 'NVDA', '2026-10-01', 0.5, 61.2, 'USD', 'executed', 1.25,
+        'boe-xudluss:year-start:2026@2025-12-31', '2026-10-01', '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same venue, activity id and status',
+        outcome: 'ignored',
+        sql: `INSERT OR REPLACE INTO v2_cash_in_lieu (venue, activity_id, instrument, activity_date,
+            qty, amount_native, currency, status, fx_quote_per_gbp, fx_source, trading_date,
+            recorded_at)
+          VALUES ('alpaca', 'cil-1', 'NVDA', '2026-10-01', 0.5, 99, 'USD', 'executed', 1.25,
+            'boe-xudluss:year-start:2026@2025-12-31', '2026-10-02', '2026-10-02T07:00:00.000Z')`,
+      },
+    ],
+  },
+  {
     table: 'v2_rescales',
     seed: `INSERT INTO v2_rescales (rescale_id, trading_date, book_id, instrument, source, ratio,
         anchor_date, fills_before, qty_before, qty_after, entry_before, entry_after, recorded_at)

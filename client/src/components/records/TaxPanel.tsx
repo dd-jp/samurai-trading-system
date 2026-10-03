@@ -25,11 +25,18 @@ function taxUrl(year: number | null, csv = false): string {
   return query === '' ? TAX_URL : `${TAX_URL}?${query}`;
 }
 
+function cashInLieuNote(row: TaxDisposalWire): string | null {
+  if (!row.cash_in_lieu) return null;
+  return row.cash_in_lieu_activity === null
+    ? "cash in lieu at the latest close; the broker's amount is not read yet"
+    : `cash in lieu at the broker's amount (${row.cash_in_lieu_activity})`;
+}
+
 function notes(row: TaxDisposalWire): string {
   return [
     row.acquisition_date === null ? null : `acquired ${row.acquisition_date}`,
     row.provisional ? 'provisional: 30-day window open' : null,
-    row.cash_in_lieu ? "cash in lieu at the latest close; the broker's amount is not read" : null,
+    cashInLieuNote(row),
   ]
     .filter((note) => note !== null)
     .join('; ');

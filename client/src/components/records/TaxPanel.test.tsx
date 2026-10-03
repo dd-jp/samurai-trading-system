@@ -20,6 +20,7 @@ const ROW: TaxDisposalWire = {
   fx_source: 'boe-xudluss:2026-07-01',
   provisional: true,
   cash_in_lieu: false,
+  cash_in_lieu_activity: null,
 };
 
 function tax(overrides: Partial<TaxWire> = {}): TaxWire {
@@ -88,13 +89,34 @@ describe('TaxPanel (P13)', () => {
         .map((row) => row.textContent),
     ).toEqual([
       '2026-07-01AAPL alpaca5.0000£684.62£600.00£84.62section 1041.3 USD/GBP (boe-xudluss:2026-07-01)provisional: 30-day window open',
-      "2026-09-29VUSA saxo0.5000£10.00£12.00−£2.0030 dayGBPacquired 2026-10-02; cash in lieu at the latest close; the broker's amount is not read",
+      "2026-09-29VUSA saxo0.5000£10.00£12.00−£2.0030 dayGBPacquired 2026-10-02; cash in lieu at the latest close; the broker's amount is not read yet",
       'Total£694.62£612.00£82.62',
     ]);
     expect(within(region()).getByRole('list', { name: 'Held out' }).textContent).toBe(
       'MSFT alpaca: 3 fills held out, no fix',
     );
     expect(region().textContent).toContain('Paper disposals are not taxable.');
+  });
+
+  it("names the broker's cash-in-lieu activity when the broker's amount replaced the estimate", async () => {
+    const paid = { ...ROW, cash_in_lieu: true, cash_in_lieu_activity: 'alpaca:cil-1' };
+    mount(
+      serving({
+        '/api/v2/tax': tax({
+          disposals: {
+            status: 'fed',
+            rows: [paid],
+            held_out: [],
+            proceeds_gbp: paid.proceeds_gbp,
+            cost_gbp: paid.cost_gbp,
+            gain_gbp: paid.gain_gbp,
+          },
+        }),
+      }),
+    );
+    await screen.findByText('2026-07-01');
+    expect(region().textContent).toContain("cash in lieu at the broker's amount (alpaca:cil-1)");
+    expect(region().textContent).not.toContain('latest close');
   });
 
   it('says when a year has no disposals, and loads another year when picked', async () => {
