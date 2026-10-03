@@ -1,3 +1,18 @@
+import { BrokerError } from '../../../apps/v2/execution/alpaca/broker-error.js';
+import {
+  isProtectiveRearmUnsupported,
+  type ProtectiveRearmUnsupportedError,
+} from '../../../apps/v2/execution/alpaca/protective-rearm-unsupported.js';
+import { InMemoryBrokerStateStore } from '../../../apps/v2/execution/broker-state/broker-state-store.js';
+import { SaxoBrokerProviderError } from '../../../apps/v2/execution/saxo/saxo-broker-errors.js';
+import type {
+  SaxoInstrumentDetails,
+  SaxoNetPosition,
+  SaxoOpenApiClient,
+  SaxoOpenOrder,
+  SaxoOrderActivity,
+  SaxoOrderPlacement,
+} from '../../../apps/v2/execution/saxo/saxo-client.js';
 import type {
   MarketDataService,
   TradingCalendar,
@@ -7,8 +22,6 @@ import { LSE_ETP_POOL } from '../../../providers/universe-pool/index.js';
 import type { AssetClass, OpenPosition } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { type CostModel, SAXO_COMMISSION_RATE } from '../../../tools/backtest/index.js';
-import { BrokerError } from '../broker-error.js';
-import { InMemoryBrokerStateStore } from '../broker-state-store.js';
 import type {
   DormantLegsUnresolvedAlert,
   DormantLegsUnresolvedAlertChannel,
@@ -19,10 +32,6 @@ import type {
   LegResizeUnverifiedAlert,
   LegResizeUnverifiedAlertChannel,
 } from '../leg-resize-unverified-alert.js';
-import {
-  isProtectiveRearmUnsupported,
-  type ProtectiveRearmUnsupportedError,
-} from '../protective-rearm-unsupported.js';
 import { openTestExecutionStore, type TestExecutionStore } from '../sqlite-store-harness.js';
 import type { ExecutionInput, NativeBracketRequest } from '../types.js';
 import { UnrecordedVenuePositionThrottle } from '../unrecorded-venue-position-throttle.js';
@@ -39,15 +48,6 @@ import {
   saxoExternalReference,
   saxoInstrumentResolverFromVenue,
 } from './saxo-adapter.js';
-import { SaxoBrokerProviderError } from './saxo-broker-errors.js';
-import type {
-  SaxoInstrumentDetails,
-  SaxoNetPosition,
-  SaxoOpenApiClient,
-  SaxoOpenOrder,
-  SaxoOrderActivity,
-  SaxoOrderPlacement,
-} from './saxo-client.js';
 import { saxoCashPerShare } from './saxo-price-unit.js';
 
 const FILL_POLL_INTERVAL_MS = 15_000;

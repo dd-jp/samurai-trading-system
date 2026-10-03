@@ -1,6 +1,6 @@
+import { isProtectiveRearmUnsupported } from '../../apps/v2/execution/alpaca/protective-rearm-unsupported.js';
 import type { Fill, OpenPosition } from '../../shared/index.js';
 import { heldQuantityFromFills, isFlat, logCaughtFailure, safeLog } from '../../shared/index.js';
-import { isProtectiveRearmUnsupported } from './protective-rearm-unsupported.js';
 import { reflattenResidual } from './residual-reflatten.js';
 import type {
   ExecutionInput,

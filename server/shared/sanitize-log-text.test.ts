@@ -253,7 +253,7 @@ describe('camelCase/underscore keys, Basic/Token auth and DSN passwords (#1367)'
     {
       name: "Saxo's opaque per-account resource id, not a credential",
       input: "{ AccountKey: accountKey, side: 'buy' }",
-      where: 'pipeline/execution/adapters/saxo-http-client.ts',
+      where: 'apps/v2/execution/saxo/saxo-http-client.ts',
     },
     {
       name: '"Basic" as ordinary English, no Authorization: prefix',

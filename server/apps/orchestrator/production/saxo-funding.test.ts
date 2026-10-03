@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-
-import type { SaxoAccountBalance } from '../../../pipeline/execution/adapters/saxo-client.js';
 import type { RiskConfig } from '../../../pipeline/risk-manager/index.js';
+import type { SaxoAccountBalance } from '../../v2/execution/saxo/saxo-client.js';
 import { LIVE_BOOK_GBP } from '../paper-profile.js';
 import {
   armSameCurrencyCeilings,

@@ -1,4 +1,4 @@
-import { maskCredentials } from '../../../shared/index.js';
+import { maskCredentials } from '../../../../shared/index.js';
 import type { SaxoTradingEnvironment } from './saxo-environment.js';
 import { SAXO_CREDENTIAL_ENV_VARS, SAXO_GATEWAY_URLS } from './saxo-environment.js';
 

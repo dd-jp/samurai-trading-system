@@ -8,13 +8,13 @@ import type {
   NormalizedOrder,
   NormalizedPosition,
 } from '../../../pipeline/execution/index.js';
-import { ProtectiveRearmUnsupportedError } from '../../../pipeline/execution/protective-rearm-unsupported.js';
 import { DEFAULT_TRADER_CONFIG } from '../../../pipeline/trader/index.js';
 import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
 import type { Fill, Logger, OpenPosition } from '../../../shared/index.js';
 import { SimulatedClock, toBrokerFillId } from '../../../shared/index.js';
 import { recordingLogger } from '../../../shared/recording-logger.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { ProtectiveRearmUnsupportedError } from '../../v2/execution/alpaca/protective-rearm-unsupported.js';
 import { buildProductionComponents, type ProductionConfig } from '../production.js';
 import { buildExecutionSurface } from './direct-bind.js';
 import {

@@ -1,9 +1,10 @@
-import type { StoreHandle } from '../../shared/store/index.js';
+import type { NormalizedFill } from '../../../../shared/index.js';
+import type { StoreHandle } from '../../../../shared/store/index.js';
 import {
   fromStoredTimestamp,
   fromStoredTimestampOrNull,
   toStoredTimestamp,
-} from '../../shared/store/index.js';
+} from '../../../../shared/store/index.js';
 import type {
   BrokerBracketOrderIds,
   BrokerBracketPhase,
@@ -14,7 +15,6 @@ import type {
   UnpricedFillObservation,
   UnpricedFillRecord,
 } from './broker-state-store.js';
-import type { NormalizedFill } from './types.js';
 
 interface BracketRow {
   venue: BrokerVenue;

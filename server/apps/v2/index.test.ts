@@ -9,9 +9,6 @@ import type {
   SleeveSpec,
   Venue,
 } from '../../../contracts/index.js';
-import { writeKeepAliveState } from '../../pipeline/execution/adapters/saxo-keepalive-state.js';
-import { writeTokenFile } from '../../pipeline/execution/adapters/saxo-token-file.js';
-import type { AlpacaBrokerClient, AlpacaOrder } from '../../pipeline/execution/index.js';
 import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
@@ -30,6 +27,9 @@ import {
   parseBoeGbpUsdCsv,
   type VenueSessionGate,
 } from './data/index.js';
+import type { AlpacaBrokerClient, AlpacaOrder } from './execution/alpaca/alpaca-client.js';
+import { writeKeepAliveState } from './execution/saxo/saxo-keepalive-state.js';
+import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
 import {
   composeV2Root,
   DEFAULT_HALF_SPREAD_BPS,
@@ -57,8 +57,8 @@ import { LSE_LIQUIDITY_SCREEN } from './signal/parameters.js';
 
 const liveTokenFile = vi.hoisted(() => ({ path: undefined as string | undefined }));
 
-vi.mock('../../pipeline/execution/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../pipeline/execution/index.js')>();
+vi.mock('./execution/saxo/saxo-token-file.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./execution/saxo/saxo-token-file.js')>();
   return {
     ...actual,
     tokenFilePath: (environment: Parameters<typeof actual.tokenFilePath>[0]) =>

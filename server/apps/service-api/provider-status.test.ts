@@ -1,7 +1,4 @@
-import type {
-  AlpacaAccount,
-  AlpacaBrokerClient,
-} from '../../pipeline/execution/adapters/alpaca-client.js';
+import type { AlpacaAccount, AlpacaBrokerClient } from '../v2/execution/alpaca/alpaca-client.js';
 import { NULL_PROVIDER_STATUS, ProviderStatusPoller } from './provider-status.js';
 
 function alpacaStub(getAccount: () => Promise<AlpacaAccount>): AlpacaBrokerClient {

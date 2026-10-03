@@ -7,13 +7,13 @@ import type {
   AnthropicMessageRequest,
   AnthropicMessagesClient,
 } from '../../../pipeline/debate-engine/index.js';
-import type { AlpacaBrokerClient, AlpacaOrder } from '../../../pipeline/execution/index.js';
 import type { DailyBar } from '../../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../../providers/market-data-service/index.js';
 import { type LogEntry, SimulatedClock } from '../../../shared/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { JournalReader } from '../api/journal-reader.js';
+import type { AlpacaBrokerClient, AlpacaOrder } from '../execution/alpaca/alpaca-client.js';
 import { composeV2Root, type V2Root, type V2RootOptions } from '../index.js';
 import { sleeveCapitalYear } from '../risk/allocation.js';
 import { CapitalConfigStore, dailyCapGbp } from '../risk/index.js';
