@@ -403,14 +403,14 @@ describe('tokenFilePath', () => {
 
   it('is anchored to the repo root, not the working directory (review round 1, finding 1)', () => {
     const fromRepoRoot = tokenFilePath('sim');
-    const originalCwd = process.cwd();
     const elsewhere = mkdtempSync(join(tmpdir(), 'saxo-login-cwd-'));
+    // process.chdir() throws in vitest worker threads, which Stryker's runner uses
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(elsewhere);
     try {
-      process.chdir(elsewhere);
       expect(tokenFilePath('sim')).toBe(fromRepoRoot);
       expect(tokenFilePath('sim')).not.toContain(elsewhere);
     } finally {
-      process.chdir(originalCwd);
+      cwd.mockRestore();
       rmSync(elsewhere, { recursive: true, force: true });
     }
   });
