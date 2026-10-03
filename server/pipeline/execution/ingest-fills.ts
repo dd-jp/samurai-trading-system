@@ -30,18 +30,18 @@ import type {
   NormalizedFill,
 } from './types.js';
 
-const FILLED_WITH_ZERO_SIZE = 'filled position has zero filled_size' as const;
+export const FILLED_WITH_ZERO_SIZE = 'filled position has zero filled_size' as const;
 
-const FILLED_ZERO_SIZE_CLEARED =
+export const FILLED_ZERO_SIZE_CLEARED =
   'a lot previously warned zero-filled-size has advanced past zero' as const;
 
-const FEE_CURRENCY_NOT_BOOK_CURRENCY =
+export const FEE_CURRENCY_NOT_BOOK_CURRENCY =
   'broker reported a fill fee in a currency that is not the book currency' as const;
 
-const UNATTRIBUTED_FLATTEN_FILL =
+export const UNATTRIBUTED_FLATTEN_FILL =
   'flatten fill booked against an already-closed lot — its closed trade understates the sale' as const;
 
-const UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED =
+export const UNATTRIBUTED_FLATTEN_FILL_PERSIST_FAILED =
   'failed to book a flatten fill against an already-closed lot' as const;
 
 const NO_MODELLED_LOT_COSTS: ModelledLotCosts = { entry: null, protectiveExit: null };
