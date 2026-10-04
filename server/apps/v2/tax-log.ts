@@ -292,11 +292,18 @@ export function buildTaxLog(
   return { disposals, heldOut: held.sort((a, b) => a.instrument.localeCompare(b.instrument)) };
 }
 
+export function taxYearsOfDates(
+  dates: readonly string[],
+  heldOut: readonly HeldOutInstrument[],
+): number[] {
+  return ascending([...dates.map(taxYearOf), ...heldOut.flatMap((held) => held.taxYears)]);
+}
+
 export function taxYearsOf(log: TaxLog): number[] {
-  return ascending([
-    ...log.disposals.map((disposal) => taxYearOf(disposal.disposal_date)),
-    ...log.heldOut.flatMap((held) => held.taxYears),
-  ]);
+  return taxYearsOfDates(
+    log.disposals.map((disposal) => disposal.disposal_date),
+    log.heldOut,
+  );
 }
 
 export function taxYearLog(log: TaxLog, year: number): TaxLogWire {

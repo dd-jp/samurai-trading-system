@@ -27,7 +27,7 @@ import { ResearchReader } from './research.js';
 import { createV2DashboardServer, type V2DashboardServer } from './server.js';
 import { TaxReader } from './tax.js';
 
-export const DASHBOARD_SCHEMA_VERSION = 91;
+export const DASHBOARD_SCHEMA_VERSION = 94;
 const DEFAULT_PORT = 8788;
 
 export interface V2DashboardArgs {

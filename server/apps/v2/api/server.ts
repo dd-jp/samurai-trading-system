@@ -183,8 +183,8 @@ function getTax(opts: V2DashboardServerOptions): Handler {
   return (req, res) => {
     const parsed = parseTaxQuery(searchParams(req));
     if (!parsed.ok) sendError(res, 400, parsed.reason);
-    else if (parsed.query.format === 'csv') sendCsv(res, opts.taxCsv(parsed.query));
-    else sendJson(res, 200, opts.tax(parsed.query));
+    else if (parsed.query.format === 'json') sendJson(res, 200, opts.tax(parsed.query));
+    else sendCsv(res, opts.taxCsv(parsed.query));
   };
 }
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { TaxDisposalWire, TaxWire } from '@contracts';
+import type { TaxCfdDisposalWire, TaxDisposalWire, TaxWire } from '@contracts';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { JOURNAL, jsonResponse } from '../../test-wire.ts';
@@ -21,6 +21,29 @@ const ROW: TaxDisposalWire = {
   provisional: true,
   cash_in_lieu: false,
   cash_in_lieu_activity: null,
+};
+
+const CFD_ROW: TaxCfdDisposalWire = {
+  instrument: 'TSLA',
+  venue: 'saxo_cfd_usd',
+  direction: 'short',
+  open_date: '2026-05-01',
+  close_date: '2026-07-01',
+  qty: 10,
+  currency: 'USD',
+  open_price_native: 200,
+  close_price_native: 180,
+  open_fx_quote_per_gbp: 1.25,
+  close_fx_quote_per_gbp: 1.3,
+  fx_source: 'boe-xudluss:2026-05-01 boe-xudluss:2026-07-01',
+  open_value_gbp: 1600,
+  close_value_gbp: 1384.62,
+  realised_pnl_gbp: 215.38,
+  commission_gbp: 4,
+  financing_gbp: 1.2,
+  borrow_gbp: 0.8,
+  net_gbp: 209.38,
+  treatment: 'unconfirmed',
 };
 
 function tax(overrides: Partial<TaxWire> = {}): TaxWire {
@@ -55,6 +78,7 @@ function tax(overrides: Partial<TaxWire> = {}): TaxWire {
       cost_gbp: 612,
       gain_gbp: 82.62,
     },
+    cfd_disposals: { status: 'empty' },
     ...overrides,
   };
 }
@@ -117,6 +141,68 @@ describe('TaxPanel (P13)', () => {
     await screen.findByText('2026-07-01');
     expect(region().textContent).toContain("cash in lieu at the broker's amount (alpaca:cil-1)");
     expect(region().textContent).not.toContain('latest close');
+  });
+
+  it('lists closed CFD positions apart from share matching, with carry as costs and the treatment unconfirmed', async () => {
+    mount(
+      serving({
+        '/api/v2/tax': tax({
+          cfd_disposals: {
+            status: 'fed',
+            rows: [
+              CFD_ROW,
+              {
+                ...CFD_ROW,
+                instrument: 'VOD',
+                venue: 'saxo_cfd_gbp',
+                direction: 'long',
+                currency: 'GBP',
+                net_gbp: -1,
+              },
+            ],
+            held_out: [{ instrument: 'ISF', venue: 'saxo_cfd_gbp', reason: 'no carry', fills: 2 }],
+            realised_pnl_gbp: 430.76,
+            commission_gbp: 8,
+            financing_gbp: 2.4,
+            borrow_gbp: 1.6,
+            net_gbp: 208.38,
+            treatment: 'unconfirmed',
+          },
+        }),
+      }),
+    );
+    const table = await screen.findByRole('table', { name: 'CFD disposals' });
+    expect(
+      within(table)
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => row.textContent),
+    ).toEqual([
+      '2026-07-012026-05-01TSLA saxo_cfd_usd short10.0000200.0000 / 180.0000 USD1.2500 / 1.3000 USD/GBP (boe-xudluss:2026-05-01 boe-xudluss:2026-07-01)£215.38£4.00£1.20£0.80£209.38',
+      '2026-07-012026-05-01VOD saxo_cfd_gbp long10.0000200.0000 / 180.0000 GBPGBP£215.38£4.00£1.20£0.80−£1.00',
+      'Total£430.76£8.00£2.40£1.60£208.38',
+    ]);
+    expect(table.textContent).toContain('treatment unconfirmed');
+    expect(within(region()).getByRole('list', { name: 'CFDs held out' }).textContent).toBe(
+      'ISF saxo_cfd_gbp: 2 fills held out, no carry',
+    );
+  });
+
+  it('downloads the CFD log as its own CSV', async () => {
+    Object.assign(URL, { createObjectURL: () => 'blob:tax', revokeObjectURL: () => undefined });
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+    const fetchImpl = serving({
+      '/api/v2/tax': tax(),
+      '/api/v2/tax?year=2026&format=cfd-csv': new Response('x'),
+    });
+    mount(fetchImpl);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download CFD CSV' }));
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect((click.mock.instances[0] as unknown as HTMLAnchorElement).download).toBe(
+      'samurai-tax-cfd-2026-27.csv',
+    );
   });
 
   it('says when a year has no disposals, and loads another year when picked', async () => {

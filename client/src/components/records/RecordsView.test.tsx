@@ -59,6 +59,7 @@ const TAX = {
   year: 2026,
   years: [],
   disposals: { status: 'empty' },
+  cfd_disposals: { status: 'empty' },
 };
 
 function routes(researchBody: unknown = research(), reconcile = reconcileBody()): typeof fetch {

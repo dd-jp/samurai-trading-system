@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Position, Venue } from '../../../../contracts/index.js';
-import { type CfdCarryRates, cfdCarryAccrual } from './cfd-carry.js';
+import { type CfdCarryRates, cfdCarryAccrual, cfdPositionCarry } from './cfd-carry.js';
 
 function held(instrument: string, venue: Venue, qty: number, avgPriceGbp = 100): Position {
   return {
@@ -31,22 +31,25 @@ const RATES: CfdCarryRates = {
 
 const mark = (price: number | undefined) => () => price;
 
-describe('cfdCarryAccrual', () => {
+const accrual = (...args: Parameters<typeof cfdPositionCarry>) =>
+  cfdCarryAccrual(cfdPositionCarry(...args));
+
+describe('cfdCarryAccrual over cfdPositionCarry', () => {
   it('charges a long financing on its marked notional per calendar day and no borrow', () => {
-    expect(cfdCarryAccrual([held('VOD', 'saxo_cfd_gbp', 3)], mark(50), 2, RATES)).toEqual({
+    expect(accrual([held('VOD', 'saxo_cfd_gbp', 3)], mark(50), 2, RATES)).toEqual({
       financingGbp: 3 * 50 * 0.001 * 2,
       borrowGbp: 0,
     });
   });
 
   it('charges a short the short financing rate and its own name borrow on absolute notional', () => {
-    const carry = cfdCarryAccrual([held('AAPL', 'saxo_cfd_usd', -4)], mark(25), 3, RATES);
+    const carry = accrual([held('AAPL', 'saxo_cfd_usd', -4)], mark(25), 3, RATES);
     expect(carry.financingGbp).toBeCloseTo(4 * 25 * 0.0005 * 2 * 3, 12);
     expect(carry.borrowGbp).toBeCloseTo(4 * 25 * 0.0001 * 2 * 3, 12);
   });
 
   it('reads borrow by name, passing an unquoted name through to the model', () => {
-    const carry = cfdCarryAccrual(
+    const carry = accrual(
       [held('ISF', 'saxo_cfd_gbp', -1), held('ZZZ', 'saxo_cfd_gbp', -1)],
       mark(100),
       1,
@@ -56,7 +59,7 @@ describe('cfdCarryAccrual', () => {
   });
 
   it('skips cash venues and marks an unpriced CFD at its average price', () => {
-    const carry = cfdCarryAccrual(
+    const carry = accrual(
       [held('AAPL', 'alpaca', 5), held('CSP1', 'saxo', 5), held('VOD', 'saxo_cfd_gbp', 2, 40)],
       mark(undefined),
       1,
@@ -67,13 +70,24 @@ describe('cfdCarryAccrual', () => {
 
   it('accrues nothing over zero days or with no rates wired', () => {
     const positions = [held('AAPL', 'saxo_cfd_usd', -1)];
-    expect(cfdCarryAccrual(positions, mark(100), 0, RATES)).toEqual({
+    expect(accrual(positions, mark(100), 0, RATES)).toEqual({
       financingGbp: 0,
       borrowGbp: 0,
     });
-    expect(cfdCarryAccrual(positions, mark(100), 5, undefined)).toEqual({
+    expect(accrual(positions, mark(100), 5, undefined)).toEqual({
       financingGbp: 0,
       borrowGbp: 0,
     });
+  });
+
+  it('carries each CFD position separately, naming the position it accrued on', () => {
+    const short = held('AAPL', 'saxo_cfd_usd', -4);
+    const long = held('VOD', 'saxo_cfd_gbp', 3);
+    const carried = cfdPositionCarry([held('MSFT', 'alpaca', 1), short, long], mark(10), 2, RATES);
+    expect(carried.map((carry) => carry.position)).toEqual([short, long]);
+    expect(carried[0]?.financingGbp).toBeCloseTo(4 * 10 * 0.0005 * 2 * 2, 12);
+    expect(carried[0]?.borrowGbp).toBeCloseTo(4 * 10 * 0.0001 * 2 * 2, 12);
+    expect(carried[1]).toMatchObject({ financingGbp: 3 * 10 * 0.001 * 2, borrowGbp: 0 });
+    expect(cfdPositionCarry([long], mark(10), 2, undefined)).toEqual([]);
   });
 });

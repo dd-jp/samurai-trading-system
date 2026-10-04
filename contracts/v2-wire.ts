@@ -407,11 +407,48 @@ export interface TaxLogWire {
   readonly gain_gbp: number;
 }
 
+export type TaxCfdTreatmentWire = 'unconfirmed';
+
+export interface TaxCfdDisposalWire {
+  readonly instrument: string;
+  readonly venue: string;
+  readonly direction: 'long' | 'short';
+  readonly open_date: string;
+  readonly close_date: string;
+  readonly qty: number;
+  readonly currency: string;
+  readonly open_price_native: number;
+  readonly close_price_native: number;
+  readonly open_fx_quote_per_gbp: number;
+  readonly close_fx_quote_per_gbp: number;
+  readonly fx_source: string;
+  readonly open_value_gbp: number;
+  readonly close_value_gbp: number;
+  readonly realised_pnl_gbp: number;
+  readonly commission_gbp: number;
+  readonly financing_gbp: number;
+  readonly borrow_gbp: number;
+  readonly net_gbp: number;
+  readonly treatment: TaxCfdTreatmentWire;
+}
+
+export interface TaxCfdLogWire {
+  readonly rows: readonly TaxCfdDisposalWire[];
+  readonly held_out: readonly TaxHeldOutWire[];
+  readonly realised_pnl_gbp: number;
+  readonly commission_gbp: number;
+  readonly financing_gbp: number;
+  readonly borrow_gbp: number;
+  readonly net_gbp: number;
+  readonly treatment: TaxCfdTreatmentWire;
+}
+
 export interface TaxWire {
   readonly contract_version: string;
   readonly year: number;
   readonly years: readonly number[];
   readonly disposals: PanelWire<TaxLogWire>;
+  readonly cfd_disposals: PanelWire<TaxCfdLogWire>;
 }
 
 type PanelFields = keyof NotYetFedWire;
@@ -640,7 +677,7 @@ export const V2_WIRE_FIELD_NAMES = {
     'store',
     'broker',
   ]),
-  tax: fieldsOf<TaxWire>()(['contract_version', 'year', 'years', 'disposals']),
+  tax: fieldsOf<TaxWire>()(['contract_version', 'year', 'years', 'disposals', 'cfd_disposals']),
   taxLog: fieldsOf<TaxLogWire>()(['rows', 'held_out', 'proceeds_gbp', 'cost_gbp', 'gain_gbp']),
   taxDisposal: fieldsOf<TaxDisposalWire>()([
     'disposal_date',
@@ -660,6 +697,38 @@ export const V2_WIRE_FIELD_NAMES = {
     'cash_in_lieu_activity',
   ]),
   taxHeldOut: fieldsOf<TaxHeldOutWire>()(['instrument', 'venue', 'reason', 'fills']),
+  taxCfdLog: fieldsOf<TaxCfdLogWire>()([
+    'rows',
+    'held_out',
+    'realised_pnl_gbp',
+    'commission_gbp',
+    'financing_gbp',
+    'borrow_gbp',
+    'net_gbp',
+    'treatment',
+  ]),
+  taxCfdDisposal: fieldsOf<TaxCfdDisposalWire>()([
+    'instrument',
+    'venue',
+    'direction',
+    'open_date',
+    'close_date',
+    'qty',
+    'currency',
+    'open_price_native',
+    'close_price_native',
+    'open_fx_quote_per_gbp',
+    'close_fx_quote_per_gbp',
+    'fx_source',
+    'open_value_gbp',
+    'close_value_gbp',
+    'realised_pnl_gbp',
+    'commission_gbp',
+    'financing_gbp',
+    'borrow_gbp',
+    'net_gbp',
+    'treatment',
+  ]),
 };
 
 export function v2WireFieldPaths(): string[] {

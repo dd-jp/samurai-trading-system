@@ -7,11 +7,11 @@ import type { StoreHandle } from '../../../shared/store/index.js';
 
 export const RECONCILE_RUNS_SHOWN = 60;
 const TAX_PARAMS: ReadonlySet<string> = new Set(['year', 'format']);
-const FORMATS: ReadonlySet<string> = new Set(['json', 'csv']);
+const FORMATS: ReadonlySet<string> = new Set(['json', 'csv', 'cfd-csv']);
 
 export interface TaxQuery {
   readonly year: number | null;
-  readonly format: 'json' | 'csv';
+  readonly format: 'json' | 'csv' | 'cfd-csv';
 }
 
 export type TaxQueryResult =

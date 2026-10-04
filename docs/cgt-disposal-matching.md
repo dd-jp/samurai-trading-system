@@ -23,7 +23,7 @@ v1-final keeps them.
   (`[6 Apr Y, 6 Apr Y+1)`) only filters what is shown.
 - **What counts.** Only fills of orders that reached a broker. Shadow, control
   and dry-run books are simulated, so their fills are never disposals. CFD
-  venues are left to their own log (#1867). Paper broker fills appear in a
+  venues are left to their own log (#1867, below). Paper broker fills appear in a
   paper store's log, but paper disposals are not taxable.
 - **Capture (migration 0085).** Each `v2_fills` row records `currency`,
   `price_native`, `fee_native`, `fx_quote_per_gbp`, `fx_source` and
@@ -86,6 +86,48 @@ v1-final keeps them.
 - **Served.** `/api/v2/tax?year` serves the dashboard's tax panel (P13), and
   `&format=csv` downloads the same year with held-out instruments as
   `held_out` rows.
+
+## v2 CFD disposal log (#1867)
+
+CFDs are contracts for difference, not shares, so the CFD venues
+(`saxo_cfd_gbp`, `saxo_cfd_usd`) never enter share matching: the share log
+filters them out before it groups, and its rows and CSV are byte-identical with
+or without CFD fills (tested). `server/apps/v2/tax-cfd-log.ts` builds a
+separate log from the same broker-routed fills.
+
+- **Treatment unconfirmed.** Every row, the year summary and the CSV carry
+  `treatment: unconfirmed`. How CFD disposals, automation and shorting are
+  treated waits on the accountant's written confirmation (doc 69 R1 extended;
+  #2001 item 1 asks the same of share shorts). The log records the facts and
+  decides nothing: no row is netted into the share log's gain.
+- **One row per closed position.** A position runs from flat to flat in one
+  book, long or short. The row has the open and close dates (London fill
+  dates), qty, the qty-weighted open and close prices in the quote currency,
+  the open and close values in GBP, and the realised P&L in GBP (close minus
+  open for a long, open minus close for a short). A position still open logs
+  nothing. The row is in the tax year of its last closing fill.
+- **FX.** Each fill converts at the BoE XUDLUSS fix for its date, as the share
+  log does (doc 66, 2026-10-02). The row shows the effective open and close
+  rates (native value ÷ GBP value) and every fix it used in `fx_source`.
+- **Costs.** Commission is the sum of the position's fill fees. Financing and
+  borrow are the carry `PaperBooks.markDay` accrues on the position
+  (`server/apps/v2/risk/cfd-carry.ts`). Since migration 0094 each mark
+  journals that carry per position in `v2_cfd_carry`, keyed by the position's
+  opening order; `v2_book_days` keeps the book total. `net_gbp` is realised P&L
+  less commission, financing and borrow. The carry is the modelled paper
+  accrual. Saxo's booked financing is not read yet, so live figures need the
+  broker's statement until it is.
+- **Held out, never guessed.** A name is held out, with the reason and its
+  fill count, when any fill predates migration 0085 or has no day rate, its
+  fills are in two currencies, a fill crosses the position through flat, two
+  books trade it (the broker nets them), a mark inside a position has a book
+  carry total that its `v2_cfd_carry` rows do not sum to (a mark before
+  migration 0094), a split falls while a position is open, or a position's
+  closing fills fall in two tax years.
+- **Served.** `/api/v2/tax` serves the CFD year as `cfd_disposals` beside the
+  share log, and `&format=cfd-csv` downloads it as
+  `samurai-tax-cfd-<yyyy-yy>.csv`, with held-out names as `held_out` rows and
+  a closing `total` line.
 
 ## What this covers
 

@@ -60,6 +60,7 @@ const DATED_TABLES = [
   'v2_orders',
   'v2_decisions',
   'v2_book_days',
+  'v2_cfd_carry',
   'v2_refusals',
   'v2_reconciles',
   'v2_faults',

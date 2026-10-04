@@ -19,7 +19,12 @@ import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
 import { bookSpecsFor, sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import type { CapitalConfigStore } from './capital-config.js';
-import { type CfdCarryRates, cfdCarryAccrual } from './cfd-carry.js';
+import {
+  type CfdCarryRates,
+  type CfdPositionCarry,
+  cfdCarryAccrual,
+  cfdPositionCarry,
+} from './cfd-carry.js';
 import { LossBudget } from './loss-budget.js';
 
 const FLAT_EPSILON = 1e-9;
@@ -384,12 +389,13 @@ export class PaperBooks implements BookLedger {
         before.investedSaxoGbp,
         calendarDaysSinceLastMark,
       );
-      const carry = cfdCarryAccrual(
+      const carried = cfdPositionCarry(
         this.positions(bookId),
         markGbp,
         calendarDaysSinceLastMark,
         this.cfdCarryRates,
       );
+      const carry = cfdCarryAccrual(carried);
       const accruedGbp = custodyAccrualGbp + carry.financingGbp + carry.borrowGbp;
       this.#adjustCash(bookId, -accruedGbp);
       const equityGbp = before.equityGbp - accruedGbp;
@@ -417,6 +423,7 @@ export class PaperBooks implements BookLedger {
           carry.borrowGbp,
           recordedAt,
         );
+      this.#journalCarry(bookId, tradingDate, carried, recordedAt);
       this.db
         .prepare(
           `UPDATE v2_positions SET marks_held = marks_held + 1
@@ -437,6 +444,31 @@ export class PaperBooks implements BookLedger {
       };
     });
     return mark();
+  }
+
+  #journalCarry(
+    bookId: string,
+    tradingDate: string,
+    carried: readonly CfdPositionCarry[],
+    recordedAt: string,
+  ): void {
+    const insert = this.db.prepare(
+      `INSERT INTO v2_cfd_carry (book_id, trading_date, instrument, venue, client_order_id,
+         financing_gbp, borrow_gbp, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const { position, financingGbp, borrowGbp } of carried) {
+      insert.run(
+        bookId,
+        tradingDate,
+        position.instrument,
+        position.venue,
+        position.clientOrderId,
+        financingGbp,
+        borrowGbp,
+        recordedAt,
+      );
+    }
   }
 
   #adjustCash(bookId: string, deltaGbp: number): void {
