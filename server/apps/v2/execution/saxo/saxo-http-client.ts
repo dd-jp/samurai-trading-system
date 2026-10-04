@@ -90,7 +90,7 @@ function probeUrl(path: string): URL {
 
 function nextOnRoute(nextPath: string, route: string, context: string): URL {
   const parsed = /^\/(?![/\\])/.test(nextPath) ? probeUrl(nextPath) : undefined;
-  if (parsed === undefined || parsed.pathname !== route) {
+  if (parsed?.host !== 'saxo-next.invalid' || parsed.pathname !== route) {
     throw new SaxoBrokerProviderError(
       `Saxo API error: __next left the ${route} route (${context}).`,
     );

@@ -984,6 +984,8 @@ describe('SaxoHttpBrokerClient', () => {
       '/port/v1/orders/%2e%2e/orders/me',
       'port/v1/orders?$skip=500',
       '/\\evil.example/port/v1/orders',
+      '/\t/evil.example/port/v1/orders',
+      '/\n\\evil.example/port/v1/orders?$skip=500',
       'https://[bad/x',
     ])('refuses to fetch page 2 when listOpenOrders __next %s leaves the route', async (next) => {
       const fetchMock = singleNextFetch(next);
