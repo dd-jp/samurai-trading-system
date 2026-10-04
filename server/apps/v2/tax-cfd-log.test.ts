@@ -157,25 +157,29 @@ describe('buildCfdTaxLog', () => {
   it('logs a long GBP and a short USD CFD, each at its fill-day rate, with carry and commission as costs', () => {
     const log = buildCfdTaxLog(journal(), dayRate);
     expect(log.heldOut).toEqual([]);
-    const [vod, tsla] = log.disposals;
-    expect(vod).toMatchObject(VOD_ROW);
-    expect(vod?.open_price_native).toBeCloseTo(0.7, 12);
-    expect(vod?.close_price_native).toBeCloseTo(0.8, 12);
-    expect(vod?.open_value_gbp).toBeCloseTo(70, 9);
-    expect(vod?.close_value_gbp).toBeCloseTo(80, 9);
-    expect(vod?.realised_pnl_gbp).toBeCloseTo(10, 9);
-    expect(vod?.commission_gbp).toBeCloseTo(6, 12);
-    expect(vod?.financing_gbp).toBeCloseTo(0.75, 12);
-    expect(vod?.borrow_gbp).toBe(0);
-    expect(vod?.net_gbp).toBeCloseTo(10 - 6 - 0.75, 9);
-
-    expect(tsla).toMatchObject(TSLA_ROW);
-    expect(tsla?.close_value_gbp).toBeCloseTo(1800 / 1.3, 9);
-    expect(tsla?.realised_pnl_gbp).toBeCloseTo(1600 - 1800 / 1.3, 9);
-    expect(tsla?.commission_gbp).toBeCloseTo(2.5 / 1.25 + 2.6 / 1.3, 12);
-    expect(tsla?.financing_gbp).toBeCloseTo(1.2, 12);
-    expect(tsla?.borrow_gbp).toBeCloseTo(0.8, 12);
-    expect(tsla?.net_gbp).toBeCloseTo(1600 - 1800 / 1.3 - 4 - 1.2 - 0.8, 9);
+    expect(log.disposals).toEqual([
+      {
+        ...VOD_ROW,
+        open_price_native: expect.closeTo(0.7, 12),
+        close_price_native: expect.closeTo(0.8, 12),
+        open_value_gbp: expect.closeTo(70, 9),
+        close_value_gbp: expect.closeTo(80, 9),
+        realised_pnl_gbp: expect.closeTo(10, 9),
+        commission_gbp: expect.closeTo(6, 12),
+        financing_gbp: expect.closeTo(0.75, 12),
+        borrow_gbp: 0,
+        net_gbp: expect.closeTo(10 - 6 - 0.75, 9),
+      },
+      {
+        ...TSLA_ROW,
+        close_value_gbp: expect.closeTo(1800 / 1.3, 9),
+        realised_pnl_gbp: expect.closeTo(1600 - 1800 / 1.3, 9),
+        commission_gbp: expect.closeTo(2.5 / 1.25 + 2.6 / 1.3, 12),
+        financing_gbp: expect.closeTo(1.2, 12),
+        borrow_gbp: expect.closeTo(0.8, 12),
+        net_gbp: expect.closeTo(1600 - 1800 / 1.3 - 4 - 1.2 - 0.8, 9),
+      },
+    ]);
   });
 
   it('sums the tax year, unconfirmed, and dates each position by its close', () => {
@@ -233,6 +237,41 @@ describe('buildCfdTaxLog', () => {
     ];
     const log = buildCfdTaxLog(journal({ fills: reopened }), dayRate);
     expect(log.disposals.map((row) => row.instrument)).toEqual(['VOD']);
+  });
+
+  it('charges each round trip only the carry journalled against its own opening order', () => {
+    const twice = [
+      ...LONG_GBP,
+      fill({
+        fill_id: 'vod-reopen',
+        client_order_id: 'vod-entry-2',
+        trading_date: '2026-06-01',
+        fill_date: '2026-06-01',
+      }),
+      fill({
+        fill_id: 'vod-reclose',
+        side: 'sell',
+        leg: 'target',
+        trading_date: '2026-06-03',
+        fill_date: '2026-06-03',
+      }),
+    ];
+    const log = buildCfdTaxLog(
+      journal({
+        fills: twice,
+        carry: [...CARRY, carry('VOD', 'vod-entry-2', '2026-06-02', 0.125, 0)],
+        bookDays: [...BOOK_DAYS, bookDay('2026-06-02', 0.125, 0)],
+      }),
+      dayRate,
+    );
+    expect(
+      log.disposals
+        .filter((row) => row.instrument === 'VOD')
+        .map((row) => [row.open_date, row.financing_gbp]),
+    ).toEqual([
+      ['2026-05-01', 0.75],
+      ['2026-06-01', 0.125],
+    ]);
   });
 
   it('weights prices across partial fills and dates the row by its last close', () => {
