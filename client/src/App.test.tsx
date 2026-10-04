@@ -50,6 +50,7 @@ describe('App', () => {
         year: 2026,
         years: [],
         disposals: { status: 'empty' },
+        cfd_disposals: { status: 'empty' },
       },
     };
     const fetchImpl = vi

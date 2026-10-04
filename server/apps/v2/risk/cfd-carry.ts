@@ -17,8 +17,6 @@ export interface CfdCarry {
   readonly borrowGbp: number;
 }
 
-const NO_CFD_CARRY: CfdCarry = { financingGbp: 0, borrowGbp: 0 };
-
 function positionCarry(
   held: Position,
   markGbp: MarkPriceGbp,
@@ -40,17 +38,26 @@ function positionCarry(
   };
 }
 
-export function cfdCarryAccrual(
+export interface CfdPositionCarry extends CfdCarry {
+  readonly position: Position;
+}
+
+export function cfdPositionCarry(
   positions: readonly Position[],
   markGbp: MarkPriceGbp,
   calendarDays: number,
   rates: CfdCarryRates | undefined,
-): CfdCarry {
-  if (rates === undefined) return NO_CFD_CARRY;
+): CfdPositionCarry[] {
+  if (rates === undefined) return [];
+  return positions
+    .filter((position) => isCfdVenue(position.venue))
+    .map((position) => ({ position, ...positionCarry(position, markGbp, calendarDays, rates) }));
+}
+
+export function cfdCarryAccrual(carried: readonly CfdPositionCarry[]): CfdCarry {
   let financingGbp = 0;
   let borrowGbp = 0;
-  for (const held of positions.filter((position) => isCfdVenue(position.venue))) {
-    const carry = positionCarry(held, markGbp, calendarDays, rates);
+  for (const carry of carried) {
     financingGbp += carry.financingGbp;
     borrowGbp += carry.borrowGbp;
   }

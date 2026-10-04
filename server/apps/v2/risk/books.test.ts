@@ -433,12 +433,72 @@ describe('PaperBooks', () => {
     });
   });
 
+  it('journals each CFD position its own carry, keyed by its opening order, summing to the day', () => {
+    const db = seededStore();
+    const books = new PaperBooks(
+      db,
+      clock,
+      new CapitalConfigStore(db, clock),
+      '2026-09-25',
+      DEBATE,
+      {
+        financing: { dailyRate: (_venue, side) => (side === 'long' ? 0.001 : 0.0001) },
+        borrow: { dailyRate: (_venue, quoted) => quoted ?? 0 },
+        quotedBorrowPerDay: (instrument) => (instrument === 'TSLA' ? 0.0002 : undefined),
+      },
+    );
+    books.applyFill(
+      'debate/primary',
+      fill({
+        instrument: 'TSLA',
+        venue: 'saxo_cfd_usd',
+        side: 'sell',
+        qty: 1,
+        clientOrderId: 'o1',
+      }),
+    );
+    books.applyFill(
+      'debate/primary',
+      fill({ instrument: 'VOD', venue: 'saxo_cfd_gbp', qty: 2, clientOrderId: 'o2' }),
+    );
+    books.applyFill('debate/primary', fill({ instrument: 'AAPL', clientOrderId: 'o3' }));
+    const day = books.markDay('debate/primary', '2026-09-25', () => 100, 3);
+    const rows = db
+      .prepare(
+        `SELECT book_id, trading_date, instrument, venue, client_order_id, financing_gbp, borrow_gbp,
+           recorded_at FROM v2_cfd_carry ORDER BY instrument`,
+      )
+      .all() as {
+      instrument: string;
+      venue: string;
+      client_order_id: string;
+      financing_gbp: number;
+      borrow_gbp: number;
+      recorded_at: string;
+    }[];
+    expect(rows.map((row) => [row.instrument, row.venue, row.client_order_id])).toEqual([
+      ['TSLA', 'saxo_cfd_usd', 'o1'],
+      ['VOD', 'saxo_cfd_gbp', 'o2'],
+    ]);
+    expect(rows[0]).toMatchObject({ book_id: 'debate/primary', trading_date: '2026-09-25' });
+    expect(rows[0]?.financing_gbp).toBeCloseTo(100 * 0.0001 * 3, 12);
+    expect(rows[0]?.borrow_gbp).toBeCloseTo(100 * 0.0002 * 3, 12);
+    expect(rows[1]?.financing_gbp).toBeCloseTo(200 * 0.001 * 3, 12);
+    expect(rows[1]?.borrow_gbp).toBe(0);
+    expect(rows.reduce((sum, row) => sum + row.financing_gbp, 0)).toBeCloseTo(
+      day.cfdFinancingAccrualGbp,
+      12,
+    );
+    expect(rows.every((row) => row.recorded_at === day.recordedAt)).toBe(true);
+  });
+
   it('journals zero CFD carry when no carry rates are wired', () => {
     const db = seededStore();
     const books = openBooks(db);
     books.applyFill('debate/primary', fill({ venue: 'saxo_cfd_usd', side: 'sell', qty: 1 }));
     const day = books.markDay('debate/primary', '2026-09-25', () => 100, 1);
     expect(day).toMatchObject({ cfdFinancingAccrualGbp: 0, cfdBorrowAccrualGbp: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM v2_cfd_carry').get()).toEqual({ n: 0 });
   });
 
   it('steps size down as a losing fill sequence crosses the loss-budget thresholds and halts at the third', () => {

@@ -22,6 +22,13 @@ describe('parseTaxQuery', () => {
     });
   });
 
+  it('takes the CFD log as its own CSV format', () => {
+    expect(parseTaxQuery(new URLSearchParams('format=cfd-csv'))).toEqual({
+      ok: true,
+      query: { year: null, format: 'cfd-csv' },
+    });
+  });
+
   it.each([
     ['year=26', 'year is invalid'],
     ['year=1999', 'year is invalid'],

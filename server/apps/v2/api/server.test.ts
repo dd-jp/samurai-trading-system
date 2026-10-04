@@ -334,6 +334,7 @@ describe('GET /api/v2/evidence, /api/v2/reconcile and /api/v2/tax', () => {
       year: 2025,
       years: [],
       disposals: { status: 'empty' },
+      cfd_disposals: { status: 'empty' },
     });
     const current = await fetch(`${url}/api/v2/tax`, { headers: AUTH });
     expect(await current.json()).toMatchObject({ year: 2026 });
@@ -353,6 +354,11 @@ describe('GET /api/v2/evidence, /api/v2/reconcile and /api/v2/tax', () => {
     expect(csv.headers.get('cache-control')).toBe('no-store');
     expect(csv.headers.get('x-content-type-options')).toBe('nosniff');
     expect((await csv.text()).split('\n')[0]).toMatch(/^disposal_date,instrument,venue,qty,/);
+    const cfd = await fetch(`${url}/api/v2/tax?year=2026&format=cfd-csv`, { headers: AUTH });
+    expect(cfd.headers.get('content-disposition')).toBe(
+      'attachment; filename="samurai-tax-cfd-2026-27.csv"',
+    );
+    expect((await cfd.text()).split('\n')[0]).toMatch(/^close_date,open_date,instrument,/);
     const unauthorised = await fetch(`${url}/api/v2/tax?format=csv`);
     expect(unauthorised.status).toBe(401);
   });
