@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  guardedStore,
-  migratedMemoryStore,
-  type StoreHandle,
-} from '../../../shared/store/index.js';
+import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { ControlStore } from '../risk/index.js';
 import { CONTROL_MIN_INTERVAL_MS, ControlWriter, parseControlRequest } from './control-writer.js';
 

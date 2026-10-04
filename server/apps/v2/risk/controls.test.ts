@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { migratedMemoryStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { ControlStore } from './controls.js';
 
 function store() {

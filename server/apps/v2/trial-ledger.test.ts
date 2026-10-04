@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { migratedMemoryStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { main, researchStorePath, sessionBLedger, TrialLedger, trialHash } from './trial-ledger.js';
 
 const clock = new SimulatedClock(new Date('2026-09-26T08:00:00.000Z'));

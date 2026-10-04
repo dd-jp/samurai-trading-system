@@ -11,12 +11,8 @@ import type {
 } from '../../../shared/debate/index.js';
 import type { DailyBar } from '../../../shared/index.js';
 import { type LogEntry, SimulatedClock } from '../../../shared/index.js';
-import {
-  guardedStore,
-  migratedMemoryStore,
-  openSharedStore,
-  type StoreHandle,
-} from '../../../shared/store/index.js';
+import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { JournalReader } from '../api/journal-reader.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../execution/alpaca/alpaca-client.js';
 import { composeV2Root, type V2Root, type V2RootOptions } from '../index.js';

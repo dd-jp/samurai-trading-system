@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { migratedMemoryStore, type StoreHandle } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { EvidenceReader } from './api/evidence.js';
 import { readBrokerOrders } from './report-cost-fidelity.js';
 

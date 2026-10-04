@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  guardedStore,
-  migratedMemoryStore,
-  type StoreHandle,
-} from '../../../shared/store/index.js';
+import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { CommandLog } from './command-log.js';
 
 const HANDLED_AT = new Date('2026-09-29T10:00:05.000Z');

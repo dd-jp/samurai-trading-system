@@ -12,7 +12,8 @@ import {
   SimulatedClock,
   toBrokerFillId,
 } from '../../shared/index.js';
-import { migratedMemoryStore, type StoreHandle } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { severityOf } from './alerts.js';
 import { type CycleComposition, composeCycle } from './compose.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';

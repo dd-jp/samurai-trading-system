@@ -2,7 +2,8 @@ import BetterSqlite3 from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
-import { migratedMemoryStore, type StoreHandle } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { Journal } from '../journal/index.js';
 import { parseTaxQuery, RECONCILE_RUNS_SHOWN, ReconcileReader } from './records.js';
 

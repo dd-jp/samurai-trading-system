@@ -1,23 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
-import {
-  inMemoryCopyOf,
-  openReadOnlyStore,
-  openSharedStore,
-  type StoreHandle,
-} from '../../shared/store/index.js';
+import { openReadOnlyStore, type StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { main, readJournalledEntries, reportEntryOffsets } from './report-entry-offsets.js';
 
 const dirs: string[] = [];
-let migrated: StoreHandle;
-
-beforeAll(() => {
-  migrated = openSharedStore(':memory:');
-});
-
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), 'entry-offsets-'));
   dirs.push(dir);
@@ -28,10 +18,8 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-afterAll(() => migrated.close());
-
 function journal(rows: readonly [string, string, string, string, string, string][]) {
-  const db = inMemoryCopyOf(migrated);
+  const db = migratedMemoryStore();
   const insert = db.prepare(
     `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
        leg, side, dry_run, outcome, payload, recorded_at)

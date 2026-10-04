@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { JournalledFill, OrderOutcome } from '../../../../contracts/index.js';
 import { V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
-import { migratedMemoryStore, type StoreHandle } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { Journal } from '../journal/index.js';
 import { dayRateOf, TaxReader, taxCsv, taxYearLabel } from './tax.js';
 

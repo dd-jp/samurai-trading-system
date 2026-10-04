@@ -6,7 +6,7 @@ import type {
 } from '../../../contracts/index.js';
 import type { LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { migratedMemoryStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { CASH_ACTIVITY_LOOKBACK_DAYS, readBrokerCashActivities } from './cash-activities.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 

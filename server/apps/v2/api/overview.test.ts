@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
-import { migratedMemoryStore, type StoreHandle } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { BarsMarketData, type MarkSource } from '../data/index.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';

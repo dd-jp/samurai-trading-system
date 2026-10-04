@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  guardedStore,
-  migratedMemoryStore,
-  type StoreHandle,
-} from '../../../shared/store/index.js';
+import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { parseSignalPayload, type SignalPayload } from './payload.js';
 import { payloadDigest, SIGNAL_LIST_MAX, SignalStore } from './store.js';
 import type { SignalWindow } from './window.js';

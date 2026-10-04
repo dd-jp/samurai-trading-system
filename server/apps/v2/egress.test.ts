@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import type { DailyBar, LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { migratedMemoryStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import type {
   AlpacaAccount,
   AlpacaBrokerClient,

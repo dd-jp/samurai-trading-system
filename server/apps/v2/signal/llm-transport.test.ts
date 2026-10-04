@@ -11,7 +11,7 @@ import {
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { NousAccountInFlightGate, NousApiError } from '../../../shared/llm/index.js';
-import { migratedMemoryStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { NousPinnedTransport } from './llm-transport.js';
 import { DEEPSEEK_V4_PRO_PIN, JUDGE_PIN, type ModelPin, SONNET_5_PIN } from './models.js';
 import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';

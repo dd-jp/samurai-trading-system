@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SimulatedClock } from '../../../shared/index.js';
-import { migratedMemoryStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { CapitalConfigError, CapitalConfigStore } from './capital-config.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));

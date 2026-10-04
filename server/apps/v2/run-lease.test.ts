@@ -2,12 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  migratedMemoryStore,
-  migratedTemplate,
-  openSharedStore,
-  type StoreHandle,
-} from '../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore, migratedTemplate } from '../../shared/store/migrated-template.js';
 import {
   type LeaseWait,
   pidAlive,

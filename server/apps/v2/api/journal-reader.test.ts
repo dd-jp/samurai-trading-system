@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JournalWire, SleeveAction, SleeveDecision } from '../../../../contracts/index.js';
-import { migratedMemoryStore, type StoreHandle } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { Journal } from '../journal/journal.js';
 import { CFD_ENTRY_GATES } from '../signal/index.js';
 import {

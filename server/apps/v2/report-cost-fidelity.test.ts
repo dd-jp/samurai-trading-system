@@ -11,11 +11,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MarketData } from '../../../contracts/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
-import {
-  migratedMemoryStore,
-  openReadOnlyStore,
-  type StoreHandle,
-} from '../../shared/store/index.js';
+import { openReadOnlyStore, type StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import {
   BarsMarketData,
   type BarsSource,

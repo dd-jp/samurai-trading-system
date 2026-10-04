@@ -33,7 +33,8 @@ import {
   SimulatedClock,
   toBrokerFillId,
 } from '../../shared/index.js';
-import { migratedMemoryStore, type StoreHandle } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import * as cycleModule from './cycle.js';
 import {

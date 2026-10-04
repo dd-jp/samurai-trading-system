@@ -1,4 +1,5 @@
-import { guardedStore, migratedMemoryStore } from '../../../shared/store/index.js';
+import { guardedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { type NewsRecord, SqliteNewsLedger } from './news-ledger.js';
 
 function row(overrides: Partial<NewsRecord> = {}): NewsRecord {

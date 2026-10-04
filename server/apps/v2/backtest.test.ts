@@ -7,7 +7,7 @@ import type {
 } from '../../../contracts/index.js';
 import type { BarSeries, DailyBar, LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { migratedMemoryStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import {
   type BacktestInput,
   type BacktestTrial,

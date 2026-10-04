@@ -4,11 +4,8 @@ import { join } from 'node:path';
 import type { NativeBracketRequest } from '../../../../shared/index.js';
 import { type Clock, TokenBucket, toBrokerFillId } from '../../../../shared/index.js';
 import { recordingLogger } from '../../../../shared/recording-logger.js';
-import {
-  migratedMemoryStore,
-  openSharedStore,
-  type StoreHandle,
-} from '../../../../shared/store/index.js';
+import { openSharedStore, type StoreHandle } from '../../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../../shared/store/migrated-template.js';
 import { AlpacaBrokerAdapter } from '../alpaca/alpaca-adapter.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../alpaca/alpaca-client.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../alpaca/unpriced-fill-alert.js';

@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JournalledFill } from '../../../contracts/index.js';
 import type { Logger } from '../../shared/index.js';
-import { migratedMemoryStore, type StoreHandle } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { reloadingFx } from './api/main.js';
 import { TaxReader } from './api/tax.js';
 import {

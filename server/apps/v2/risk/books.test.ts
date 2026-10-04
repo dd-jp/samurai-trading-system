@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BookFill, Sleeve, SleeveSpec } from '../../../../contracts/index.js';
 import { SimulatedClock, saxoCustodyAccrual } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
-import { migratedMemoryStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { bookSpecsFor } from './allocation.js';
 import { PaperBooks } from './books.js';
 import { CapitalConfigStore } from './capital-config.js';

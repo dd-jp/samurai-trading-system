@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DailyBar } from '../../../shared/index.js';
-import { migratedMemoryStore, type StoreHandle } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { BarsMarketData, type LastBar, type MarkSource } from '../data/index.js';
 import { PositionsPanel, readHoldings } from './positions.js';
 

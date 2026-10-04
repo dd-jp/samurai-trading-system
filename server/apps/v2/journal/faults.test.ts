@@ -7,7 +7,7 @@ import type {
 import type { LogEntry } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
-import { migratedMemoryStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import {
   countedFaultFreeDays,
   FAULT_KINDS,

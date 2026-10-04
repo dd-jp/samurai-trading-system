@@ -18,12 +18,8 @@ import {
 import type { DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import {
-  guardedStore,
-  migratedMemoryStore,
-  openReadOnlyStore,
-  openSharedStore,
-} from '../../shared/store/index.js';
+import { guardedStore, openReadOnlyStore, openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import type { NewsSource, VenueSessionGate } from './data/index.js';
 import { AlpacaNewsSource, MarketauxNewsSource, SqliteNewsLedger } from './data/index.js';
 import { composeV2Root } from './index.js';

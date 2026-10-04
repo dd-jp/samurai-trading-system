@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { migratedMemoryStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { createBrokerAccess, type OrderExecutorOptions } from './create-executor.js';
 import type { FillPricing } from './simulated-costs.js';
 

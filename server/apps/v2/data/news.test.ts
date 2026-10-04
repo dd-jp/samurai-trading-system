@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AlpacaNewsArticle } from '../../../providers/news/sources/alpaca-news-client.js';
-import { guardedStore, migratedMemoryStore } from '../../../shared/store/index.js';
+import { guardedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { journalledNewsSource } from './journalled-news.js';
 import {
   ALPACA_NEWS_PROVIDER,

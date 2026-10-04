@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { SimulatedClock } from '../../shared/index.js';
-import { migratedMemoryStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { V2_STORE_PATH } from './index.js';
 import { applyCapitalCommand, CAPITAL_USAGE, main, parseCapitalArgs } from './set-capital.js';
 

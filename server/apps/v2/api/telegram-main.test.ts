@@ -6,11 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import type { LogEntry } from '../../../shared/index.js';
-import {
-  migratedTemplate,
-  openMigratedStore,
-  type StoreHandle,
-} from '../../../shared/store/index.js';
+import { openMigratedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedTemplate } from '../../../shared/store/migrated-template.js';
 import { FX_SNAPSHOT_PATH } from '../data/index.js';
 import { FX_PATH, V2_DRY_RUN_STORE_PATH, V2_STORE_PATH } from '../index.js';
 import { ControlStore } from '../risk/index.js';

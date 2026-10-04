@@ -9,7 +9,7 @@ import type {
   SleeveSpec,
 } from '../../../contracts/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { migratedMemoryStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { type CycleCompositionOptions, composeCycle } from './compose.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { CapitalConfigStore } from './risk/index.js';

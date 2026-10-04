@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { V2OverviewWire } from '../../../../contracts/index.js';
-import {
-  guardedStore,
-  migratedMemoryStore,
-  type StoreHandle,
-} from '../../../shared/store/index.js';
+import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { BarsMarketData, type MarkSource } from '../data/index.js';
 import { ControlStore } from '../risk/index.js';
 import { CommandLog } from './command-log.js';

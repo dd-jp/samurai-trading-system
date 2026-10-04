@@ -1,5 +1,4 @@
 export { runMigrations } from './migrate.js';
-export { migratedMemoryStore, migratedTemplate } from './migrated-template.js';
 export {
   inMemoryCopyOf,
   openMigratedStore,
