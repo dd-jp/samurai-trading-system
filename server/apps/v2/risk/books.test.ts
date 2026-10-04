@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BookFill, Sleeve, SleeveSpec } from '../../../../contracts/index.js';
 import { SimulatedClock, saxoCustodyAccrual } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
-import { openSharedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/index.js';
 import { bookSpecsFor } from './allocation.js';
 import { PaperBooks } from './books.js';
 import { CapitalConfigStore } from './capital-config.js';
@@ -35,7 +35,7 @@ const DEBATE_SPEC: SleeveSpec = {
 const DEBATE: readonly Pick<Sleeve, 'id' | 'spec'>[] = [{ id: 'debate', spec: DEBATE_SPEC }];
 
 function seededStore(): StoreHandle {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   const capital = new CapitalConfigStore(db, clock);
   for (const year of [2025, 2026, 2027]) capital.setYear(year, 1_000, 1_500);
   return db;
@@ -472,7 +472,7 @@ describe('PaperBooks', () => {
   });
 
   it('seeds each sleeve at its share and steps a book against that share of the loss cap', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     new CapitalConfigStore(db, clock).setYear(2026, 2_000, 1_500);
     const books = openBooks(db, '2026-09-25', [
       { id: 'debate', spec: { ...DEBATE_SPEC, capitalShare: 0.3 } },
@@ -516,7 +516,7 @@ describe('PaperBooks', () => {
       { id: 'debate', spec: { ...DEBATE_SPEC, capitalShare: 0.3 } },
     ];
     const tenThousand = (openingDate = '2026-09-24') => {
-      const db = openSharedStore(':memory:');
+      const db = migratedMemoryStore();
       new CapitalConfigStore(db, clock).setYear(2026, 10_000, 1_500);
       const books = openBooks(db, openingDate, SLEEVES);
       for (const id of ['signals/primary', 'debate/primary']) {
@@ -676,7 +676,7 @@ describe('PaperBooks', () => {
   });
 
   it("opens no book before a capital config is in force, then seeds books at that year's start capital", () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     expect(openBooks(db).ids()).toEqual([]);
     const count = db.prepare('SELECT COUNT(*) AS n FROM v2_books').get() as { n: number };
     expect(count.n).toBe(0);
@@ -704,7 +704,7 @@ describe('PaperBooks', () => {
   });
 
   it('refuses to mark a day no capital config covers', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     new CapitalConfigStore(db, clock).setYear(2026, 1_000, 1_500);
     const books = openBooks(db);
     expect(() => books.markDay('debate/primary', '2025-12-31', flat, 0)).toThrow(/capital/);

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../../providers/calendar/index.js';
 import type {
@@ -13,7 +13,7 @@ import type { DailyBar } from '../../../shared/index.js';
 import { type LogEntry, SimulatedClock } from '../../../shared/index.js';
 import {
   guardedStore,
-  inMemoryCopyOf,
+  migratedMemoryStore,
   openSharedStore,
   type StoreHandle,
 } from '../../../shared/store/index.js';
@@ -47,14 +47,6 @@ interface Fixtures {
 const dirs: string[] = [];
 const handles: StoreHandle[] = [];
 const roots: V2Root[] = [];
-let migrated: StoreHandle;
-
-beforeAll(() => {
-  migrated = openSharedStore(':memory:');
-});
-
-afterAll(() => migrated.close());
-
 afterEach(() => {
   for (const root of roots.splice(0)) root.close();
   for (const handle of handles.splice(0)) handle.close();
@@ -104,7 +96,7 @@ async function writeFixtures(capital: boolean = true): Promise<Fixtures> {
   const spreadsPath = join(directory, 'spreads.csv');
   writeFileSync(spreadsPath, 'symbol,sessions,median_half_spread_bps\n');
   const storePath = join(directory, 'v2.sqlite');
-  const db = inMemoryCopyOf(migrated);
+  const db = migratedMemoryStore();
   if (capital) {
     new CapitalConfigStore(db, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
       2026,

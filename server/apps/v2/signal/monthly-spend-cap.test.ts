@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SimulatedClock } from '../../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore, type StoreHandle } from '../../../shared/store/index.js';
 import {
   LLM_MONTHLY_BUDGET_USD,
   SqliteMonthlySpendCap,
@@ -29,7 +29,7 @@ describe('SqliteMonthlySpendCap', () => {
   });
 
   it('counts only this month and refuses at the budget', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const cap = new SqliteMonthlySpendCap(db, new SimulatedClock(now), 30);
     spend(db, 100, '2026-08-31T23:59:59.000Z');
     expect(cap.check()).toEqual({ admitted: true, spent_usd: 0, budget_usd: 30 });
@@ -46,7 +46,7 @@ describe('SqliteMonthlySpendCap', () => {
   });
 
   it('fails closed on a read fault and on a corrupt ledger', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const cap = new SqliteMonthlySpendCap(db, new SimulatedClock(now));
     db.prepare(
       "INSERT INTO llm_spend (trace_id, stage, model, input_tokens, output_tokens, cost_usd, latency_ms, timestamp) VALUES ('t','debate','m',1,1,?,1,'2026-09-02T00:00:00.000Z')",
@@ -68,7 +68,7 @@ describe('SqliteMonthlySpendCap', () => {
   });
 
   it('rejects a non-positive budget', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     expect(() => new SqliteMonthlySpendCap(db, new SimulatedClock(now), 0)).toThrow(/positive/);
   });
 });

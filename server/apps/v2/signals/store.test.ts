@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import {
+  guardedStore,
+  migratedMemoryStore,
+  type StoreHandle,
+} from '../../../shared/store/index.js';
 import { parseSignalPayload, type SignalPayload } from './payload.js';
 import { payloadDigest, SIGNAL_LIST_MAX, SignalStore } from './store.js';
 import type { SignalWindow } from './window.js';
@@ -25,7 +29,7 @@ let now: Date;
 let store: SignalStore;
 
 beforeEach(() => {
-  db = openSharedStore(':memory:');
+  db = migratedMemoryStore();
   now = new Date('2026-09-30T12:00:01.000Z');
   store = new SignalStore(guardedStore(db, 'v2', { enabled: true }), { now: () => now });
 });

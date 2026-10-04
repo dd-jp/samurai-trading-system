@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { JournalWire, SleeveAction, SleeveDecision } from '../../../../contracts/index.js';
-import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore, type StoreHandle } from '../../../shared/store/index.js';
 import { Journal } from '../journal/journal.js';
 import { CFD_ENTRY_GATES } from '../signal/index.js';
 import {
@@ -29,7 +29,7 @@ let journal: Journal;
 afterEach(() => db?.close());
 
 function open(): void {
-  db = openSharedStore(':memory:');
+  db = migratedMemoryStore();
   journal = new Journal(db, clock);
   for (const [bookId, variant] of [
     ['debate/primary', 'primary'],

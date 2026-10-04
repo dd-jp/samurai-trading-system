@@ -3,12 +3,12 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../../providers/bar-store/index.js';
 import type { LogEntry } from '../../../shared/index.js';
 import {
+  migratedTemplate,
   openMigratedStore,
-  openSharedStore,
   type StoreHandle,
 } from '../../../shared/store/index.js';
 import { FX_SNAPSHOT_PATH } from '../data/index.js';
@@ -53,14 +53,6 @@ const OWNER = 424242;
 const STRANGER = 777;
 const NOW = new Date('2026-09-29T10:00:00.000Z');
 const dirs: string[] = [];
-let migrated: StoreHandle;
-
-beforeAll(() => {
-  migrated = openSharedStore(':memory:');
-});
-
-afterAll(() => migrated.close());
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -75,7 +67,7 @@ function migratedStore(): string {
   const dir = mkdtempSync(join(tmpdir(), 'v2-telegram-'));
   dirs.push(dir);
   const path = join(dir, 'v2.sqlite');
-  writeFileSync(path, migrated.serialize());
+  writeFileSync(path, migratedTemplate().serialize());
   return path;
 }
 

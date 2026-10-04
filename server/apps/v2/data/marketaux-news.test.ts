@@ -1,5 +1,5 @@
 import type { LogEntry } from '../../../shared/index.js';
-import { guardedStore, openSharedStore } from '../../../shared/store/index.js';
+import { guardedStore, migratedMemoryStore } from '../../../shared/store/index.js';
 import {
   type MarketauxArticle,
   type MarketauxFetch,
@@ -68,7 +68,7 @@ function build(
   client: MarketauxFetch | undefined,
   options: { ceiling?: number; logs?: LogEntry[] } = {},
 ) {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   const ledger = new SqliteNewsLedger(guardedStore(db, 'v2', { enabled: true }));
   const source = new MarketauxNewsSource({
     client,
@@ -417,7 +417,7 @@ describe('MarketauxNewsSource', () => {
   });
 
   it('counts spent requests across sources sharing a store and across failures', async () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const ledger = new SqliteNewsLedger(guardedStore(db, 'v2', { enabled: true }));
     const failing = scripted({ A: new MarketauxRequestError('http_500') });
     const first = new MarketauxNewsSource({ client: failing, ledger, ceiling: 2 });
@@ -566,7 +566,7 @@ describe('MarketauxNewsSource', () => {
     });
 
     it('works without a logger', async () => {
-      const db = openSharedStore(':memory:');
+      const db = migratedMemoryStore();
       const ledger = new SqliteNewsLedger(guardedStore(db, 'v2', { enabled: true }));
       const source = new MarketauxNewsSource({ client: scripted({}), ledger });
       await source.headlines('AZN', TRADING_DATE, NOW);

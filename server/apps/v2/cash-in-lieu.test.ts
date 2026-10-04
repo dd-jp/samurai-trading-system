@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BrokerCashInLieu, BrokerCashInLieuReader } from '../../../contracts/index.js';
 import type { LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore, type StoreHandle } from '../../shared/store/index.js';
 import { CASH_IN_LIEU_LOOKBACK_DAYS, readBrokerCashInLieu } from './cash-in-lieu.js';
 import { Journal } from './journal/index.js';
 
@@ -26,7 +26,7 @@ function storeWithEstimate(
   outcome = 'submitted',
   venue = 'alpaca',
 ): StoreHandle {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   db.prepare(
     `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
        leg, side, dry_run, outcome, payload, recorded_at)

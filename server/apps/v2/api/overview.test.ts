@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
-import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore, type StoreHandle } from '../../../shared/store/index.js';
 import { BarsMarketData, type MarkSource } from '../data/index.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
@@ -105,7 +105,7 @@ function reader(): OverviewReader {
 
 describe('OverviewReader on an empty store', () => {
   it('serves every panel, empty or owned, never a missing field', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     expect(await reader().read()).toEqual({
       contract_version: V2_CONTRACT_VERSION,
       generated_at: NOW.toISOString(),
@@ -134,7 +134,7 @@ describe('OverviewReader on an empty store', () => {
 
 describe('OverviewReader positions (P3)', () => {
   it('still serves the loss budget and control when every mark read fails', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital();
     seedBook('debate/primary', 'primary');
     seedDay('debate/primary', '2026-10-05', { equity: 1_000, ytdLoss: 0 });
@@ -175,7 +175,7 @@ describe('OverviewReader loss budget (P1)', () => {
   }
 
   it('headlines the primary books only, against marks computed from the configured cap', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedTwoDays();
     expect((await reader().read()).loss_budget).toEqual({
       status: 'fed',
@@ -220,7 +220,7 @@ describe('OverviewReader loss budget (P1)', () => {
   });
 
   it("scales a registered sleeve's cap, steps and daily cap by its capital share; an unregistered sleeve gets none", async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital(2_000, 1_500);
     seedBook('debate/primary', 'primary', 1_000, 'debate');
     seedBook('trend/primary', 'primary', 1_000, 'trend');
@@ -241,7 +241,7 @@ describe('OverviewReader loss budget (P1)', () => {
   });
 
   it('rescales a registered sleeve against a non-default cap (D8)', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital(3_000, 900);
     seedBook('debate/primary', 'primary', 1_000);
     seedDay('debate/primary', '2026-10-05', { equity: 990, ytdLoss: 10 });
@@ -252,7 +252,7 @@ describe('OverviewReader loss budget (P1)', () => {
   });
 
   it('sums every primary book, and a first day loses nothing, as the cycle marks it', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital(3_000, 900);
     seedBook('debate/primary', 'primary', 1_000);
     seedBook('trend/primary', 'primary', 500);
@@ -269,7 +269,7 @@ describe('OverviewReader loss budget (P1)', () => {
   });
 
   it('headlines the latest date whichever book sorts last', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital();
     seedBook('debate/primary', 'primary');
     seedBook('trend/primary', 'primary');
@@ -283,7 +283,7 @@ describe('OverviewReader loss budget (P1)', () => {
   });
 
   it('shows each book at its own latest day, so a lagging book keeps its date', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital();
     seedBook('debate/primary', 'primary');
     seedBook('trend/primary', 'primary');
@@ -304,7 +304,7 @@ describe('OverviewReader loss budget (P1)', () => {
   });
 
   it("carries last year's capital into a new year, flagged stale until the new year is set", async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital(2_000, 1_500, 2026);
     seedBook('debate/primary', 'primary');
     seedDay('debate/primary', '2027-01-04', { equity: 1_000, ytdLoss: 0 });
@@ -323,7 +323,7 @@ describe('OverviewReader loss budget (P1)', () => {
   });
 
   it('says who owns the capital when the year has none configured', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary');
     seedDay('debate/primary', '2026-10-05', { equity: 1_000, ytdLoss: 0 });
     expect((await reader().read()).loss_budget).toEqual({
@@ -336,7 +336,7 @@ describe('OverviewReader loss budget (P1)', () => {
 
 describe('OverviewReader control (P2)', () => {
   it('shows the manual control in force with its history, newest first', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedControl('pause', 'check fills', '2026-10-05T09:00:00.000Z');
     seedControl('halt', 'news shock', '2026-10-05T10:00:00.000Z');
     const control = (await reader().read()).control;
@@ -352,7 +352,7 @@ describe('OverviewReader control (P2)', () => {
   });
 
   it('shows paused, and nothing in force after a resume', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedControl('pause', 'p', '2026-10-05T09:00:00.000Z');
     expect((await reader().read()).control).toMatchObject({
       state: 'paused',
@@ -363,7 +363,7 @@ describe('OverviewReader control (P2)', () => {
   });
 
   it('keeps twenty rows of history', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     for (let minute = 10; minute < 35; minute += 1) {
       seedControl('pause', `p${minute}`, `2026-10-05T09:${minute}:00.000Z`);
     }
@@ -373,7 +373,7 @@ describe('OverviewReader control (P2)', () => {
   });
 
   it('shows the loss-budget halt over any manual state once every primary book is halted', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital();
     seedBook('debate/primary', 'primary');
     seedBook('debate/no-macro-gate', 'no-macro-gate');
@@ -389,7 +389,7 @@ describe('OverviewReader control (P2)', () => {
   });
 
   it('lists a halted primary book without calling the account halted while another trades', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital();
     seedBook('debate/primary', 'primary');
     seedBook('trend/primary', 'primary');
@@ -402,7 +402,7 @@ describe('OverviewReader control (P2)', () => {
   });
 
   it('never calls a halted shadow book a loss-budget halt', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedCapital();
     seedBook('debate/primary', 'primary');
     seedBook('debate/no-veto', 'no-veto');
@@ -417,7 +417,7 @@ describe('OverviewReader control (P2)', () => {
 
 describe('OverviewReader decisions (P4)', () => {
   it("shows the last cycle's primary decisions and marks vetoes", async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary');
     seedBook('debate/no-veto', 'no-veto');
     seedDecision('debate/primary', '2026-10-02', 'AAPL', 'enter_long', 'old');
@@ -447,7 +447,7 @@ describe('OverviewReader decisions (P4)', () => {
   });
 
   it("shows each primary book's own latest decisions, so a lagging book is not hidden", async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary');
     seedBook('trend/primary', 'primary');
     seedDecision('debate/primary', '2026-10-01', 'AAPL', 'enter_long', 'old');
@@ -463,7 +463,7 @@ describe('OverviewReader decisions (P4)', () => {
   });
 
   it('never calls a non-skip with a vetoed-looking reason a veto', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary');
     seedDecision('debate/primary', '2026-10-05', 'AAPL', 'none', 'vetoed: stale');
     expect((await reader().read()).decisions).toMatchObject({ decisions: [{ vetoed: false }] });
@@ -472,7 +472,7 @@ describe('OverviewReader decisions (P4)', () => {
 
 describe('OverviewReader LLM spend (P11)', () => {
   it('totals this month per model and per day, and says when the cap has stopped calls', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedSpend('opus', 5, '2026-09-30T23:59:59.000Z');
     seedSpend('sonnet', 2, '2026-10-01T08:00:00.000Z');
     seedSpend('opus', 20, '2026-10-01T09:00:00.000Z');
@@ -497,7 +497,7 @@ describe('OverviewReader LLM spend (P11)', () => {
   });
 
   it('serves a non-finite month total as null, with calls stopped', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedSpend('opus', 1e308, '2026-10-01T08:00:00.000Z');
     seedSpend('opus', 1e308, '2026-10-02T08:00:00.000Z');
     expect((await reader().read()).llm_spend).toMatchObject({
@@ -507,7 +507,7 @@ describe('OverviewReader LLM spend (P11)', () => {
   });
 
   it('orders models of equal spend by name', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedSpend('b', 1, '2026-10-01T08:00:00.000Z');
     seedSpend('a', 1, '2026-10-01T08:00:00.000Z');
     expect((await reader().read()).llm_spend).toMatchObject({
@@ -521,7 +521,7 @@ describe('OverviewReader LLM spend (P11)', () => {
 
 describe('OverviewReader heartbeat (P14)', () => {
   it('reports the most recently recorded cycle', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary');
     seedDay('debate/primary', '2026-10-02', { equity: 1_000, ytdLoss: 0 });
     seedDay('debate/primary', '2026-10-05', {
@@ -537,7 +537,7 @@ describe('OverviewReader heartbeat (P14)', () => {
   });
 
   it('serves the next due day after the newest recorded cycle, skipping a weekend', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary');
     seedDay('debate/primary', '2026-10-02', { equity: 1_000, ytdLoss: 0 });
     expect((await reader().read()).heartbeat.next_due).toEqual({
@@ -547,7 +547,7 @@ describe('OverviewReader heartbeat (P14)', () => {
   });
 
   it('skips a day both venues are closed', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary');
     seedDay('debate/primary', '2026-12-24', { equity: 1_000, ytdLoss: 0 });
     expect((await reader().read()).heartbeat.next_due).toEqual({
@@ -557,7 +557,7 @@ describe('OverviewReader heartbeat (P14)', () => {
   });
 
   it('counts a venues-closed skip as the newest cycle', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary');
     seedDay('debate/primary', '2026-10-02', { equity: 1_000, ytdLoss: 0 });
     db.prepare(
@@ -571,7 +571,7 @@ describe('OverviewReader heartbeat (P14)', () => {
   });
 
   it('reports the newest journalled ping with its outcome', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     const ping = db.prepare('INSERT INTO v2_heartbeat_pings (outcome, pinged_at) VALUES (?, ?)');
     ping.run('success', '2026-10-05T21:41:00.000Z');
     ping.run('fail', '2026-10-06T21:41:00.000Z');
@@ -583,7 +583,7 @@ describe('OverviewReader heartbeat (P14)', () => {
   });
 
   it('carries the dry-run mode through', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     expect((await new OverviewReader(db, clock, 'dry-run', positionsPanel()).read()).mode).toBe(
       'dry-run',
     );

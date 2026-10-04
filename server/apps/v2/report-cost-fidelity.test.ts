@@ -8,13 +8,12 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { MarketData } from '../../../contracts/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import {
-  inMemoryCopyOf,
+  migratedMemoryStore,
   openReadOnlyStore,
-  openSharedStore,
   type StoreHandle,
 } from '../../shared/store/index.js';
 import {
@@ -32,14 +31,6 @@ const YEAR_START_GBPUSD = new BarsMarketData(
 ).gbpUsdAtYearStart(2026);
 
 const dirs: string[] = [];
-let migrated: StoreHandle;
-
-beforeAll(() => {
-  migrated = openSharedStore(':memory:');
-});
-
-afterAll(() => migrated.close());
-
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), 'cost-fidelity-'));
   dirs.push(dir);
@@ -68,7 +59,7 @@ type OrderSeed = { readonly id: string } & Partial<typeof ORDER_DEFAULTS>;
 type FillSeed = { readonly id: string; readonly order: string } & Partial<typeof FILL_DEFAULTS>;
 
 function journal(orders: readonly OrderSeed[], fills: readonly FillSeed[]) {
-  const db = inMemoryCopyOf(migrated);
+  const db = migratedMemoryStore();
   const book = db.prepare(
     `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
      VALUES (?, 'debate', ?, 600, 600, '2026-09-01T00:00:00Z')`,

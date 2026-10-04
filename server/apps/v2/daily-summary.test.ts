@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/index.js';
 import type { CycleReport } from './cycle.js';
 import {
   type BookSummary,
@@ -136,7 +136,7 @@ describe('readDailySummary', () => {
   let db: StoreHandle;
 
   beforeEach(() => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
   });
 
   afterEach(() => {
@@ -350,7 +350,7 @@ describe('pushDailySummary', () => {
   let sent: string[];
 
   beforeEach(() => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     logs = [];
     sent = [];
   });
@@ -406,6 +406,6 @@ describe('pushDailySummary', () => {
     expect(logs).toEqual([
       expect.objectContaining({ level: 'warn', event: 'v2_daily_summary_failed' }),
     ]);
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
   });
 });

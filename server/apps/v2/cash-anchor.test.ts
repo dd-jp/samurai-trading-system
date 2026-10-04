@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BrokerCashActivity, BrokerMode, Venue } from '../../../contracts/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore, type StoreHandle } from '../../shared/store/index.js';
 import {
   type AnchorCompare,
   anchorCashCheck,
@@ -28,7 +28,7 @@ interface Fill {
 }
 
 function store(): { db: StoreHandle; anchors: SqliteCashAnchors; fill: (fill: Fill) => void } {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   const fill = ({
     id,
     side,

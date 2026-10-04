@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { JournalledFill, OrderOutcome } from '../../../../contracts/index.js';
 import { V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
-import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore, type StoreHandle } from '../../../shared/store/index.js';
 import { Journal } from '../journal/index.js';
 import { dayRateOf, TaxReader, taxCsv, taxYearLabel } from './tax.js';
 
@@ -18,7 +18,7 @@ interface Seeded {
 }
 
 function seeded(): Seeded {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   return { db, journal: new Journal(db, clock) };
 }
 

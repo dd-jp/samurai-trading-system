@@ -33,7 +33,7 @@ import {
   SimulatedClock,
   toBrokerFillId,
 } from '../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore, type StoreHandle } from '../../shared/store/index.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import * as cycleModule from './cycle.js';
 import {
@@ -286,7 +286,7 @@ function harness(
   lossCapGbp = 1_500,
   secondSleeve?: Sleeve,
 ): Harness {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   const capital = new CapitalConfigStore(db, clock);
   for (const year of capitalYears) capital.setYear(year, 1_000, lossCapGbp);
   let controlKey = 0;

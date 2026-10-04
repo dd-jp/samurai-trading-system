@@ -6,7 +6,7 @@ import type {
 } from '../../../contracts/index.js';
 import type { LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/index.js';
 import { CASH_ACTIVITY_LOOKBACK_DAYS, readBrokerCashActivities } from './cash-activities.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 
@@ -29,7 +29,7 @@ function harness(
     runMode?: BrokerMode;
   } = {},
 ) {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   const anchors = new SqliteCashAnchors(
     db,
     new SimulatedClock(new Date('2026-10-07T07:00:00.000Z')),

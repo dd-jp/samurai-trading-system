@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { openSharedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/index.js';
 import { createBrokerAccess, type OrderExecutorOptions } from './create-executor.js';
 import type { FillPricing } from './simulated-costs.js';
 
@@ -10,7 +10,7 @@ function options(overrides: Partial<OrderExecutorOptions> = {}): OrderExecutorOp
   return {
     dryRun: false,
     pricing: PRICING,
-    db: openSharedStore(':memory:'),
+    db: migratedMemoryStore(),
     clock: CLOCK,
     logger: { log: () => undefined },
     ...overrides,

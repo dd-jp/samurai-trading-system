@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { openSharedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/index.js';
 import { ControlStore } from './controls.js';
 
 function store() {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   let key = 0;
   const insert = (action: string, reason = 'r', idempotencyKey?: string) => {
     key += 1;
