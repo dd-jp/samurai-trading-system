@@ -23,24 +23,32 @@ interface ScorableSentiment extends RawSentiment {
   confidence: number;
 }
 
-function isScorable(raw: RawSentiment): raw is ScorableSentiment {
+function isScorable(raw: unknown): raw is ScorableSentiment {
+  if (typeof raw !== 'object' || raw === null) return false;
+  const { headline, sentiment, confidence } = raw as RawSentiment;
   return (
-    typeof raw.headline === 'string' &&
-    raw.headline.trim() !== '' &&
-    (raw.sentiment === 1 || raw.sentiment === 0 || raw.sentiment === -1) &&
-    typeof raw.confidence === 'number' &&
-    Number.isFinite(raw.confidence)
+    typeof headline === 'string' &&
+    headline.trim() !== '' &&
+    (sentiment === 1 || sentiment === 0 || sentiment === -1) &&
+    typeof confidence === 'number' &&
+    Number.isFinite(confidence)
   );
 }
 
-function parseLenientJson(content: string): { items?: unknown } | undefined {
+function itemsFieldOf(parsed: unknown): unknown {
+  return typeof parsed === 'object' && parsed !== null
+    ? (parsed as { items?: unknown }).items
+    : undefined;
+}
+
+function parseLenientJson(content: string): unknown {
   try {
-    return JSON.parse(content) as { items?: unknown };
+    return JSON.parse(content) as unknown;
   } catch {
     const match = content.match(/\{[\s\S]*\}/);
     if (match === null) return undefined;
     try {
-      return JSON.parse(match[0]) as { items?: unknown };
+      return JSON.parse(match[0]) as unknown;
     } catch {
       return undefined;
     }
@@ -147,23 +155,18 @@ export class NousSentimentClient implements GrokSentimentClient {
   #parseItems(content: string, instrument: string, asOf: Date): IntelligenceItem[] {
     if (content.trim() === '') return [];
 
-    const parsed = parseLenientJson(content);
-    if (parsed === undefined || !Array.isArray(parsed.items)) return this.#unreadable(instrument);
+    const rawItems = itemsFieldOf(parseLenientJson(content));
+    if (!Array.isArray(rawItems)) return this.#unreadable(instrument);
 
     const items: IntelligenceItem[] = [];
-    for (const [index, raw] of parsed.items.slice(0, MAX_ITEMS).entries()) {
-      const item = this.#toItem(raw as RawSentiment, instrument, asOf, index);
+    for (const [index, raw] of rawItems.slice(0, MAX_ITEMS).entries()) {
+      const item = this.#toItem(raw, instrument, asOf, index);
       if (item !== null) items.push(item);
     }
     return items;
   }
 
-  #toItem(
-    raw: RawSentiment,
-    instrument: string,
-    asOf: Date,
-    index: number,
-  ): IntelligenceItem | null {
+  #toItem(raw: unknown, instrument: string, asOf: Date, index: number): IntelligenceItem | null {
     if (!isScorable(raw)) return null;
 
     return {

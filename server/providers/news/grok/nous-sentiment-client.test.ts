@@ -116,6 +116,21 @@ describe('NousSentimentClient', () => {
       expect(result.items).toEqual([]);
       expect(logger.entries).toHaveLength(1);
     });
+
+    it.each(['null', '42', '"items"', '[{"items":[]}]', 'true'])(
+      'reports the non-object JSON reply %s as unreadable rather than throwing (#2063)',
+      async (content) => {
+        const logger = recordingLogger();
+        stubContent(content);
+
+        const result = await client(logger).fetchSentiment('BTC-USD', AS_OF);
+
+        expect(result.items).toEqual([]);
+        expect(logger.entries.map((entry) => entry.event)).toEqual([
+          'sentiment_response_unparseable',
+        ]);
+      },
+    );
   });
 
   describe('field validation', () => {
@@ -141,6 +156,18 @@ describe('NousSentimentClient', () => {
       const result = await client().fetchSentiment('BTC-USD', AS_OF);
 
       expect(result.items).toEqual([]);
+    });
+
+    it('drops a null or non-object item rather than throwing (#2063)', async () => {
+      stubContent(
+        JSON.stringify({
+          items: [null, 3, 'x', { headline: 'good', sentiment: 1, confidence: 0.5 }],
+        }),
+      );
+
+      const result = await client().fetchSentiment('BTC-USD', AS_OF);
+
+      expect(result.items.map((item) => item.headline)).toEqual(['good']);
     });
 
     it('keeps the valid items when only some are malformed', async () => {
