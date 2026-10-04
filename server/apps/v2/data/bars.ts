@@ -49,17 +49,16 @@ export class ParquetBarsSource implements BarsSource {
   }
 }
 
-// Unions per-venue sources by symbol: alpaca tickers and LSE tidms are disjoint
-// namespaces, so the first source with a series for a symbol wins
+// A symbol held by more than one venue (TSCO is Tesco on the LSE and Tractor
+// Supply in the US) has no venue-free identity, so it is served from neither
 export class MultiVenueBarsSource implements BarsSource {
   constructor(private readonly sources: readonly BarsSource[]) {}
 
   load(symbol: string): BarSeries | undefined {
-    for (const source of this.sources) {
-      const series = source.load(symbol);
-      if (series !== undefined) return series;
-    }
-    return undefined;
+    const held = this.sources
+      .map((source) => source.load(symbol))
+      .filter((series) => series !== undefined);
+    return held.length === 1 ? held[0] : undefined;
   }
 }
 
