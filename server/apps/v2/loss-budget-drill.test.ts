@@ -19,12 +19,7 @@ import { addDays } from './data/index.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import { Journal } from './journal/index.js';
-import {
-  CapitalConfigStore,
-  ControlStore,
-  PaperBooks,
-  V2RiskGate,
-} from './risk/index.js';
+import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import { SleeveRegistry } from './signal/index.js';
 
 const START_CAPITAL_GBP = 10_000;
