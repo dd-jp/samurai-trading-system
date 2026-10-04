@@ -13,6 +13,7 @@ import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { type CycleComposition, composeCycle } from './compose.js';
 import { runCycle } from './cycle.js';
 import { addDays, bothVenuesClosed, TABLE_VENUE_SESSIONS } from './data/index.js';
+import { AlpacaBrokerProviderError } from './execution/alpaca/alpaca-broker-errors.js';
 import type {
   AlpacaAccount,
   AlpacaBracketOrderRequest,
@@ -82,7 +83,13 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
       this.rejectNextSubmit = undefined;
       if (rejection !== undefined) throw rejection;
       if (this.orders.some((order) => order.client_order_id === request.client_order_id)) {
-        throw new Error('422 client_order_id must be unique');
+        throw new AlpacaBrokerProviderError(
+          'Alpaca API error: 422 client_order_id must be unique (submitOrder)',
+          422,
+          '40010001',
+          'client_order_id must be unique',
+          'POST',
+        );
       }
       const id = `alp-${this.orders.length + 1}`;
       const leg = (suffix: string, type: 'limit' | 'stop', price: string) => ({
@@ -447,14 +454,23 @@ describe('Step 4b fault matrix (#1747)', () => {
 
   it('rejected order: journalled rejected, no position or reserved cash, ledgered, and reconcile stays clean', async () => {
     const subject = drill();
-    subject.broker.rejectNextSubmit = new Error('403 insufficient buying power');
+    subject.broker.rejectNextSubmit = new AlpacaBrokerProviderError(
+      'Alpaca API error: 403 insufficient buying power (submitOrder)',
+      403,
+      '40310000',
+      'insufficient buying power',
+      'POST',
+    );
     subject.decisions = [longEntry('AAPL')];
     const cash = subject.cycle.books.cash('debate/primary');
     const report = await subject.run('2026-09-28');
     expect(report).toMatchObject({ rejected_orders: 1, submitted_orders: 0 });
     expect(subject.cycle.journal.orderFor(AAPL_ENTRY)).toMatchObject({
       outcome: 'rejected',
-      payload: { detail: 'alpaca submitBracket failed (status unknown)' },
+      payload: {
+        detail:
+          'alpaca submitBracket failed (status 403, code 40310000): insufficient buying power',
+      },
     });
     expect(subject.cycle.books.position('debate/primary', 'AAPL')).toBeUndefined();
     expect(subject.cycle.books.cash('debate/primary')).toBe(cash);
