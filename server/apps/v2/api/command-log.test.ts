@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { CommandLog } from './command-log.js';
 
 const HANDLED_AT = new Date('2026-09-29T10:00:05.000Z');
@@ -10,7 +11,7 @@ let db: StoreHandle;
 afterEach(() => db?.close());
 
 function log(): CommandLog {
-  db = openSharedStore(':memory:');
+  db = migratedMemoryStore();
   return new CommandLog(guardedStore(db, 'telegram', { enabled: true }), { now: () => HANDLED_AT });
 }
 

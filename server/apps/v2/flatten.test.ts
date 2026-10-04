@@ -12,7 +12,8 @@ import {
   SimulatedClock,
   toBrokerFillId,
 } from '../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { severityOf } from './alerts.js';
 import { type CycleComposition, composeCycle } from './compose.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
@@ -141,7 +142,7 @@ afterEach(() => {
 });
 
 function newStore(): StoreHandle {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   opened.push(db);
   new CapitalConfigStore(db, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
     2026,

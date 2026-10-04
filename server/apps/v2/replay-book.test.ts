@@ -9,6 +9,7 @@ import type { AnthropicMessageRequest } from '../../shared/debate/index.js';
 import type { DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import type { VenueSessionGate } from './data/index.js';
 import { createBrokerAccess } from './execution/index.js';
 import { composeV2Root } from './index.js';
@@ -318,7 +319,7 @@ describe('rebuildBooks', () => {
   const sleeves = [{ id: 'debate', spec: DEBATE_SLEEVE_SPEC }];
 
   function journal(): BetterSqlite3.Database {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     new CapitalConfigStore(db, clock).setYear(2026, 2_000, 1_500);
     db.prepare(
       `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
@@ -403,7 +404,7 @@ describe('rebuildBooks', () => {
 
 describe('journalledDay', () => {
   it('takes the mode from the day orders, and from the rest of the store on a day with none', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     db.prepare(
       `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
        VALUES ('debate/primary', 'debate', 'primary', 600, 600, 'now')`,
@@ -427,7 +428,7 @@ describe('journalledDay', () => {
 describe('live-mode replay inputs (#2035)', () => {
   const DAY = '2026-10-05';
   function store() {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     db.exec(
       `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
          VALUES ('debate/primary', 'debate', 'primary', 600, 600, 'now');
@@ -623,14 +624,14 @@ describe('tradingDivergences rescales cutover (#2019)', () => {
   } as const;
 
   function stores(cutover: string | undefined) {
-    const journal = openSharedStore(':memory:');
+    const journal = migratedMemoryStore();
     journal.prepare('DELETE FROM schema_migrations WHERE version = 87').run();
     if (cutover !== undefined) {
       journal
         .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (87, ?)')
         .run(cutover);
     }
-    const replayed = openSharedStore(':memory:');
+    const replayed = migratedMemoryStore();
     replayed
       .prepare(
         `INSERT INTO v2_rescales (trading_date, book_id, instrument, source, ratio, anchor_date,
@@ -665,7 +666,7 @@ describe('tradingDivergences rescales cutover (#2019)', () => {
 
 describe('journalledSessions', () => {
   it('reads a late wake back from its sit-out refusal and asks the calendar otherwise', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     db.prepare(
       `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
        VALUES ('2026-09-30', 'entry', 'late_wake_entry_cutoff', '#1933',

@@ -9,7 +9,7 @@ import type {
   SleeveSpec,
 } from '../../../contracts/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { type CycleCompositionOptions, composeCycle } from './compose.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { CapitalConfigStore } from './risk/index.js';
@@ -50,7 +50,7 @@ const market: MarketData = {
 };
 
 function options(overrides: Partial<CycleCompositionOptions> = {}): CycleCompositionOptions {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   new CapitalConfigStore(db, clock).setYear(2026, 1_500, 1_500);
   return {
     db,

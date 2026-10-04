@@ -7,7 +7,7 @@ import type {
 import type { LogEntry } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
-import { openSharedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import {
   countedFaultFreeDays,
   FAULT_KINDS,
@@ -25,7 +25,7 @@ import { Journal } from './journal.js';
 const clock = new SimulatedClock(new Date('2026-10-01T07:30:00.000Z'));
 const NO_SKIP = () => false;
 
-function ledger(db: StoreHandle = openSharedStore(':memory:'), logs: LogEntry[] = []) {
+function ledger(db: StoreHandle = migratedMemoryStore(), logs: LogEntry[] = []) {
   return new FaultLedger(db, clock, { log: (entry) => logs.push(entry) });
 }
 
@@ -63,7 +63,7 @@ function control(db: StoreHandle, action: string, setAt: string): void {
 
 describe('FaultLedger', () => {
   it('records each fault kind once, however often the same fault is reported', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const faults = ledger(db);
     for (const kind of FAULT_KINDS) {
       faults.record(fault(kind));
@@ -75,7 +75,7 @@ describe('FaultLedger', () => {
   });
 
   it('keeps a second fault of one kind on another day or with another detail', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const faults = ledger(db);
     faults.record(fault('stale_bar', '2026-10-01'));
     faults.record(fault('stale_bar', '2026-10-02'));
@@ -84,7 +84,7 @@ describe('FaultLedger', () => {
   });
 
   it('rejects any update or delete of a recorded fault', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     ledger(db).record(fault('missed_run'));
     expect(() => db.prepare("UPDATE v2_faults SET kind = 'stale_bar'").run()).toThrow(
       /append-only/,
@@ -95,7 +95,7 @@ describe('FaultLedger', () => {
 
   it('logs a fault it cannot write and never throws into the caller', () => {
     const logs: LogEntry[] = [];
-    const faults = ledger(openSharedStore(':memory:'), logs);
+    const faults = ledger(migratedMemoryStore(), logs);
     expect(() =>
       faults.record({ ...fault('stale_bar'), kind: 'unknown' as Fault['kind'] }),
     ).not.toThrow();
@@ -109,7 +109,7 @@ describe('FaultLedger', () => {
   });
 
   it('records one missed run per scheduled weekday left unmarked', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const faults = ledger(db);
     faults.recordMissedRuns(() => '2026-09-24', '2026-09-30', NO_SKIP);
     expect(rows(db)).toEqual([
@@ -126,7 +126,7 @@ describe('FaultLedger', () => {
 
   it('logs a missed-run check that cannot read the last mark and never throws into the cycle', () => {
     const logs: LogEntry[] = [];
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const faults = ledger(db, logs);
     expect(() =>
       faults.recordMissedRuns(
@@ -274,7 +274,7 @@ describe('fault classification', () => {
   });
 
   it('records the faults the journal writes through its own rows', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const journal = new Journal(db, clock, ledger(db));
     journal.recordRefusal(refusal('MARK_FRESHNESS'));
     journal.recordRefusal(refusal('MACRO_CALENDARS'));
@@ -331,7 +331,7 @@ describe('FaultRecordingLogger', () => {
 
 describe('kindsRecordedBetween', () => {
   it('counts faults by kind recorded inside the window, whatever trading date they carry', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const at = new SimulatedClock(new Date('2026-09-29T07:30:00.000Z'));
     const faults = new FaultLedger(db, at);
     faults.record(fault('stale_bar', '2026-09-29'));
@@ -363,7 +363,7 @@ describe('fault-free weeks', () => {
   });
 
   it('counts from paper start with no fault, and restarts the day after a fault', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const faults = ledger(db);
     markPaperStart(db, '2026-09-01');
     expect(faults.faultFreeWeeks('2026-09-28')).toEqual({
@@ -389,7 +389,7 @@ describe('fault-free weeks', () => {
   });
 
   it('stops the count over paused or halted days without restarting it (doc 66 U6)', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const faults = ledger(db);
     markPaperStart(db, '2026-09-01');
     control(db, 'pause', '2026-09-08T12:00:00.000Z');

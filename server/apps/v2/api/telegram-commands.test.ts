@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { V2OverviewWire } from '../../../../contracts/index.js';
-import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { BarsMarketData, type MarkSource } from '../data/index.js';
 import { ControlStore } from '../risk/index.js';
 import { CommandLog } from './command-log.js';
@@ -28,7 +29,7 @@ afterEach(() => db?.close());
 const NO_MARKS: MarkSource = { lastBarsBefore: () => Promise.resolve(new Map()) };
 
 function build(): CommandHandler {
-  db = openSharedStore(':memory:');
+  db = migratedMemoryStore();
   nowMs = START.getTime();
   nextUpdateId = 100;
   const clock = { now: () => new Date(nowMs) };
@@ -355,7 +356,7 @@ describe('resume', () => {
   });
 
   it('reports a control conflict as a failure without writing', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     const clock = { now: () => START };
     const handler = new CommandHandler({
       ownerChatId: OWNER,

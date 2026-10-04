@@ -5,6 +5,7 @@ import type { NativeBracketRequest } from '../../../../shared/index.js';
 import { type Clock, TokenBucket, toBrokerFillId } from '../../../../shared/index.js';
 import { recordingLogger } from '../../../../shared/recording-logger.js';
 import { openSharedStore, type StoreHandle } from '../../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../../shared/store/migrated-template.js';
 import { AlpacaBrokerAdapter } from '../alpaca/alpaca-adapter.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../alpaca/alpaca-client.js';
 import type { UnpricedFillAlert, UnpricedFillAlertChannel } from '../alpaca/unpriced-fill-alert.js';
@@ -459,7 +460,7 @@ describe('loadUnpricedFills ordering parity: InMemory vs Sqlite (#1358)', () => 
     sqlite: SqliteBrokerStateStore;
   } {
     const inMemory = new InMemoryBrokerStateStore();
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     openDbs.push(db);
     const sqlite = new SqliteBrokerStateStore(db);
     for (const op of ops) {

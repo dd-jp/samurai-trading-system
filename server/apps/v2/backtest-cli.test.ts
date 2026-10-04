@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { BarSeries, DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import {
   resolveCliOptions,
   runCrossAssetTrendAgainst,
@@ -112,7 +112,7 @@ describe('runCrossAssetTrendAgainst', () => {
       trendBars,
       parseBoeGbpUsdCsv('DATE,XUDLUSS\n29 Dec 2023,1.27\n'),
     );
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     try {
       const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-09-28T00:00:00.000Z')), {
         entries: [],
@@ -206,7 +206,7 @@ describe('runMeanReversionAgainst', () => {
       parseBoeGbpUsdCsv('DATE,XUDLUSS\n31 Dec 2021,1.35\n29 Dec 2023,1.27\n'),
     );
     const constituentsFor = (): readonly string[] => MEAN_REVERSION_SYMBOLS;
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     try {
       const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-09-28T00:00:00.000Z')), {
         entries: [],
@@ -292,7 +292,7 @@ describe('runVolTargetIndexAgainst', () => {
         'DATE,XUDLUSS\n31 Dec 2020,1.36\n31 Dec 2021,1.35\n30 Dec 2022,1.21\n29 Dec 2023,1.27\n',
       ),
     );
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     try {
       const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-02T00:00:00.000Z')), {
         entries: [],
@@ -373,7 +373,7 @@ async function recordedHashes(
   }));
   const bars = { load: (symbol: string): BarSeries => ({ symbol, bars: flat }) };
   const market = new BarsMarketData(bars, parseBoeGbpUsdCsv('DATE,XUDLUSS\n29 Dec 2023,1.27\n'));
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   try {
     const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-02T00:00:00.000Z')), {
       entries: [],

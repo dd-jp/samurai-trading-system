@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { V2_STORE_PATH } from './index.js';
 import { applyCapitalCommand, CAPITAL_USAGE, main, parseCapitalArgs } from './set-capital.js';
 
@@ -42,7 +42,7 @@ describe('parseCapitalArgs', () => {
 
 describe('applyCapitalCommand', () => {
   it('sets, tightens and shows through the v2 write guard and refuses a loosening', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     expect(
       applyCapitalCommand({ kind: 'set', year: 2026, startGbp: 2_000, capGbp: 1_500 }, db, clock),
     ).toMatchObject({ effectiveFrom: '2026-01-01' });

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { EvidenceReader } from './api/evidence.js';
 import { readBrokerOrders } from './report-cost-fidelity.js';
 
@@ -11,7 +12,7 @@ function seed(
   orders: readonly (readonly [string, string, string, Record<string, unknown>])[],
   fills: readonly (readonly [string, string, string])[],
 ): void {
-  db = openSharedStore(':memory:');
+  db = migratedMemoryStore();
   db.prepare(
     `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
      VALUES ('debate/primary', 'debate', 'primary', 1000, 1000, 'x')`,

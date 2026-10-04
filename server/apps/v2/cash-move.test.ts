@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import { CASH_MOVE_USAGE, main, parseCashMoveArgs, recordCashMove } from './cash-move.js';
 import { V2_STORE_PATH } from './index.js';
@@ -68,7 +69,7 @@ describe('parseCashMoveArgs', () => {
 
 describe('recordCashMove', () => {
   it('journals the move against the anchor through the v2 write guard', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     new SqliteCashAnchors(db, clock).recordAnchor('alpaca', 'live', 12_000, '2026-10-01');
     expect(recordCashMove(parseCashMoveArgs(['deposit', ...FLAGS]).move, db, clock)).toEqual({
       currency: 'USD',

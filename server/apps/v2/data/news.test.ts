@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AlpacaNewsArticle } from '../../../providers/news/sources/alpaca-news-client.js';
-import { guardedStore, openSharedStore } from '../../../shared/store/index.js';
+import { guardedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { journalledNewsSource } from './journalled-news.js';
 import {
   ALPACA_NEWS_PROVIDER,
@@ -14,7 +15,7 @@ import {
 import { SqliteNewsLedger } from './news-ledger.js';
 
 function journal() {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   return new SqliteNewsLedger(guardedStore(db, 'v2', { enabled: true }));
 }
 

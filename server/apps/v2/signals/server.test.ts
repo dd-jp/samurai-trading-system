@@ -2,7 +2,8 @@ import { request as httpRequest } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SignalWire } from '../../../../contracts/index.js';
 import { UsEquityRegularHoursCalendar } from '../../../providers/calendar/index.js';
-import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import {
   createSignalsServer,
   isLoopbackHost,
@@ -33,7 +34,7 @@ afterEach(async () => {
 });
 
 async function start(store?: SignalsServerOptions['store']): Promise<number> {
-  db = openSharedStore(':memory:');
+  db = migratedMemoryStore();
   const clock = { now: () => now };
   server = createSignalsServer({
     port: 0,

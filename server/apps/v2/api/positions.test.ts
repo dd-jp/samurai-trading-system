@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DailyBar } from '../../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { BarsMarketData, type LastBar, type MarkSource } from '../data/index.js';
 import { PositionsPanel, readHoldings } from './positions.js';
 
@@ -63,12 +64,12 @@ function present(marks: MarkSource, fx = FX) {
 
 describe('PositionsPanel (P3)', () => {
   it('is empty before the first cycle', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     expect(await present(marksOf({}))).toEqual({ status: 'empty' });
   });
 
   it('marks a USD position at the last close over the 1 January rate, as the cycle does', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 500);
     seedPosition('debate/primary', 'AAPL', 'alpaca', 2, 80);
     const served = await present(marksOf({ 'alpaca:AAPL': bar('2026-10-05', 125) }));
@@ -112,7 +113,7 @@ describe('PositionsPanel (P3)', () => {
   });
 
   it('marks a GBP position at par and a short with the loss sign it carries', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 0);
     seedPosition('debate/primary', 'VUSA', 'saxo', -3, 50);
     const served = await present(marksOf({ 'saxo:VUSA': bar('2026-10-05', 60) }));
@@ -128,7 +129,7 @@ describe('PositionsPanel (P3)', () => {
   });
 
   it('shows a stale or missing bar as stale, never as a price, and nulls the totals it feeds', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 100);
     seedPosition('debate/primary', 'AAPL', 'alpaca', 1, 80);
     seedPosition('debate/primary', 'MSFT', 'alpaca', 1, 80);
@@ -147,7 +148,7 @@ describe('PositionsPanel (P3)', () => {
   });
 
   it('keeps a bar exactly at the freshness limit fresh', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 0);
     seedPosition('debate/primary', 'AAPL', 'alpaca', 1, 80);
     const served = await present(marksOf({ 'alpaca:AAPL': bar('2026-10-01', 125) }));
@@ -155,7 +156,7 @@ describe('PositionsPanel (P3)', () => {
   });
 
   it('lists shadow books but totals only the primary books, like the loss-budget headline', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 100);
     seedBook('debate/no-veto', 'no-veto', 900);
     seedPosition('debate/primary', 'AAPL', 'alpaca', 1, 80);
@@ -173,7 +174,7 @@ describe('PositionsPanel (P3)', () => {
   });
 
   it('adds a venue row for a CFD venue only once a primary book holds one there', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 100);
     seedPosition('debate/primary', 'AAPL', 'saxo_cfd_usd', -2, 80);
     const served = await present(marksOf({ 'saxo_cfd_usd:AAPL': bar('2026-10-05', 125) }));
@@ -189,7 +190,7 @@ describe('PositionsPanel (P3)', () => {
   });
 
   it('asks for the bars before the latest cycle date, for every holding', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 0);
     seedPosition('debate/primary', 'AAPL', 'alpaca', 1, 80);
     const asked: { held: string[]; date: string }[] = [];
@@ -204,7 +205,7 @@ describe('PositionsPanel (P3)', () => {
   });
 
   it('gives up on a mark read that hangs and serves it as unavailable', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 0);
     seedPosition('debate/primary', 'AAPL', 'alpaca', 1, 80);
     const hanging: MarkSource = { lastBarsBefore: () => new Promise(() => undefined) };
@@ -215,7 +216,7 @@ describe('PositionsPanel (P3)', () => {
   });
 
   it('serves marks it cannot read as unavailable, without failing the panel', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 0);
     seedPosition('debate/primary', 'AAPL', 'alpaca', 1, 80);
     const unreadable: MarkSource = { lastBarsBefore: () => Promise.reject(new Error('disk gone')) };
@@ -229,7 +230,7 @@ describe('PositionsPanel (P3)', () => {
   });
 
   it('has no USD mark and no rate when the year has no rate, while GBP still marks', async () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     seedBook('debate/primary', 'primary', 0);
     seedPosition('debate/primary', 'AAPL', 'alpaca', 1, 80);
     seedPosition('debate/primary', 'VUSA', 'saxo', 1, 50);

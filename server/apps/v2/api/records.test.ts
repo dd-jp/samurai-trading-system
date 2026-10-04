@@ -2,7 +2,8 @@ import BetterSqlite3 from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { Journal } from '../journal/index.js';
 import { parseTaxQuery, RECONCILE_RUNS_SHOWN, ReconcileReader } from './records.js';
 
@@ -57,7 +58,7 @@ describe('ReconcileReader', () => {
   const DIFF = { kind: 'cash', instrument: null, order_id: null, store: 800, broker: 700 } as const;
 
   it('serves an empty log before any run, and before the table exists on an older store', () => {
-    expect(new ReconcileReader(openSharedStore(':memory:')).read()).toEqual({
+    expect(new ReconcileReader(migratedMemoryStore()).read()).toEqual({
       contract_version: V2_CONTRACT_VERSION,
       reconcile: { status: 'empty' },
     });
@@ -66,7 +67,7 @@ describe('ReconcileReader', () => {
   });
 
   it('serves the newest runs first, parsed, capped at the runs shown', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     recordRuns(db, RECONCILE_RUNS_SHOWN + 2);
     const served = new ReconcileReader(db).read().reconcile;
     if (served.status !== 'fed') throw new Error(served.status);

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { inMemoryCopyOf, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { composeV2Root, type V2Root } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
 import { RunLease } from './run-lease.js';
@@ -13,11 +13,9 @@ const D = '2026-10-02';
 const clock = new SimulatedClock(new Date(`${D}T14:00:00.000Z`));
 const roots: V2Root[] = [];
 let directory: string;
-let migrated: StoreHandle;
 
 beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), 'v2-flatten-root-'));
-  migrated = openSharedStore(':memory:');
   const bars = await ParquetBarStore.open(join(directory, 'parquet'));
   const days = Array.from({ length: 40 }, (_, back) =>
     new Date(Date.UTC(2026, 9, 1) - back * 86_400_000).toISOString().slice(0, 10),
@@ -47,12 +45,11 @@ afterEach(() => {
 });
 
 afterAll(() => {
-  migrated.close();
   rmSync(directory, { recursive: true, force: true });
 });
 
 function dryRunRoot(): V2Root {
-  const store = inMemoryCopyOf(migrated);
+  const store = migratedMemoryStore();
   new CapitalConfigStore(store, clock).setYear(2026, 10_000, 1_500);
   const root = composeV2Root({
     tradingDate: D,

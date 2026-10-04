@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JournalledFill } from '../../../contracts/index.js';
 import type { Logger } from '../../shared/index.js';
-import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { reloadingFx } from './api/main.js';
 import { TaxReader } from './api/tax.js';
 import {
@@ -254,7 +255,7 @@ describe('a USD fill after the file ends', () => {
   const clock = { now: () => new Date('2026-09-30T21:40:00.000Z') };
 
   function sellAfterTheFile(): StoreHandle {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const journal = new Journal(db, clock);
     const fill = (id: string, side: 'buy' | 'sell', fillDate: string, price: number) => {
       journal.recordOrder({

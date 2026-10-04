@@ -11,7 +11,7 @@ import {
 import type { LogEntry, Logger } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { NousAccountInFlightGate, NousApiError } from '../../../shared/llm/index.js';
-import { openSharedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { NousPinnedTransport } from './llm-transport.js';
 import { DEEPSEEK_V4_PRO_PIN, JUDGE_PIN, type ModelPin, SONNET_5_PIN } from './models.js';
 import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
@@ -182,7 +182,7 @@ describe('NousPinnedTransport', () => {
     const swapped = completion('anthropic/claude-opus-5.5-20260921', '{"stance":"bullish"}');
     swapped.usage = { prompt_tokens: 1_800_000, completion_tokens: 400_000 };
     stubFetch(200, swapped);
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const clock = new SimulatedClock(new Date('2026-09-25T08:00:00.000Z'));
     const client = new AnthropicLlmClient(
       transportFor(JUDGE_PIN),
@@ -229,7 +229,7 @@ describe('NousPinnedTransport', () => {
     async function journalOf(prompt: string): Promise<{ rows: unknown[]; logs: LogEntry[] }> {
       const logs: LogEntry[] = [];
       const logger = { log: (entry: LogEntry) => logs.push(entry) };
-      const db = openSharedStore(':memory:');
+      const db = migratedMemoryStore();
       const client = new AnthropicLlmClient(
         transportFor(JUDGE_PIN),
         {

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { main, researchStorePath, sessionBLedger, TrialLedger, trialHash } from './trial-ledger.js';
 
 const clock = new SimulatedClock(new Date('2026-09-26T08:00:00.000Z'));
@@ -36,7 +36,7 @@ describe('trialHash', () => {
 
 describe('TrialLedger', () => {
   it("opens with Session B's eight committed trials", () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const ledger = new TrialLedger(db, clock, SESSION_B);
     expect(SESSION_B.entries).toHaveLength(8);
     expect(ledger.count()).toBe(8);
@@ -53,7 +53,7 @@ describe('TrialLedger', () => {
   });
 
   it('numbers new trials after Session B and returns the same number for a repeated configuration', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const ledger = new TrialLedger(db, clock, SESSION_B);
     expect(ledger.record('trend', { lookback: 60, stop: true })).toBe(9);
     expect(ledger.record('trend', { stop: true, lookback: 60 })).toBe(9);
@@ -70,7 +70,7 @@ describe('TrialLedger', () => {
   });
 
   it('lists the trials in order', () => {
-    const ledger = new TrialLedger(openSharedStore(':memory:'), clock, SESSION_B);
+    const ledger = new TrialLedger(migratedMemoryStore(), clock, SESSION_B);
     ledger.record('trend', { lookback: 60 });
     expect(ledger.list().map((row) => row.trial)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(ledger.list().at(-1)).toEqual({
@@ -83,13 +83,13 @@ describe('TrialLedger', () => {
   });
 
   it('reopens an existing ledger without reseeding', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     new TrialLedger(db, clock, SESSION_B).record('trend', { lookback: 60 });
     expect(new TrialLedger(db, clock, SESSION_B).count()).toBe(9);
   });
 
   it("refuses a ledger that does not open with Session B's trials", () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     new TrialLedger(db, clock, { entries: [] }).record('trend', { lookback: 60 });
     expect(() => new TrialLedger(db, clock, SESSION_B)).toThrow(
       `TrialLedger: trial #1 is not Session B's ${SESSION_B.entries[0]?.config_hash}; the ledger must open with Session B's trials`,
@@ -97,7 +97,7 @@ describe('TrialLedger', () => {
   });
 
   it('is append-only and contiguous at the database', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     new TrialLedger(db, clock, SESSION_B);
     expect(() => db.prepare('UPDATE v2_trials SET candidate = ?').run('x')).toThrow(
       'v2_trials is append-only',

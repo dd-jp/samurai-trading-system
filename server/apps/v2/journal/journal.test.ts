@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { JournalledOrder, Sleeve, SleeveDecision } from '../../../../contracts/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
-import { openSharedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { CapitalConfigStore, PaperBooks } from '../risk/index.js';
 import { inputsHash, Journal } from './journal.js';
 
@@ -55,7 +55,7 @@ describe('Journal', () => {
   const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));
 
   it('names only the refusals the previous recorded day did not already carry, never entry sizing', () => {
-    const journal = new Journal(openSharedStore(':memory:'), clock);
+    const journal = new Journal(migratedMemoryStore(), clock);
     const refuse = (trading_date: string, scope: string, parameter: string, message: string) =>
       journal.recordRefusal({ trading_date, scope, parameter, ticket: '#1', message });
     refuse('2026-09-24', 'data', 'OLD', 'gone');
@@ -87,7 +87,7 @@ describe('Journal', () => {
   });
 
   it('records decisions, orders, fills and refusals and reads an order back by id', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const capital = new CapitalConfigStore(db, clock);
     capital.setYear(2026, 1_000, 1_500);
     new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
@@ -144,7 +144,7 @@ describe('Journal', () => {
   });
 
   it("reads back a broker order's fill parts: the bare id and its '#' top-ups, never a longer id", () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const journal = new Journal(db, clock);
     journal.recordOrder({
       client_order_id: 'o1',
@@ -210,7 +210,7 @@ describe('Journal', () => {
   });
 
   it('records a refusal scoped to a book and instrument, and leaves both NULL when unset', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const journal = new Journal(db, clock);
     journal.recordRefusal({
       trading_date: '2026-09-25',
@@ -239,7 +239,7 @@ describe('Journal', () => {
   });
 
   it('records an identical refusal once per trading date, and once more on the next (#1907)', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const faults: unknown[] = [];
     const journal = new Journal(db, clock, { record: (fault) => faults.push(fault) });
     const saxo = (trading_date: string) =>
@@ -285,7 +285,7 @@ describe('Journal', () => {
   });
 
   it('lists submitted entries from earlier dates that never filled and marks them cancelled', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const capital = new CapitalConfigStore(db, clock);
     capital.setYear(2026, 1_000, 1_500);
     new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
@@ -334,7 +334,7 @@ describe('Journal', () => {
   });
 
   it('lists broker entries booked below their size, before a date or at any date (#1990)', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const capital = new CapitalConfigStore(db, clock);
     capital.setYear(2026, 1_000, 1_500);
     new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
@@ -387,7 +387,7 @@ describe('Journal', () => {
   });
 
   it('lists unfilled simulated and dry-run entries from earlier dates, oldest first', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const capital = new CapitalConfigStore(db, clock);
     capital.setYear(2026, 1_000, 1_500);
     new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
@@ -485,7 +485,7 @@ describe('Journal', () => {
 
 describe('Journal.recordReconcile (#1872)', () => {
   it('appends each run with its diff, and the row can be neither changed nor removed', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const journal = new Journal(db, new SimulatedClock(new Date('2026-09-28T07:00:00.000Z')));
     journal.recordReconcile({
       trading_date: '2026-09-28',
@@ -526,7 +526,7 @@ describe('decision and fill journal append-only (#1883)', () => {
   const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));
 
   function journalWithOneFill() {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const capital = new CapitalConfigStore(db, clock);
     capital.setYear(2026, 1_000, 1_500);
     new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
@@ -638,7 +638,7 @@ describe('Journal.latestReconcile (#1941)', () => {
   }
 
   it('reads nothing reconciled on a day with no run', () => {
-    const journal = new Journal(openSharedStore(':memory:'), new SimulatedClock(new Date()));
+    const journal = new Journal(migratedMemoryStore(), new SimulatedClock(new Date()));
     run(journal, '2026-09-29', 'alpaca', 'broker', 'clean', ['signals/primary']);
     const verdict = journal.latestReconcile('2026-09-30', 'alpaca');
     expect([...verdict.reconciled]).toEqual([]);
@@ -646,7 +646,7 @@ describe('Journal.latestReconcile (#1941)', () => {
   });
 
   it('reads the venue latest run per source, and blocks a book any of those left unclean', () => {
-    const journal = new Journal(openSharedStore(':memory:'), new SimulatedClock(new Date()));
+    const journal = new Journal(migratedMemoryStore(), new SimulatedClock(new Date()));
     run(journal, '2026-09-30', 'alpaca', 'broker', 'mismatch', [
       'debate/primary',
       'signals/primary',
@@ -670,7 +670,7 @@ describe('tax capture on fills and the split journal (#1947)', () => {
   const clock = new SimulatedClock(new Date('2026-10-02T07:00:00.000Z'));
 
   it('stores the native price, currency, FX rate and source and the fill date of each fill', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const journal = new Journal(db, clock);
     journal.recordOrder({
       client_order_id: 'o1',
@@ -724,7 +724,7 @@ describe('tax capture on fills and the split journal (#1947)', () => {
   });
 
   it('journals a split once per instrument, venue and date, whichever book sees it first', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const journal = new Journal(db, clock);
     const split = {
       instrument: 'NVDA',
@@ -749,7 +749,7 @@ describe('tax capture on fills and the split journal (#1947)', () => {
   });
 
   it('journals each rescale with the fills already journalled before it, so replay can place it (#1983)', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const journal = new Journal(db, clock);
     const levels = { qty: 10, avgPriceGbp: 400, stopGbp: 380, targetGbp: undefined };
     const rescale = {

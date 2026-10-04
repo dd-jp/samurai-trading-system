@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { ProtectiveReplaceError } from './execution/index.js';
 import { earlierRunsThatActed, markingRun } from './replay-book.js';
 import { JournalReplayBroker, JournalReplayBrokerBooks, nativeAmountFor } from './replay-broker.js';
@@ -40,7 +40,7 @@ function reconciled(at: string): void {
 }
 
 beforeEach(() => {
-  db = openSharedStore(':memory:');
+  db = migratedMemoryStore();
   db.prepare(
     `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
      VALUES ('debate/primary', 'debate', 'primary', 600, 600, 'now')`,

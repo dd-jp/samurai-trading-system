@@ -1,4 +1,5 @@
-import { guardedStore, openSharedStore } from '../../../shared/store/index.js';
+import { guardedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { type NewsRecord, SqliteNewsLedger } from './news-ledger.js';
 
 function row(overrides: Partial<NewsRecord> = {}): NewsRecord {
@@ -17,7 +18,7 @@ function row(overrides: Partial<NewsRecord> = {}): NewsRecord {
 }
 
 function ledgerOver() {
-  const db = openSharedStore(':memory:');
+  const db = migratedMemoryStore();
   return { db, ledger: new SqliteNewsLedger(guardedStore(db, 'v2', { enabled: true })) };
 }
 
@@ -118,7 +119,7 @@ describe('SqliteNewsLedger', () => {
   });
 
   it('is written through the v2 stage handle and refused for another stage', () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const other = new SqliteNewsLedger(guardedStore(db, 'telegram', { enabled: true }));
     expect(() => other.record(row())).toThrow(/Sole-writer violation/);
   });

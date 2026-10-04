@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { inMemoryCopyOf, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { openSharedStore, type StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore, migratedTemplate } from '../../shared/store/migrated-template.js';
 import {
   type LeaseWait,
   pidAlive,
@@ -15,14 +16,6 @@ let now = new Date('2026-09-30T06:30:00.000Z');
 const clock = { now: () => now };
 const handles: StoreHandle[] = [];
 const dirs: string[] = [];
-let migrated: StoreHandle;
-
-beforeAll(() => {
-  migrated = openSharedStore(':memory:');
-});
-
-afterAll(() => migrated.close());
-
 afterEach(() => {
   for (const handle of handles.splice(0)) handle.close();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -33,7 +26,7 @@ function sharedPath(): string {
   const dir = mkdtempSync(join(tmpdir(), 'v2-lease-'));
   dirs.push(dir);
   const path = join(dir, 'v2.sqlite');
-  writeFileSync(path, migrated.serialize());
+  writeFileSync(path, migratedTemplate().serialize());
   return path;
 }
 
@@ -47,7 +40,7 @@ function open(path: string): StoreHandle {
 }
 
 function fresh(): StoreHandle {
-  return tracked(inMemoryCopyOf(migrated));
+  return tracked(migratedMemoryStore());
 }
 
 const everyoneAlive = () => true;

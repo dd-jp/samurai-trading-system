@@ -7,7 +7,7 @@ import type {
 } from '../../../contracts/index.js';
 import type { BarSeries, DailyBar, LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import {
   type BacktestInput,
   type BacktestTrial,
@@ -167,7 +167,7 @@ function yearLossesFor(
 
 function ledger(): TrialLedger {
   return new TrialLedger(
-    openSharedStore(':memory:'),
+    migratedMemoryStore(),
     new SimulatedClock(new Date('2026-09-26T00:00:00.000Z')),
     SESSION_B,
   );
@@ -363,7 +363,7 @@ describe('runBacktest', { timeout: 120_000 }, () => {
   });
 
   it('#1815: records the entry offset in every trial identity', async () => {
-    const db = openSharedStore(':memory:');
+    const db = migratedMemoryStore();
     const run = input({
       ledger: new TrialLedger(
         db,

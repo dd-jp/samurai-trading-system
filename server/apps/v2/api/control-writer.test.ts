@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { guardedStore, openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { guardedStore, type StoreHandle } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { ControlStore } from '../risk/index.js';
 import { CONTROL_MIN_INTERVAL_MS, ControlWriter, parseControlRequest } from './control-writer.js';
 
@@ -71,7 +72,7 @@ describe('ControlWriter', () => {
   const halt = { action: 'halt', reason: 'chaos', idempotency_key: KEY } as const;
 
   it('writes the row with a server-set source and time, and the cycle reads it', () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     const result = writer().write(halt, 'dashboard 127.0.0.1');
     expect(result).toEqual({
       kind: 'created',
@@ -91,7 +92,7 @@ describe('ControlWriter', () => {
   });
 
   it('replays a repeated key with the first result, even inside the rate window', () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     const first = writer().write(halt, 'dashboard a');
     const again = writer(1).write(halt, 'dashboard b');
     expect(again).toEqual({ kind: 'replayed', control: first.kind === 'created' && first.control });
@@ -99,7 +100,7 @@ describe('ControlWriter', () => {
   });
 
   it('refuses a repeated key carrying a different control', () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     writer().write(halt, 'dashboard');
     expect(writer(60_000).write({ ...halt, action: 'pause' }, 'dashboard')).toEqual({
       kind: 'conflict',
@@ -109,7 +110,7 @@ describe('ControlWriter', () => {
   });
 
   it('allows one control per 10 seconds and says when to retry', () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     writer().write(halt, 'dashboard');
     const resume = { action: 'resume', reason: 'ok', idempotency_key: 'key-0002' } as const;
     expect(writer(1).write(resume, 'dashboard')).toEqual({
@@ -129,7 +130,7 @@ describe('ControlWriter', () => {
   });
 
   it('never locks controls out when the clock has stepped back behind the last one', () => {
-    db = openSharedStore(':memory:');
+    db = migratedMemoryStore();
     writer().write(halt, 'dashboard');
     const resume = { action: 'resume', reason: 'ok', idempotency_key: 'key-0002' } as const;
     expect(writer(-60_000).write(resume, 'dashboard').kind).toBe('created');
