@@ -96,12 +96,16 @@ function openOrder(OrderId: string, related: string[] = []): SaxoOpenOrder {
     BuySell: 'Buy',
     Uic: 211,
     AssetType: 'CfdOnStock',
-    RelatedOpenOrders: related.map((id) => ({
-      OrderId: id,
-      OpenOrderType: 'StopIfTraded',
-      Amount: 10,
-      Status: 'Working',
-    })),
+    ...(related.length === 0
+      ? {}
+      : {
+          RelatedOpenOrders: related.map((id) => ({
+            OrderId: id,
+            OpenOrderType: 'StopIfTraded',
+            Amount: 10,
+            Status: 'Working',
+          })),
+        }),
   };
 }
 
@@ -167,6 +171,9 @@ describe('cfdShortBracketRequest (#1916)', () => {
       `${BRACKET.clientOrderId}: `,
     );
     expect(() => cfdShortBracketRequest({ ...BRACKET, ...change })).toThrow(message);
+    expect(() => cfdShortBracketRequest({ ...BRACKET, ...change })).toThrow(
+      expect.objectContaining({ name: 'CfdBracketError' }),
+    );
   });
 });
 
@@ -239,7 +246,7 @@ describe('settleCfdShortBracket (#1916)', () => {
   it('cancels the stop when the target fills, finding it among related orders', async () => {
     const client = fakeClient({
       activities: [activity('T1', 'FinalFill')],
-      open: [openOrder('E9', ['S1'])],
+      open: [openOrder('X1'), openOrder('E9', ['X2', 'S1'])],
     });
     await expect(settleCfdShortBracket(client, IDS, SINCE)).resolves.toEqual({
       kind: 'closed',

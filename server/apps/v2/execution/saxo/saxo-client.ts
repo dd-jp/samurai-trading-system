@@ -2,10 +2,8 @@ export type SaxoCfdAssetType = 'CfdOnStock' | 'CfdOnIndex' | 'CfdOnEtf';
 
 export type SaxoAssetType = 'Etn' | 'Etf' | 'Etc' | SaxoCfdAssetType;
 
-const CFD_ASSET_TYPES: readonly string[] = ['CfdOnStock', 'CfdOnIndex', 'CfdOnEtf'];
-
 export function isSaxoCfdAssetType(assetType: string): assetType is SaxoCfdAssetType {
-  return CFD_ASSET_TYPES.includes(assetType);
+  return assetType === 'CfdOnStock' || assetType === 'CfdOnIndex' || assetType === 'CfdOnEtf';
 }
 
 export type SaxoBuySell = 'Buy' | 'Sell';
