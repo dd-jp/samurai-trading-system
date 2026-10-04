@@ -52,12 +52,21 @@ export class ParquetBarsSource implements BarsSource {
 // A symbol held by more than one venue (TSCO is Tesco on the LSE and Tractor
 // Supply in the US) has no venue-free identity, so it is served from neither
 export class MultiVenueBarsSource implements BarsSource {
-  constructor(private readonly sources: readonly BarsSource[]) {}
+  readonly #reported = new Set<string>();
+
+  constructor(
+    private readonly sources: readonly BarsSource[],
+    private readonly onClash: (symbol: string) => void = () => {},
+  ) {}
 
   load(symbol: string): BarSeries | undefined {
     const held = this.sources
       .map((source) => source.load(symbol))
       .filter((series) => series !== undefined);
+    if (held.length > 1 && !this.#reported.has(symbol)) {
+      this.#reported.add(symbol);
+      this.onClash(symbol);
+    }
     return held.length === 1 ? held[0] : undefined;
   }
 }

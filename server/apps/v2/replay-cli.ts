@@ -86,7 +86,7 @@ export async function replayFromFiles(
 ): Promise<ReplayResult> {
   const db = openStore(options.storePath);
   try {
-    const { bars, prime } = barsSourceFor({ barStoreRoot: options.barStoreRoot });
+    const { bars, prime } = barsSourceFor({ barStoreRoot: options.barStoreRoot }, SILENT);
     await prime();
     return await replayDay({
       db,

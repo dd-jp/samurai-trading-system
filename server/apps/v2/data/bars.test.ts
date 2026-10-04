@@ -90,6 +90,16 @@ describe('MultiVenueBarsSource', () => {
     expect(new MultiVenueBarsSource([saxo, alpaca]).load('TSCO')).toBeUndefined();
   });
 
+  it('reports each clashing symbol once, and never a symbol one venue holds', () => {
+    const clashes: string[] = [];
+    const reporting = new MultiVenueBarsSource([alpaca, saxo], (symbol) => clashes.push(symbol));
+    reporting.load('AAPL');
+    reporting.load('ZZZZ');
+    reporting.load('TSCO');
+    reporting.load('TSCO');
+    expect(clashes).toEqual(['TSCO']);
+  });
+
   it('fails a windowed read keyed on a clashing symbol closed', () => {
     const sessions = sessionsBefore(bars, '2026-09-03', 'AAPL');
     expect(sessions).toEqual(['2026-09-01']);

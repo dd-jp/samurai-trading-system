@@ -33,6 +33,7 @@ import type { AlpacaBrokerClient, AlpacaOrder } from './execution/alpaca/alpaca-
 import { writeKeepAliveState } from './execution/saxo/saxo-keepalive-state.js';
 import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
 import {
+  barsSourceFor,
   composeV2Root,
   DEFAULT_HALF_SPREAD_BPS,
   exitCodeFor,
@@ -1597,6 +1598,48 @@ describe('composeV2Root', () => {
     expect(exitCodeFor(base)).toBe(0);
     expect(exitCodeFor({ ...base, submitted_orders: 1 })).toBe(1);
     expect(exitCodeFor({ ...base, submitted_orders: 1, dry_run: false })).toBe(0);
+  });
+});
+
+describe('barsSourceFor', () => {
+  it('warns once for a symbol both venue stores hold and serves it from neither (#1914)', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'v2-root-clash-'));
+    try {
+      const store = await ParquetBarStore.open(directory);
+      const bar: DailyBar = {
+        date: '2026-09-01',
+        open: 1,
+        high: 1,
+        low: 1,
+        close: 1,
+        volume: 1,
+        rawClose: 1,
+      };
+      await store.write('alpaca', [
+        { symbol: 'TSCO', bars: [bar] },
+        { symbol: 'AAPL', bars: [bar] },
+      ]);
+      await store.write('saxo', [{ symbol: 'TSCO', bars: [bar] }]);
+      store.close();
+      const logs: LogEntry[] = [];
+      const { bars, prime } = barsSourceFor(
+        { barStoreRoot: directory },
+        { log: (entry) => logs.push(entry) },
+      );
+      await prime();
+      expect(bars.load('AAPL')?.bars).toEqual([bar]);
+      expect(bars.load('TSCO')).toBeUndefined();
+      expect(bars.load('TSCO')).toBeUndefined();
+      expect(logs).toEqual([
+        expect.objectContaining({
+          level: 'warn',
+          event: 'v2_bars_symbol_clash',
+          message: expect.stringMatching(/^TSCO has bars on both alpaca and saxo/),
+        }),
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 
