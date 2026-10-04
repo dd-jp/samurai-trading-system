@@ -30,9 +30,10 @@ function capital(startCapitalGbp: number, lossCapGbp: number): CapitalYear {
   return { year: 2026, effectiveFrom: '2026-01-01', startCapitalGbp, lossCapGbp };
 }
 
-// Integer oracle for doc 66 G6: −⅓ of the cap → ½, −⅔ → ¼, the whole cap → halt. The cap is whole
-// pounds, as the yearly config is set: against a cap in pence the float mark cap/3 can sit one ulp
-// above a loss equal to it (cap 89,955.30, loss 29,985.10 reads as full size)
+// Integer oracle for doc 66 G6: −⅓ of the cap → ½, −⅔ → ¼, the whole cap → halt. Caps here are
+// whole pounds: against a cap in pence (a sleeve's 30%/70% share can be one) the float mark cap/3
+// can sit one ulp above a loss equal to it (cap 89,955.30, loss 29,985.10 reads as full size), a
+// miss of ~1e-13 GBP
 function rulingMultiplier(lossPence: number, capGbp: number): number {
   if (lossPence >= 100 * capGbp) return 0;
   if (3 * lossPence >= 200 * capGbp) return 0.25;

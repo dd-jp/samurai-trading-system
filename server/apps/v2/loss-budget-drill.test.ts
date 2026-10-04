@@ -15,7 +15,7 @@ import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import { recordCashMove } from './cash-move.js';
 import { runCycle } from './cycle.js';
-import { addDays, macroGate } from './data/index.js';
+import { addDays } from './data/index.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import { Journal } from './journal/index.js';
@@ -23,7 +23,6 @@ import {
   CapitalConfigStore,
   ControlStore,
   PaperBooks,
-  positionSizeShares,
   V2RiskGate,
 } from './risk/index.js';
 import { SleeveRegistry } from './signal/index.js';
@@ -206,21 +205,6 @@ function entryOrders(target: Drill, instrument: string): number {
   return row.n;
 }
 
-function expectedShares(equityGbp: number, sizeMultiplier: number, tradingDate: string): number {
-  const limit = ENTRY_PRICE * 1.005;
-  return positionSizeShares({
-    equityGbp,
-    riskFraction: SPEC.sizing.riskFraction,
-    priceGbp: limit / YEAR_START_GBP_USD,
-    atrGbp: ATR / YEAR_START_GBP_USD,
-    stopAtrMultiple: SPEC.sizing.stopAtrMultiple,
-    sizeMultiplier,
-    macroDay: macroGate(tradingDate).macroDay,
-    volumeCapShares: Number.POSITIVE_INFINITY,
-    entryToStopGbp: (limit - STOP) / YEAR_START_GBP_USD,
-  });
-}
-
 async function enterOn(target: Drill, tradingDate: string, instrument: string): Promise<number> {
   target.decide([enter(instrument)]);
   await target.cycle(tradingDate);
@@ -238,21 +222,21 @@ describe('loss-budget rehearsal through the cycle (doc 67 Step 4b, G6)', () => {
     const target = drill();
     await target.cycle('2026-09-24');
     const full = await enterOn(target, '2026-09-25', 'AAA');
-    expect(full).toBe(expectedShares(START_CAPITAL_GBP, 1, '2026-09-25'));
+    expect(full).toBe(29);
     expect(full).toBeGreaterThan(8);
 
     await markLoss(target, 500, '2026-09-28');
     expect(state(target)).toMatchObject({ ytdLossGbp: 500, sizeMultiplier: 0.5, halted: false });
     await target.cycle('2026-09-29');
     const half = await enterOn(target, '2026-09-30', 'BBB');
-    expect(half).toBe(expectedShares(9_500, 0.5, '2026-09-30'));
+    expect(half).toBe(14);
     expect(half).toBeLessThan(full);
 
     await markLoss(target, 500, '2026-10-01');
     expect(state(target)).toMatchObject({ ytdLossGbp: 1_000, sizeMultiplier: 0.25 });
     await target.cycle('2026-10-02');
     const quarter = await enterOn(target, '2026-10-05', 'CCC');
-    expect(quarter).toBe(expectedShares(9_000, 0.25, '2026-10-05'));
+    expect(quarter).toBe(6);
     expect(quarter).toBeLessThan(half);
 
     await markLoss(target, 500, '2026-10-06');
@@ -322,7 +306,7 @@ describe('loss-budget rehearsal through the cycle (doc 67 Step 4b, G6)', () => {
     expect(state(target).halted).toBe(true);
 
     const january = await enterOn(target, '2027-01-04', 'AAA');
-    expect(january).toBe(expectedShares(START_CAPITAL_GBP - 1_600, 1, '2027-01-04'));
+    expect(january).toBe(12);
     expect(january).toBeGreaterThan(0);
     expect(state(target)).toMatchObject({
       referenceEquityGbp: START_CAPITAL_GBP - 1_600,
@@ -359,7 +343,7 @@ describe('loss-budget rehearsal through the cycle (doc 67 Step 4b, G6)', () => {
 
     const half = await enterOn(target, '2026-09-29', 'AAA');
     expect(state(target)).toEqual({ ...before, entriesBlockedAtNextFill: false });
-    expect(half).toBe(expectedShares(START_CAPITAL_GBP - 600, 0.5, '2026-09-29'));
+    expect(half).toBe(13);
     expect(target.books.cash(PRIMARY)).toBe(START_CAPITAL_GBP - 600);
   });
 });
