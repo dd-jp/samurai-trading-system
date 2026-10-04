@@ -238,6 +238,24 @@ const SIMULATED_OUTCOMES: ReadonlySet<JournalledOutcome> = new Set([
   'refused_dry_run',
 ]);
 
+interface PendingResolution {
+  readonly outcome: 'submitted' | 'rejected';
+  readonly detail: string;
+  readonly note: string;
+}
+
+const PENDING_SENT: PendingResolution = {
+  outcome: 'submitted',
+  detail: 'submitted',
+  note: 'the venue holds it, now submitted',
+};
+
+const PENDING_NOT_SENT: PendingResolution = {
+  outcome: 'rejected',
+  detail: 'not_sent: no order at the venue under this id',
+  note: 'the venue never received it, now rejected',
+};
+
 export type EntryOrderId = (book: BookSpec, instrument: string, tradingDate: string) => string;
 
 function defaultEntryOrderId(book: BookSpec, instrument: string, tradingDate: string): string {
@@ -431,27 +449,34 @@ class Cycle {
   async resolvePendingOrders(): Promise<void> {
     for (const order of this.deps.journal.pendingOrders()) {
       const book = this.bookSpec(order.book_id);
-      if (book === undefined) continue;
-      const sent = await this.reachedVenue(book, order);
-      this.deps.journal.resolvePending(
-        order.client_order_id,
-        sent ? 'submitted' : 'rejected',
-        sent ? 'submitted' : 'not_sent: no order at the venue under this id',
-        this.tradingDate,
-      );
-      this.log(
-        'error',
-        'v2_pending_order_resolved',
-        `${order.client_order_id}: journalled pending by a run that ended before its outcome; ${
-          sent ? 'the venue holds it, now submitted' : 'the venue never received it, now rejected'
-        }`,
-      );
+      if (book !== undefined) await this.resolvePending(book, order);
     }
   }
 
+  async resolvePending(book: BookSpec, order: JournalledOrder): Promise<void> {
+    const resolution = (await this.reachedVenue(book, order)) ? PENDING_SENT : PENDING_NOT_SENT;
+    this.deps.journal.resolvePending(
+      order.client_order_id,
+      resolution.outcome,
+      resolution.detail,
+      this.tradingDate,
+    );
+    this.log(
+      'error',
+      'v2_pending_order_resolved',
+      `${order.client_order_id}: journalled pending by a run that ended before its outcome; ${resolution.note}`,
+    );
+  }
+
+  // A broker route with no adapter this run cannot say whether it holds the order, and calling it
+  // unsent would orphan an order the venue may hold
   async reachedVenue(book: BookSpec, order: JournalledOrder): Promise<boolean> {
+    const route = routeOf(book, order.venue as Venue);
+    if (!this.deps.executor.simulates(route) && !this.deps.executor.canRoute(route)) {
+      throw new Error(`${order.client_order_id}: no broker for ${order.venue} to ask`);
+    }
     const filled = await this.deps.executor.filledQty(
-      routeOf(book, order.venue as Venue),
+      route,
       order.client_order_id,
       order.instrument,
     );

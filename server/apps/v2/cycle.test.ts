@@ -6874,6 +6874,16 @@ describe('journal before submit (David 2026-10-04, #1747)', () => {
     expect(deps.journal.orderFor('orphan')?.outcome).toBe('pending');
   });
 
+  it('a broker route with no adapter this run leaves the order pending and blocks entries', async () => {
+    const deps = harness([longAapl], false);
+    seedPending(deps, 'unasked', 'debate/primary');
+    const report = await runCycle(deps, '2026-09-25');
+    expect(deps.journal.orderFor('unasked')?.outcome).toBe('pending');
+    expect(report.refusals).toContain(
+      'debate/primary: entries blocked, pending order resolve threw: unasked: no broker for alpaca to ask',
+    );
+  });
+
   it('a failed venue read leaves the order pending and blocks entries for the run', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca);
