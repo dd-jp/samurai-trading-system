@@ -410,7 +410,14 @@
           {
             "patterns": [
               {
-                "group": ["../*.js", "../*.ts", "!../index.js", "!../index.ts"],
+                "group": [
+                  "../*.js",
+                  "../*.ts",
+                  "../http/**",
+                  "../types/**",
+                  "!../index.js",
+                  "!../index.ts"
+                ],
                 "message": "reach server/shared only via its index.ts barrel"
               },
               {
@@ -482,7 +489,14 @@
           {
             "patterns": [
               {
-                "group": ["../*.js", "../*.ts", "!../index.js", "!../index.ts"],
+                "group": [
+                  "../*.js",
+                  "../*.ts",
+                  "../http/**",
+                  "../types/**",
+                  "!../index.js",
+                  "!../index.ts"
+                ],
                 "message": "reach server/shared only via its index.ts barrel"
               },
               {
@@ -546,7 +560,14 @@
           {
             "patterns": [
               {
-                "group": ["../../*.js", "../../*.ts", "!../../index.js", "!../../index.ts"],
+                "group": [
+                  "../../*.js",
+                  "../../*.ts",
+                  "../../http/**",
+                  "../../types/**",
+                  "!../../index.js",
+                  "!../../index.ts"
+                ],
                 "message": "reach server/shared only via its index.ts barrel"
               },
               {
