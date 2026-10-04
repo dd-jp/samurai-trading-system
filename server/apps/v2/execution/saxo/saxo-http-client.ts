@@ -88,14 +88,14 @@ function probeUrl(path: string): URL {
   return new URL(path, 'https://saxo-next.invalid');
 }
 
-function nextOnRoute(nextPath: string, route: string, context: string): URLSearchParams {
+function nextOnRoute(nextPath: string, route: string, context: string): URL {
   const parsed = /^\/(?![/\\])/.test(nextPath) ? probeUrl(nextPath) : undefined;
   if (parsed === undefined || parsed.pathname !== route) {
     throw new SaxoBrokerProviderError(
       `Saxo API error: __next left the ${route} route (${context}).`,
     );
   }
-  return parsed.searchParams;
+  return parsed;
 }
 
 function keepAccountScope(
@@ -104,7 +104,8 @@ function keepAccountScope(
   identity: AccountIdentity,
   context: string,
 ): string {
-  const echoed = [...nextOnRoute(nextPath, route, context)];
+  const next = nextOnRoute(nextPath, route, context);
+  const echoed = [...next.searchParams];
   const missing = new URLSearchParams();
   for (const [key, pinnedValue] of [
     ['AccountKey', identity.accountKey],
@@ -119,7 +120,7 @@ function keepAccountScope(
       );
     }
   }
-  return appendQuery(nextPath, missing.toString());
+  return withQuery(next, missing.toString());
 }
 
 function valuesOf(params: readonly [string, string][], key: string): string[] {
@@ -127,12 +128,9 @@ function valuesOf(params: readonly [string, string][], key: string): string[] {
   return params.filter(([name]) => name.toLowerCase() === wanted).map(([, value]) => value);
 }
 
-function appendQuery(path: string, query: string): string {
-  if (query === '') return path;
-  const hashAt = path.includes('#') ? path.indexOf('#') : path.length;
-  const head = path.slice(0, hashAt);
-  const fragment = path.slice(hashAt);
-  return `${head}${head.includes('?') ? '&' : '?'}${query}${fragment}`;
+function withQuery(next: URL, query: string): string {
+  if (query === '') return `${next.pathname}${next.search}`;
+  return `${next.pathname}${next.search === '' ? '?' : `${next.search}&`}${query}`;
 }
 
 function requireString(row: Record<string, unknown>, field: string, context: string): string {
