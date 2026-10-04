@@ -259,7 +259,7 @@ describe('settleCfdShortBracket (#1916)', () => {
   it('cancels nothing when the sibling is already off the open list', async () => {
     const client = fakeClient({
       activities: [activity('S1', 'FinalFill')],
-      open: [openOrder('OTHER', ['ALSO-OTHER'])],
+      open: [openOrder('OTHER'), openOrder('OTHER-2', ['ALSO-OTHER'])],
     });
     await expect(settleCfdShortBracket(client, IDS, SINCE)).resolves.toEqual({
       kind: 'closed',
