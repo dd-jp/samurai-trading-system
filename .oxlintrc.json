@@ -403,6 +403,206 @@
       }
     },
     {
+      "files": ["server/shared/market/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["../*.js", "../*.ts", "!../index.js", "!../index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/contracts/**", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/**", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/**", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/**", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/shared/debate/**",
+                  "!**/shared/debate/index.js",
+                  "!**/shared/debate/index.ts"
+                ],
+                "message": "reach server/shared/debate only via its index.ts barrel"
+              },
+              {
+                "group": ["**/llm/**", "!**/llm/index.js", "!**/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/debate/**", "!**/debate/index.js", "!**/debate/index.ts"],
+                "message": "reach server/shared/debate only via its index.ts barrel"
+              },
+              {
+                "group": ["**/market/**", "!**/market/index.js", "!**/market/index.ts"],
+                "message": "reach server/shared/market only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/v2/evidence/**",
+                  "!**/v2/evidence/index.js",
+                  "!**/v2/evidence/index.ts"
+                ],
+                "message": "reach server/apps/v2/evidence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/calendar/**", "!**/calendar/index.js", "!**/calendar/index.ts"],
+                "message": "reach server/providers/calendar only via its index.ts barrel"
+              },
+              {
+                "group": ["**/news/**", "!**/news/index.js", "!**/news/index.ts"],
+                "message": "reach server/providers/news only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/**", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/shared/debate/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["../*.js", "../*.ts", "!../index.js", "!../index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/contracts/**", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/**", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/**", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/llm/**", "!./llm/**", "!**/llm/index.js", "!**/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/market/**", "!**/market/index.js", "!**/market/index.ts"],
+                "message": "reach server/shared/market only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/**", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/**", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/v2/evidence/**",
+                  "!**/v2/evidence/index.js",
+                  "!**/v2/evidence/index.ts"
+                ],
+                "message": "reach server/apps/v2/evidence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/calendar/**", "!**/calendar/index.js", "!**/calendar/index.ts"],
+                "message": "reach server/providers/calendar only via its index.ts barrel"
+              },
+              {
+                "group": ["**/news/**", "!**/news/index.js", "!**/news/index.ts"],
+                "message": "reach server/providers/news only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/**", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["server/shared/debate/llm/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["../../*.js", "../../*.ts", "!../../index.js", "!../../index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/contracts/**", "!**/contracts/index.js", "!**/contracts/index.ts"],
+                "message": "reach contracts only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/**", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
+                "group": ["**/shared/llm/**", "!**/shared/llm/index.js", "!**/shared/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/llm/**", "!./llm/**", "!**/llm/index.js", "!**/llm/index.ts"],
+                "message": "reach server/shared/llm only via its index.ts barrel"
+              },
+              {
+                "group": ["**/market/**", "!**/market/index.js", "!**/market/index.ts"],
+                "message": "reach server/shared/market only via its index.ts barrel"
+              },
+              {
+                "group": ["**/store/**", "!**/store/index.js", "!**/store/index.ts"],
+                "message": "reach server/shared/store only via its index.ts barrel"
+              },
+              {
+                "group": ["**/execution/**", "!**/execution/index.js", "!**/execution/index.ts"],
+                "message": "reach server/apps/v2/execution only via its index.ts barrel"
+              },
+              {
+                "group": [
+                  "**/v2/evidence/**",
+                  "!**/v2/evidence/index.js",
+                  "!**/v2/evidence/index.ts"
+                ],
+                "message": "reach server/apps/v2/evidence only via its index.ts barrel"
+              },
+              {
+                "group": ["**/calendar/**", "!**/calendar/index.js", "!**/calendar/index.ts"],
+                "message": "reach server/providers/calendar only via its index.ts barrel"
+              },
+              {
+                "group": ["**/news/**", "!**/news/index.js", "!**/news/index.ts"],
+                "message": "reach server/providers/news only via its index.ts barrel"
+              },
+              {
+                "group": ["**/bar-store/**", "!**/bar-store/index.js", "!**/bar-store/index.ts"],
+                "message": "reach server/providers/bar-store only via its index.ts barrel"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["server/providers/calendar/**"],
       "rules": {
         "no-restricted-imports": [
