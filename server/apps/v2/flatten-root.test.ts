@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
+import { migratedMemoryStore, migratedTemplate } from '../../shared/store/migrated-template.js';
 import { composeV2Root, type V2Root } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
 import { RunLease } from './run-lease.js';
@@ -15,6 +15,7 @@ const roots: V2Root[] = [];
 let directory: string;
 
 beforeAll(async () => {
+  migratedTemplate();
   directory = mkdtempSync(join(tmpdir(), 'v2-flatten-root-'));
   const bars = await ParquetBarStore.open(join(directory, 'parquet'));
   const days = Array.from({ length: 40 }, (_, back) =>

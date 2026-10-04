@@ -1,10 +1,10 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
-import { openReadOnlyStore, type StoreHandle } from '../../shared/store/index.js';
-import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
+import type { StoreHandle } from '../../shared/store/index.js';
+import { migratedMemoryStore, migratedTemplate } from '../../shared/store/migrated-template.js';
 import { main, readJournalledEntries, reportEntryOffsets } from './report-entry-offsets.js';
 
 const dirs: string[] = [];
@@ -13,6 +13,10 @@ function scratch(): string {
   dirs.push(dir);
   return dir;
 }
+
+beforeAll(() => {
+  migratedTemplate();
+});
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -122,21 +126,20 @@ describe('reportEntryOffsets', () => {
   });
 
   it('closes the store even when the bar store fails to load', async () => {
-    const storePath = join(scratch(), 'v2.sqlite');
-    journalFile(storePath, []);
+    const db = migratedMemoryStore();
     let closed = false;
-    const open = (path: string) => {
-      const db = openReadOnlyStore(path);
-      return Object.assign(Object.create(db) as StoreHandle, {
+    const open = () =>
+      Object.assign(Object.create(db) as StoreHandle, {
         close: () => {
           closed = true;
           db.close();
         },
       });
-    };
     await expect(
-      reportEntryOffsets(storePath, join(scratch(), 'not-a-bar-root', '\0'), open),
-    ).rejects.toThrow();
+      reportEntryOffsets('v2.sqlite', 'bars', open, () =>
+        Promise.reject(new Error('bar store failed')),
+      ),
+    ).rejects.toThrow('bar store failed');
     expect(closed).toBe(true);
   });
 

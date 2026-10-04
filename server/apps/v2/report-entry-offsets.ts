@@ -62,18 +62,24 @@ export function barsFromSource(source: ParquetBarsSource): BarsFrom {
     (source.load(instrument)?.bars ?? []).filter((bar) => bar.date >= tradingDate);
 }
 
+async function primedBarsFrom(barRoot: string): Promise<BarsFrom> {
+  const bars = new ParquetBarsSource(barRoot, 'alpaca');
+  await bars.prime();
+  return barsFromSource(bars);
+}
+
 export async function reportEntryOffsets(
   storePath: string,
   barRoot: string,
   openStore: (path: string) => StoreHandle = openReadOnlyStore,
+  loadBars: (barRoot: string) => Promise<BarsFrom> = primedBarsFrom,
 ): Promise<string> {
   const db = openStore(storePath);
   try {
-    const bars = new ParquetBarsSource(barRoot, 'alpaca');
-    await bars.prime();
+    const barsFrom = await loadBars(barRoot);
     const report = entryOffsetReport(
       readJournalledEntries(db),
-      barsFromSource(bars),
+      barsFrom,
       OFFSET_BENCHMARK,
       HOLD_DAYS,
     );
