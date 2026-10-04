@@ -9,6 +9,7 @@ import type {
   JournalledRefusal,
   JournalledRescale,
   JournalledSplit,
+  OrderOutcome,
   RecordedFillPart,
   SleeveDecision,
   Venue,
@@ -106,6 +107,46 @@ export class Journal implements DecisionJournal {
     this.#recordFault(orderFault(order));
   }
 
+  settleOrder(
+    clientOrderId: string,
+    outcome: OrderOutcome,
+    payload: Record<string, unknown>,
+  ): void {
+    const { changes } = this.db
+      .prepare(
+        `UPDATE v2_orders SET outcome = ?, payload = ?
+         WHERE client_order_id = ? AND outcome = 'pending'`,
+      )
+      .run(outcome, JSON.stringify(payload), clientOrderId);
+    const settled = this.orderFor(clientOrderId);
+    if (Number(changes) !== 1 || settled === undefined) {
+      throw new Error(`journal: ${clientOrderId} is not a pending order`);
+    }
+    this.#recordFault(orderFault(settled));
+  }
+
+  pendingOrders(): readonly JournalledOrder[] {
+    const rows = this.db
+      .prepare(`SELECT client_order_id FROM v2_orders WHERE outcome = 'pending' ORDER BY rowid`)
+      .all() as { client_order_id: string }[];
+    return rows.flatMap((row) => this.orderFor(row.client_order_id) ?? []);
+  }
+
+  resolvePending(
+    clientOrderId: string,
+    outcome: 'submitted' | 'rejected',
+    detail: string,
+    tradingDate: string,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE v2_orders SET outcome = ?,
+           payload = json_set(payload, '$.detail', ?, '$.resolved', ?)
+         WHERE client_order_id = ? AND outcome = 'pending'`,
+      )
+      .run(outcome, detail, tradingDate, clientOrderId);
+  }
+
   orderFor(clientOrderId: string): JournalledOrder | undefined {
     const row = this.db
       .prepare(
@@ -153,7 +194,7 @@ export class Journal implements DecisionJournal {
       .prepare(
         `SELECT client_order_id FROM v2_orders o
          WHERE book_id = ? AND leg = 'entry'
-           AND outcome IN ('submitted', 'simulated', 'refused_dry_run')
+           AND outcome IN ('pending', 'submitted', 'simulated', 'refused_dry_run')
            AND NOT EXISTS (SELECT 1 FROM v2_fills f WHERE f.client_order_id = o.client_order_id)
          ORDER BY trading_date, client_order_id`,
       )

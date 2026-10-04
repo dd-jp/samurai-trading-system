@@ -59,6 +59,7 @@ const EVENT_FAULTS: Readonly<Record<string, FaultKind>> = {
   v2_fill_sweep_failed: 'failed_broker_call',
   v2_resume_flatten_failed: 'failed_broker_call',
   v2_cancel_failed: 'stuck_order',
+  v2_pending_order_resolved: 'stuck_order',
   v2_simulated_flatten_stale: 'stuck_order',
   v2_rearm_backstop_failed: 'missed_stop',
   v2_reconcile_threw: 'reconcile_mismatch',

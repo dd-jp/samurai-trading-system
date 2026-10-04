@@ -11,6 +11,7 @@ import type {
   BrokerCashActivityReader,
   BrokerMode,
   ControlAction,
+  JournalledOrder,
   LossBudgetState,
   MarketData,
   Sleeve,
@@ -157,7 +158,7 @@ class FakeAlpaca implements BrokerAdapter {
     });
   }
 
-  getOrder(): Promise<null> {
+  getOrder(_clientOrderId?: string, _instrument?: string): Promise<NormalizedOrder | null> {
     return Promise.resolve(null);
   }
 
@@ -3276,6 +3277,7 @@ describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
     expect(last?.outcome).toBe('rejected');
     expect(last?.payload.detail).toBe('insufficient_cash');
     expect(last?.payload).not.toHaveProperty('entry_offset_bps');
+    expect(last?.payload).not.toHaveProperty('approval');
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM9')?.payload).toMatchObject({
       entry_offset_bps: 50,
     });
@@ -6748,5 +6750,140 @@ describe('runFlattenPass: the out-of-cycle flatten (#1894)', () => {
     ]);
     expect(report.exits).toBe(1);
     expect(alpaca.flattens).toEqual([]);
+  });
+});
+
+describe('journal before submit (David 2026-10-04, #1747)', () => {
+  const PRIMARY_ID = 'v2-debate-primary-2026-09-25-AAPL';
+
+  function seedPending(deps: CycleDeps, clientOrderId: string, bookId: string): void {
+    deps.journal.recordOrder({
+      client_order_id: clientOrderId,
+      decision_id: null,
+      book_id: bookId,
+      trading_date: '2026-09-25',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: false,
+      outcome: 'pending',
+      payload: { size: 6, detail: '', approval: 'a' },
+    });
+  }
+
+  it('journals a broker entry pending before the venue sees it, then settles it to the outcome', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    const seen: (string | undefined)[] = [];
+    const submit = alpaca.submitBracket.bind(alpaca);
+    vi.spyOn(alpaca, 'submitBracket').mockImplementation((order) => {
+      seen.push(deps.journal.orderFor(order.client_order_id)?.outcome);
+      return submit(order);
+    });
+    const pending = new Map<string, JournalledOrder | undefined>();
+    const submitAny = deps.executor.submit.bind(deps.executor);
+    vi.spyOn(deps.executor, 'submit').mockImplementation((order) => {
+      pending.set(order.clientOrderId, deps.journal.orderFor(order.clientOrderId));
+      return submitAny(order);
+    });
+    await runCycle(deps, '2026-09-25');
+    expect(seen).toEqual(['pending']);
+    const settled = deps.journal.orderFor(PRIMARY_ID);
+    expect(pending.get(PRIMARY_ID)).toMatchObject({
+      outcome: 'pending',
+      payload: {
+        detail: '',
+        modelled_slippage_bps: expect.closeTo(5, 6),
+        approval: settled?.payload.approval,
+      },
+    });
+    expect(pending.get('v2-debate-no-macro-gate-2026-09-25-AAPL')?.payload).not.toHaveProperty(
+      'modelled_slippage_bps',
+    );
+    expect(deps.journal.orderFor(PRIMARY_ID)).toMatchObject({
+      outcome: 'submitted',
+      payload: {
+        detail: 'submitted',
+        modelled_slippage_bps: expect.closeTo(5, 6),
+        approval: expect.any(String),
+      },
+    });
+    expect(deps.journal.orderFor('v2-debate-no-macro-gate-2026-09-25-AAPL')).toMatchObject({
+      outcome: 'simulated',
+    });
+    expect(deps.journal.pendingOrders()).toEqual([]);
+  });
+
+  it('resolves a pending broker order the venue holds to submitted, and one it never received to rejected', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([], false, alpaca);
+    seedPending(deps, 'held', 'debate/primary');
+    seedPending(deps, 'unsent', 'debate/primary');
+    const getOrder = vi.spyOn(alpaca, 'getOrder').mockImplementation((id?: string) =>
+      Promise.resolve(
+        id === 'held'
+          ? {
+              client_order_id: id,
+              broker_order_ids: ['a1'],
+              order_state: 'submitted',
+              filled_qty: 0,
+            }
+          : null,
+      ),
+    );
+    const logs: LogEntry[] = [];
+    await runCycle({ ...deps, logger: { log: (entry) => logs.push(entry) } }, '2026-09-25');
+    expect(getOrder.mock.calls.map(([id]) => id)).toEqual(['held', 'unsent']);
+    expect(deps.journal.orderFor('held')).toMatchObject({
+      outcome: 'submitted',
+      payload: { size: 6, detail: 'submitted', resolved: '2026-09-25', approval: 'a' },
+    });
+    expect(deps.journal.orderFor('unsent')).toMatchObject({
+      outcome: 'rejected',
+      payload: { detail: 'not_sent: no order at the venue under this id', resolved: '2026-09-25' },
+    });
+    expect(
+      logs
+        .filter((entry) => entry.event === 'v2_pending_order_resolved')
+        .map((e) => [e.level, e.message]),
+    ).toEqual([
+      [
+        'error',
+        'held: journalled pending by a run that ended before its outcome; the venue holds it, now submitted',
+      ],
+      [
+        'error',
+        'unsent: journalled pending by a run that ended before its outcome; the venue never received it, now rejected',
+      ],
+    ]);
+  });
+
+  it('resolves a simulated pending order to rejected without asking a venue, and leaves an unknown book pending', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([], false, alpaca);
+    seedPending(deps, 'orphan', 'retired/primary');
+    seedPending(deps, 'shadow', 'debate/no-macro-gate');
+    const getOrder = vi.spyOn(alpaca, 'getOrder');
+    await runCycle(deps, '2026-09-25');
+    expect(getOrder).not.toHaveBeenCalled();
+    expect(deps.journal.orderFor('shadow')).toMatchObject({
+      outcome: 'rejected',
+      payload: { detail: 'not_sent: no order at the venue under this id' },
+    });
+    expect(deps.journal.orderFor('orphan')?.outcome).toBe('pending');
+  });
+
+  it('a failed venue read leaves the order pending and blocks entries for the run', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = harness([longAapl], false, alpaca);
+    seedPending(deps, 'unknown', 'debate/primary');
+    vi.spyOn(alpaca, 'getOrder').mockRejectedValue(new Error('ECONNRESET'));
+    const report = await runCycle(deps, '2026-09-25');
+    expect(deps.journal.orderFor('unknown')?.outcome).toBe('pending');
+    expect(alpaca.brackets).toEqual([]);
+    expect(report.refusals).toContain(
+      'debate/primary: entries blocked, pending order resolve threw: ECONNRESET',
+    );
   });
 });

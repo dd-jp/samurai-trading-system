@@ -3,6 +3,7 @@ import type { JournalledOrder, Sleeve, SleeveDecision } from '../../../../contra
 import { SimulatedClock } from '../../../shared/index.js';
 import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { CapitalConfigStore, PaperBooks } from '../risk/index.js';
+import type { Fault } from './faults.js';
 import { inputsHash, Journal } from './journal.js';
 
 const CAPTURED = {
@@ -480,6 +481,96 @@ describe('Journal', () => {
     expect(first).not.toBe(inputsHash([bar], [{ ...view, key_points: ['headline'] }], models));
     expect(first).not.toBe(inputsHash([{ ...bar, close: 2 }], [view], models));
     expect(first).not.toBe(inputsHash([bar], [view], ['b', 'a', 'judge']));
+  });
+});
+
+describe('journal before submit (David 2026-10-04, #1747)', () => {
+  const clock = new SimulatedClock(new Date('2026-09-28T06:30:00.000Z'));
+
+  function pendingJournal() {
+    const db = migratedMemoryStore();
+    const capital = new CapitalConfigStore(db, clock);
+    capital.setYear(2026, 1_000, 1_500);
+    new PaperBooks(db, clock, capital, '2026-09-25', [DEBATE]);
+    const faults: Fault[] = [];
+    const journal = new Journal(db, clock, { record: (fault) => faults.push(fault) });
+    const pending: JournalledOrder = {
+      client_order_id: 'p-1',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: '2026-09-28',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: false,
+      outcome: 'pending',
+      payload: { size: 6, detail: '', approval: 'entry:p-1:1', stop: 19.2 },
+    };
+    journal.recordOrder(pending);
+    journal.recordOrder({ ...pending, client_order_id: 'done', outcome: 'submitted' });
+    return { journal, faults, pending };
+  }
+
+  it('lists only pending orders and counts them as resting entries', () => {
+    const { journal } = pendingJournal();
+    expect(journal.pendingOrders().map((order) => order.client_order_id)).toEqual(['p-1']);
+    expect(journal.restingEntries('debate/primary').map((order) => order.client_order_id)).toEqual([
+      'done',
+      'p-1',
+    ]);
+  });
+
+  it("settles a pending order to the venue's outcome and payload, ledgering a venue rejection", () => {
+    const { journal, faults } = pendingJournal();
+    journal.settleOrder('p-1', 'rejected', { size: 6, detail: 'insufficient', approval: 'a-1' });
+    expect(journal.orderFor('p-1')).toMatchObject({
+      outcome: 'rejected',
+      payload: { size: 6, detail: 'insufficient', approval: 'a-1' },
+    });
+    expect(journal.pendingOrders()).toEqual([]);
+    expect(faults).toEqual([
+      {
+        kind: 'failed_broker_call',
+        trading_date: '2026-09-28',
+        code: 'entry_rejected',
+        detail: 'p-1: insufficient',
+      },
+    ]);
+  });
+
+  it('settles a submitted order with no fault', () => {
+    const { journal, faults } = pendingJournal();
+    journal.settleOrder('p-1', 'submitted', { detail: 'submitted' });
+    expect(journal.orderFor('p-1')?.outcome).toBe('submitted');
+    expect(faults).toEqual([]);
+  });
+
+  it('refuses to settle an order that is not pending, and leaves it as it was', () => {
+    const { journal } = pendingJournal();
+    expect(() => journal.settleOrder('done', 'rejected', {})).toThrow(
+      'journal: done is not a pending order',
+    );
+    expect(() => journal.settleOrder('missing', 'rejected', {})).toThrow(
+      'journal: missing is not a pending order',
+    );
+    expect(journal.orderFor('done')).toMatchObject({ outcome: 'submitted', payload: {} });
+  });
+
+  it('resolves a pending order in place, keeping its payload, and never touches a settled one', () => {
+    const { journal, faults, pending } = pendingJournal();
+    journal.resolvePending('p-1', 'rejected', 'not_sent: gone', '2026-09-29');
+    journal.resolvePending('done', 'rejected', 'not_sent: gone', '2026-09-29');
+    expect(journal.orderFor('p-1')).toEqual({
+      ...pending,
+      outcome: 'rejected',
+      payload: { ...pending.payload, detail: 'not_sent: gone', resolved: '2026-09-29' },
+    });
+    expect(journal.orderFor('done')).toMatchObject({ outcome: 'submitted', payload: {} });
+    expect(journal.restingEntries('debate/primary').map((order) => order.client_order_id)).toEqual([
+      'done',
+    ]);
+    expect(faults).toEqual([]);
   });
 });
 
