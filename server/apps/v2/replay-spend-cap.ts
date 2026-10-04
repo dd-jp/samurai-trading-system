@@ -1,8 +1,4 @@
-import type {
-  SpendCap,
-  SpendCapRefusalKind,
-  SpendCapVerdict,
-} from '../../pipeline/debate-engine/index.js';
+import type { SpendCap, SpendCapRefusalKind, SpendCapVerdict } from '../../shared/debate/index.js';
 import { DEBATE_SLEEVE_ID, SPEND_CAP_REASON_PREFIX } from './signal/index.js';
 
 const REFUSAL_KINDS: readonly string[] = [

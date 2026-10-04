@@ -1,6 +1,6 @@
-import { describeThrownSafely, type RetryAttemptReport, withRetry } from '../../../shared/index.js';
-import type { AnthropicUsage } from '../../../shared/llm/index.js';
-import { hashPromptTemplate } from '../../../shared/llm/index.js';
+import { describeThrownSafely, type RetryAttemptReport, withRetry } from '../../index.js';
+import type { AnthropicUsage } from '../../llm/index.js';
+import { hashPromptTemplate } from '../../llm/index.js';
 import {
   LlmAdmissionRefusedError,
   LlmCancelledError,

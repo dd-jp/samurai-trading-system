@@ -1,4 +1,4 @@
-import type { LlmSpendRecord, LlmSpendSink } from '../../../pipeline/debate-engine/index.js';
+import type { LlmSpendRecord, LlmSpendSink } from '../../../shared/debate/index.js';
 import type { Logger } from '../../../shared/index.js';
 
 export interface KnownSecret {

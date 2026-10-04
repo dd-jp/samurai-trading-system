@@ -1,4 +1,4 @@
-import type { RetryConfig } from '../../../shared/index.js';
+import type { RetryConfig } from '../../index.js';
 import type { AnalystView } from '../types.js';
 
 export interface LlmRequestContext {

@@ -1,5 +1,5 @@
 import type { MarketData, Venue } from '../../../../contracts/index.js';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
+import type { DailyBar } from '../../../shared/index.js';
 import {
   type BarsSource,
   barsBefore,

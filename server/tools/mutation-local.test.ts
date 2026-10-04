@@ -53,9 +53,9 @@ describe('isTradingPathFile', () => {
   });
 
   it.each([
-    'server/pipeline/debate-engine/index.ts',
-    'server/pipeline/momentum/index.ts',
-    'server/providers/market-data-service/index.ts',
+    'server/shared/debate/index.ts',
+    'server/shared/market/index.ts',
+    'server/providers/calendar/index.ts',
   ])('%s is not trading-path', (path) => {
     expect(isTradingPathFile(path)).toBe(false);
   });
@@ -69,7 +69,7 @@ describe('risk, sizing and loss-budget paths', () => {
     'server/apps/v2/reconcile.ts',
     'server/apps/v2/reconcile-compare.ts',
     'server/apps/v2/cash-anchor.ts',
-    'server/pipeline/momentum/sizing.ts',
+    'server/shared/market/sizing.ts',
   ])('%s is trading-path', (path) => {
     expect(isTradingPathFile(path)).toBe(true);
   });
@@ -82,8 +82,8 @@ describe('risk, sizing and loss-budget paths', () => {
     expect(isTradingPathFile(path)).toBe(true);
   });
 
-  it('leaves the rest of momentum out', () => {
-    expect(isTradingPathFile('server/pipeline/momentum/signal.ts')).toBe(false);
+  it('leaves the rest of shared/market out', () => {
+    expect(isTradingPathFile('server/shared/market/signal.ts')).toBe(false);
   });
 
   it.each([
@@ -102,8 +102,8 @@ describe('testFilesGlob', () => {
   });
 
   it('names the sibling test of a single-file prefix', () => {
-    expect(testFilesGlob('server/pipeline/momentum/sizing.ts')).toBe(
-      'server/pipeline/momentum/sizing.test.ts',
+    expect(testFilesGlob('server/shared/market/sizing.ts')).toBe(
+      'server/shared/market/sizing.test.ts',
     );
   });
 });

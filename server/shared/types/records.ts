@@ -1,4 +1,4 @@
-import type { AnalystContribution, Direction } from '../../pipeline/debate-engine/index.js';
+import type { AnalystContribution, Direction } from '../debate/index.js';
 import type { AssetClass } from './primitives.js';
 
 export type DebateTermination = 'converged' | 'non_converged' | 'latency_truncated';

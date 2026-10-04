@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { LlmSpendRecord } from '../../../pipeline/debate-engine/index.js';
+import type { LlmSpendRecord } from '../../../shared/debate/index.js';
 import {
   type KnownSecret,
   leakedSecret,

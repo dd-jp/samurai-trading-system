@@ -5,7 +5,7 @@ export default {
     configFile: 'vitest.config.ts',
   },
   mutate: [
-    'server/pipeline/momentum/**/*.ts',
+    'server/shared/market/**/*.ts',
     'server/apps/v2/**/*.ts',
     '!server/apps/v2/smoke.ts',
     '!**/*.test.ts',

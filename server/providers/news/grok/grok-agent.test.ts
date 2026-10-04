@@ -1,4 +1,4 @@
-import type { SpendCap } from '../../../pipeline/debate-engine/index.js';
+import type { SpendCap } from '../../../shared/debate/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import { UNGATED_LLM_IN_FLIGHT } from '../../../shared/llm/index.js';
 import type { LogEntry, Logger } from '../../../shared/types.js';

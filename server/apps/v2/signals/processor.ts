@@ -1,9 +1,5 @@
 import type { BookSpec, SignalWire, SleeveDecision, V2Bar } from '../../../../contracts/index.js';
-import {
-  civilDateKey,
-  ET_ZONE,
-  toCivilDate,
-} from '../../../providers/market-data-service/index.js';
+import { civilDateKey, ET_ZONE, toCivilDate } from '../../../providers/calendar/index.js';
 import { describeThrownSafely, digest } from '../../../shared/index.js';
 import { type CycleDeps, type EntryPassReport, runEntryPass } from '../cycle.js';
 import { isFresh } from '../data/index.js';

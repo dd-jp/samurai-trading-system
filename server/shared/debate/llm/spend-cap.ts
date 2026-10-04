@@ -1,6 +1,6 @@
-import type { Logger } from '../../../shared/index.js';
-import { currentTraceId, describeThrownSafely } from '../../../shared/index.js';
-import type { StoreHandle } from '../../../shared/store/index.js';
+import type { Logger } from '../../index.js';
+import { currentTraceId, describeThrownSafely } from '../../index.js';
+import type { StoreHandle } from '../../store/index.js';
 
 export type SpendCapRefusalKind = 'budget' | 'corrupt_ledger' | 'read_fault';
 

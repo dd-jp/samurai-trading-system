@@ -18,17 +18,15 @@ import type {
   MediatorAssessment,
   PersonaResponse,
   RoundContext,
-} from '../../../pipeline/debate-engine/index.js';
+} from '../../../shared/debate/index.js';
 import {
   runBearPersona,
   runBullPersona,
   runDebate,
   runMediatorPersona,
-} from '../../../pipeline/debate-engine/index.js';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
-import { averageTrueRange, trailingReturn } from '../../../pipeline/momentum/index.js';
-import type { Clock, Logger } from '../../../shared/index.js';
-import { describeThrownSafely } from '../../../shared/index.js';
+} from '../../../shared/debate/index.js';
+import type { Clock, DailyBar, Logger } from '../../../shared/index.js';
+import { averageTrueRange, describeThrownSafely, trailingReturn } from '../../../shared/index.js';
 import type { BarsSource, NewsSource, RouteChoice, VenueRouter } from '../data/index.js';
 import {
   barsBefore,

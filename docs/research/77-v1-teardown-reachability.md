@@ -92,7 +92,7 @@ After settling, a surviving file reaches a deleted file only in three places: a 
 There are 516 test files (`*.test.ts[x]`, `*.spec.ts`). A test's dependencies are its symbol-level imports (graphify, through barrels), its direct relative imports and `vi.mock` paths, and any file it reads through `new URL(..., import.meta.url)`. Each test is then classified:
 
 - **Same-name subject.** A test whose same-name subject (`foo.test.ts` → `foo.ts`) is on the list is deleted. A test whose subject is held is held. A test whose subject stays, stays.
-- **No same-name subject.** The test is deleted when every non-test file it depends on is on the list, when its directory has no surviving production file, or when its only other dependencies are in `server/shared` and `contracts`. Otherwise the rule still deletes it but flags it for review. 13 tests were flagged; each was checked by hand and is v1-only. Two tests are kept by name because they test surviving code: `server/pipeline/debate-engine/llm/prompt-caching.test.ts` and server/pipeline/execution/broker-state-persistence.test.ts. One is held by name with Q2: adapters/saxo-per-request-pacing.test.ts.
+- **No same-name subject.** The test is deleted when every non-test file it depends on is on the list, when its directory has no surviving production file, or when its only other dependencies are in `server/shared` and `contracts`. Otherwise the rule still deletes it but flags it for review. 13 tests were flagged; each was checked by hand and is v1-only. Two tests are kept by name because they test surviving code: `server/shared/debate/llm/prompt-caching.test.ts` and server/pipeline/execution/broker-state-persistence.test.ts. One is held by name with Q2: adapters/saxo-per-request-pacing.test.ts.
 - **Wave.** A deleted test leaves in the earliest wave that deletes anything it depends on. For example, server/shared/threshold-bounds-readers.test.ts reads orchestrator/production.ts, so it leaves in wave 2.
 - **Surviving tests.** A kept or held test that depends on a list file needs a rewrite by that file's wave (§4.6).
 
@@ -302,10 +302,10 @@ Deleted: the 39 production files, the 36 tests and the indicator golden fixture 
 
 Exports left unused were trimmed until `fallow dead-code` was clean:
 
-- `server/providers/market-data-service/trading-calendar.ts` makes `toZonedTime`, `findSessionClose`, `MAX_SESSION_SEARCH_DAYS` and `SessionSearchDirection` module-private; alpaca-session-calendar.ts was their only other user.
-- The G18 archive files stay. `MiArchiveStore` loses `rawRowsBetween` (only the GDELT scoring pass read it) and the three refusal-streak methods (only the Polymarket agent), and `server/providers/market-intelligence/archive/mi-sources.ts` loses `HYDRATING_MI_SOURCES` and its hydration table (only the MI ingest agent). No migration is touched, and the test that migration 0003's index serves the windowed query stays. Tag v1-final keeps the removed methods.
+- `server/providers/calendar/trading-calendar.ts` makes `toZonedTime`, `findSessionClose`, `MAX_SESSION_SEARCH_DAYS` and `SessionSearchDirection` module-private; alpaca-session-calendar.ts was their only other user.
+- The G18 archive files stay. `MiArchiveStore` loses `rawRowsBetween` (only the GDELT scoring pass read it) and the three refusal-streak methods (only the Polymarket agent), and `server/providers/news/archive/mi-sources.ts` loses `HYDRATING_MI_SOURCES` and its hydration table (only the MI ingest agent). No migration is touched, and the test that migration 0003's index serves the windowed query stays. Tag v1-final keeps the removed methods.
 - Two wave 5 barrels lose re-exports whose last users went here: `server/shared/index.ts` drops `InstrumentSubclass` (also from `server/shared/types.ts` and `server/shared/types/primitives.ts`; lse-etp-pool.ts) and `LogEntryTemplate` (the GDELT and Polymarket agents). No wave 5 file is deleted.
-- `server/pipeline/debate-engine/index.ts` drops five re-exports that only wave 4 files used: `DEBATE_BAR_TIMEFRAME_MS` and `floorToBar` (market-intelligence imports them from the declaring file), `BARE_JSON_INSTRUCTION` and `unwrapFencedJson` (personas.ts imports them directly), and the `LlmRequest` type. No debate-engine file moves or loses a declaration, so the §5.2 home question is untouched.
+- `server/pipeline/debate-engine/index.ts` drops five re-exports that only wave 4 files used: `DEBATE_BAR_TIMEFRAME_MS` and `floorToBar` (market-intelligence imports them from the declaring file), `BARE_JSON_INSTRUCTION` and `unwrapFencedJson` (personas.ts imports them directly), and the `LlmRequest` type. No debate-engine file moves or loses a declaration, so the §5.2 home question is untouched. <!-- cite-exempt: historical — the wave 4 state; the §5.2 rename moved this barrel to server/shared/debate/index.ts and re-exported both constants from it -->
 
 The `MINIMUM_EVENT_ASSIGNMENTS` floor in `server/shared/types/log-event-code.test.ts` drops from 80 to 60. The scan finds 66 assignments against 86 on base, and all 20 lost ones were in deleted files: service.ts 2, gdelt-ingest-agent.ts 4, gdelt-scoring-pass.ts 2, mi-ingest-agent.ts 4, polymarket-agent.ts 6 and item-scorer.ts 2. No surviving file's count changed.
 
@@ -412,7 +412,7 @@ That is 22 files and 3,977 lines before the barrels. Notes for the build:
 
 ### 5.2 Other survivors in v1-named directories (rename, Step 0 item 8)
 
-These 44 production files are reachable by both methods and live outside `server/apps/v2/`. The renames are **proposals**: Step 0 item 8 asks for v2 vocabulary but rules no names. The proposed homes for the momentum and debate-engine survivors are still **open for David** after the 2026-10-03 rulings: putting them under `server/apps/v2/` breaks the v2 module boundaries in `.oxlintrc.json`.
+These 44 production files are reachable by both methods and live outside `server/apps/v2/`. The renames were **proposals**: Step 0 item 8 asks for v2 vocabulary but rules no names, and putting the momentum and debate-engine survivors under `server/apps/v2/` would break the v2 module boundaries in `.oxlintrc.json`. David ruled the homes on 2026-10-03 (doc 66, §5.2 homes rulings): momentum to `server/shared/market/` and the debate engine to `server/shared/debate/`, both under `server/shared/`, and the other rows as proposed below.
 
 | Today | Files (lines) | What v2 uses it for | Proposed home |
 |---|---|---|---|
@@ -426,6 +426,25 @@ These 44 production files are reachable by both methods and live outside `server
 | server/apps/orchestrator/live-money-gates.ts | 1 (25) | read by `npm run check:live-gates` | server/tools/ next to its checker. This one moves **in wave 2**, before its directory goes, with its content unchanged. |
 
 `server/shared/` (37 reachable files), `contracts/` and the repo gate tools already carry neutral names and stay where they are.
+
+### 5.2 status (2026-10-03, #2061)
+
+Moved in #2061 with `git mv`, file contents unchanged except import paths, plus the debate barrel re-exporting `DEBATE_BAR_TIMEFRAME_MS` and `floorToBar`. The CRAP-gate splits these files needed landed first in #2062 on the old paths (doc 66, §5.2 homes ruling 4), so #2061 is a pure move:
+
+| From | To | Files |
+|---|---|---|
+| server/pipeline/momentum/ | `server/shared/market/` | 11 (6 production, 5 tests) |
+| server/pipeline/debate-engine/ | `server/shared/debate/` | 37 (17 survivors, the `MockLlmClient` test double, 19 tests) |
+| server/tools/backtest/ | `server/apps/v2/evidence/` | 11 (7 production, 4 tests) |
+| server/providers/market-data-service/ | `server/providers/calendar/` | 4 (2 production, 2 tests) |
+| server/providers/market-intelligence/ | `server/providers/news/` | 20 (8 production with the G18 grok and archive files, 8 tests, the 4 archive migrations) |
+
+- server/pipeline/, server/tools/backtest/ and the two old provider directories are gone. `bar-store` and `saxo-bars` stay.
+- The momentum helpers are re-exported from `server/shared/index.ts`, so every importer reaches them through the shared barrel; the oxlint `**/shared/**` pattern already refuses a deep import.
+- `.oxlintrc.json`: each moved directory's barrel pattern is renamed in every override (`**/shared/debate/**`, `**/calendar/**`, `**/news/**`; `**/evidence/**` inside `server/apps/v2/` and `**/v2/evidence/**` elsewhere, because `client/src/components/evidence/` would match the bare name). The old server/tools/backtest override is dropped: `server/apps/v2/**` now covers the evidence files with a superset of its patterns. Inside `server/shared/`, where the moved modules reach each other by short relative paths that the `**/shared/…/**` patterns never see, the `server/shared/**`, `llm`, `store` and `debate` overrides also carry folder-name patterns (`**/llm/**`, `**/debate/**`, `**/market/**`, each module leaving out its own name, and the debate override exempting its own `./llm/` folder), so a deep import between them fails as it did on the old paths. Market and debate also refuse a deep import of a `server/shared` root file or of its `http/` and `types/` folders (`../*.js`, `../http/**` and `../types/**` from `market/` and debate's root, the same under `../../` from `debate/llm/`, plus `**/shared/**` in market's override for paths that climb back through `shared/`, the root barrel excepted), which `**/shared/**` refused from their old paths; debate's root level has its own override because `debate/llm/types.ts` imports debate's own `../types.js`. The news barrel's own override gains the debate pattern, and it now imports `DEBATE_BAR_TIMEFRAME_MS` and `floorToBar` through the debate barrel instead of from the declaring file.
+- Mutation: the `TRADING_PATH_PREFIXES` entry and the `stryker.config.mjs` glob move to `server/shared/market/`. The evidence files leave the `server/tools/` exclusion and become advisory mutation targets under `server/apps/v2/`.
+- `npm run build:migrations` copies the archive migrations from their new path; the migration files themselves are untouched.
+- The CRAP gate diffs with `--no-renames`, so every moved function counts as touched. Five functions with complexity above 7 (`runDebate`, the spend cap's refusal path, the Grok agent's archive write, and the X search and Nous sentiment clients' parsing) and two at 7 with partial coverage were split into helpers, with the same checks in the same order, in #2062 on the old paths, merged ahead of #2061 (David, 2026-10-03; the #2032 precedent). #2062 also added a test of the `x_search_items_dropped` payload.
 
 ## 6. KEEP by ruling, and held for a ruling
 
@@ -528,7 +547,7 @@ Deletion candidates that cite an issue: 237 of the 574 files cite 347 distinct i
 
 The issue tickets keep their targets:
 
-- #1387 (LSE holidays) still has v2's calendar, server/providers/market-data-service/trading-calendar.ts (§5.2).
+- #1387 (LSE holidays) still has v2's calendar, `server/providers/calendar/trading-calendar.ts` (moved from server/providers/market-data-service/ in §5.2).
 - #1400 (Saxo SIM drill) still has v2's drill, `server/apps/v2/execution/sim-cfd-stop-drill.ts`.
 
 The other references to note:
@@ -547,7 +566,7 @@ Doc citations each wave must fix, outside the immutable record directories: wave
 2. **saxo-http-client.ts**: option A, B or C (§7). This decides #1930, #1868 and #1426, and whether the Q2 hold in §6 is released.
 3. **The v1 CGT matcher** (§6): hold it until #1947 ports it, or delete it and port from tag v1-final? This also decides store/fill-row.ts and, together with Q2, book-currency.ts.
 4. **G18 scope** (§6): does "the X/social code" also cover the v1 sentiment analyst, the MI ingest agent and the item scorer? G18 also says "v1's news feed is left as it is", and mi-ingest-agent.ts is that feed's ingest. If the answer is yes, those files move from waves 3 and 4 to KEEP.
-5. **MOVE targets and names** (§5): confirm the proposed homes, and whether `BrokerAdapter` moves from `server/shared` to `contracts/` in the same wave. *Ruled 2026-10-02 and 2026-10-03 (doc 66): §5.1's homes confirmed and built (#2034); `BrokerAdapter` to `contracts/` with ISO 8601 strings, in its own PR after the MOVE (#2038). §5.2's momentum and debate-engine homes stay open.*
+5. **MOVE targets and names** (§5): confirm the proposed homes, and whether `BrokerAdapter` moves from `server/shared` to `contracts/` in the same wave. *Ruled 2026-10-02 and 2026-10-03 (doc 66): §5.1's homes confirmed and built (#2034); `BrokerAdapter` to `contracts/` with ISO 8601 strings, in its own PR after the MOVE (#2038). §5.2's homes ruled 2026-10-03 (doc 66) and moved in #2061.*
 6. **Alpaca crypto emulation** (§5.1): cut it from the live Alpaca adapter inside the MOVE PR, or in its own PR?
 7. **Order**: waves 1 to 5 and then the MOVE wave, as proposed, or the MOVE first so v2 stops importing `pipeline/` before any deletion? The wave settling in §3.4 holds either way.
 8. **Momentum backtest scripts** (wave 1, server/tools/backtest/momentum): doc 67 Step 3 already sends the momentum loss-budget copy "with Step 5". Confirm that doc 70's numbers are then reproducible only from tag v1-final.

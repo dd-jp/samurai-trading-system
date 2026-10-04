@@ -1,10 +1,10 @@
-import type { LlmInFlightGate, NousChatOptions } from '../../../shared/llm/index.js';
+import type { LlmInFlightGate, NousChatOptions } from '../../llm/index.js';
 import {
   LlmInFlightRefusedError,
   NousRefusalError,
   NousTruncatedError,
   nousChat,
-} from '../../../shared/llm/index.js';
+} from '../../llm/index.js';
 import type {
   AnthropicMessageOptions,
   AnthropicMessageRequest,

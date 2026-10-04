@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import type { BarSeries, DailyBar } from '../../pipeline/momentum/index.js';
+import type { BarSeries, DailyBar } from '../../shared/index.js';
 import { ParquetBarStore } from './index.js';
 
 const stores: ParquetBarStore[] = [];

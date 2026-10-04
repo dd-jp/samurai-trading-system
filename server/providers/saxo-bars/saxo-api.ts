@@ -6,8 +6,7 @@ import {
   SaxoTokenRefresher,
   tokenFilePath,
 } from '../../apps/v2/execution/index.js';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
-import type { Logger } from '../../shared/index.js';
+import type { DailyBar, Logger } from '../../shared/index.js';
 import { isFiniteNumber, jsonOrTextResult, maskCredentials } from '../../shared/index.js';
 import type { FetchResult } from '../bar-store/index.js';
 

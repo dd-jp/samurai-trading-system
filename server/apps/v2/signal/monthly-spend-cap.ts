@@ -1,4 +1,4 @@
-import type { SpendCap, SpendCapVerdict } from '../../../pipeline/debate-engine/index.js';
+import type { SpendCap, SpendCapVerdict } from '../../../shared/debate/index.js';
 import type { Clock, Logger } from '../../../shared/index.js';
 import { describeThrownSafely } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';

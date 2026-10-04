@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type FillLeg, V2_CONTRACT_VERSION } from '../../../../contracts/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
-import { annualisedSharpe } from '../../../tools/backtest/index.js';
+import { annualisedSharpe } from '../evidence/index.js';
 import { Journal } from '../journal/journal.js';
 import { EvidenceReader } from './evidence.js';
 

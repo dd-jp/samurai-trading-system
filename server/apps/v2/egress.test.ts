@@ -2,9 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DailyBar } from '../../pipeline/momentum/index.js';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
-import type { LogEntry } from '../../shared/index.js';
+import type { DailyBar, LogEntry } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { inMemoryCopyOf, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import type {

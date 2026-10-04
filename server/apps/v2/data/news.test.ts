@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AlpacaNewsArticle } from '../../../providers/market-intelligence/sources/alpaca-news-client.js';
+import type { AlpacaNewsArticle } from '../../../providers/news/sources/alpaca-news-client.js';
 import { guardedStore, openSharedStore } from '../../../shared/store/index.js';
 import { journalledNewsSource } from './journalled-news.js';
 import {

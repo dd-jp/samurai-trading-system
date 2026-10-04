@@ -13,9 +13,8 @@ import type {
   SleeveDecision,
   Venue,
 } from '../../../../contracts/index.js';
-import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
-import type { DailyBar } from '../../../pipeline/momentum/index.js';
-import type { Clock } from '../../../shared/index.js';
+import type { AnalystView } from '../../../shared/debate/index.js';
+import type { Clock, DailyBar } from '../../../shared/index.js';
 import { digest } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';

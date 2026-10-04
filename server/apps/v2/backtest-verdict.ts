@@ -12,7 +12,7 @@ import {
   sliceByRanges,
   WALK_FORWARD_FOLDS,
   walkForwardPath,
-} from '../../tools/backtest/index.js';
+} from './evidence/index.js';
 
 // Q7: beat the benchmark after a 40% Sharpe haircut, applied as strategy × 0.6 > benchmark (doc 66 Session B (e))
 const SHARPE_HAIRCUT_MULTIPLIER = 0.6;

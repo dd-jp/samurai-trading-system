@@ -1,5 +1,5 @@
-import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
-import type { LogEntry } from '../../../shared/types.js';
+import { openSharedStore, type StoreHandle } from '../../store/index.js';
+import type { LogEntry } from '../../types.js';
 import { SqliteLlmSpendStore } from './spend-sink.js';
 
 const NOW = new Date('2026-09-02T12:00:00Z');

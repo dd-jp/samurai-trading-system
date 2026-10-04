@@ -56,17 +56,16 @@ Around the cycle sit `server/apps/v2/signals/` (the signals endpoint), `server/a
 client/            Vite + React dashboard
 contracts/         Wire model and module interfaces; imports nothing from server/ or client/
 server/
-  apps/v2/         The v2 composition root, its five modules and its CLIs
-  pipeline/        v2-reached survivors in v1-named directories (debate LLM clients, momentum helpers)
+  apps/v2/         The v2 composition root, its five modules, the DSR/PBO evidence code and its CLIs
   providers/       Bar store, Saxo bars, trading calendar, Alpaca news, the G18-held sentiment code
-  shared/          Clock, logging, HTTP, LLM pricing, the SQLite store and migrations
-  tools/           Repo gates (citations, CRAP, mutation, live-money gates), backtest statistics, Saxo keep-alive
+  shared/          Clock, logging, HTTP, LLM pricing, the debate engine, market helpers, the SQLite store and migrations
+  tools/           Repo gates (citations, CRAP, mutation, live-money gates), Saxo keep-alive
 e2e/               Playwright tests against the dashboard
 ops/               launchd jobs and the bar snapshot script
 docs/              ADR, specs, research, reviews
 ```
 
-`client/` and `server/` never import each other; both import `contracts/`. The renames of the `server/pipeline/` survivors wait on David (doc 77 §5.2).
+`client/` and `server/` never import each other; both import `contracts/`. The surviving v1-named modules moved to their v2 homes on 2026-10-03 (doc 77 §5.2).
 
 ## Running
 

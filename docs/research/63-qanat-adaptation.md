@@ -49,7 +49,7 @@ Qanat's own measured mechanism (their readme, synthetic `--demo`; treat as proof
 
 Qanat invariant: `ctx.read()` rejects any table the step did not list in `from:`; `qanat check` refuses a project that breaks the forward-only stage contract. "A missing dependency is an error instead of a wrong number."
 
-**Action:** audit `server/pipeline/` — does each stage/step declare an **input whitelist** and fail closed on undeclared reads (`PIPELINE_STAGES`, `TickStage`)? If not, add it. Cheap, high-trust, matches the existing "no silent wrong number" instinct (D4 / falsifier discipline).
+**Action:** audit `server/pipeline/` — does each stage/step declare an **input whitelist** and fail closed on undeclared reads (`PIPELINE_STAGES`, `TickStage`)? If not, add it. Cheap, high-trust, matches the existing "no silent wrong number" instinct (D4 / falsifier discipline). <!-- cite-exempt: historical — the v1 pipeline, deleted in v1 teardown wave 3 (#1748); preserved at tag v1-final -->
 
 ## Mechanism 3 — report semantics
 

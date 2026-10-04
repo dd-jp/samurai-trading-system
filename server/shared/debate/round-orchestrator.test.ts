@@ -1,4 +1,4 @@
-import { SimulatedClock } from '../../shared/index.js';
+import { SimulatedClock } from '../index.js';
 import type {
   DebateInput,
   DebaterPersona,

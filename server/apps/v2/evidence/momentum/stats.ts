@@ -1,4 +1,4 @@
-import { TRADING_DAYS_PER_YEAR } from '../../../pipeline/momentum/index.js';
+import { TRADING_DAYS_PER_YEAR } from '../../../../shared/index.js';
 
 export interface ReturnMoments {
   readonly count: number;

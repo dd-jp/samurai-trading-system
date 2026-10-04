@@ -1,4 +1,4 @@
-import type { Clock } from '../../shared/index.js';
+import type { Clock } from '../index.js';
 import type { AnalystRoundStance } from './analyst-contribution.js';
 import { buildAnalystContributions } from './analyst-contribution.js';
 import { computeDebateId } from './debate-id.js';

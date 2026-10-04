@@ -1,5 +1,5 @@
-import type { SpendCap } from '../../../pipeline/debate-engine/index.js';
-import { classifyFailureCause } from '../../../pipeline/debate-engine/index.js';
+import type { SpendCap } from '../../../shared/debate/index.js';
+import { classifyFailureCause } from '../../../shared/debate/index.js';
 import type { AssetClass, Clock, Logger } from '../../../shared/index.js';
 import type { ArchivedItem, MiArchiveStore, RawArchiveRow } from '../archive/mi-archive-store.js';
 import { MI_SOURCES } from '../archive/mi-sources.js';

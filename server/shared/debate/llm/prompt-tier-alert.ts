@@ -13,7 +13,7 @@ export interface PromptTierAlertChannel {
   postPromptTierAlert(alert: PromptTierAlert): void;
 }
 
-import { escalatesAt } from '../../../shared/index.js';
+import { escalatesAt } from '../../index.js';
 
 const ALERT_AFTER_CONSECUTIVE_PROMPT_TIER_CROSSINGS = 1;
 

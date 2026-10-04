@@ -4,7 +4,6 @@ import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { readSeededFile, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
-import { minbtl } from '../../tools/backtest/index.js';
 import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import { type BacktestInput, type BacktestResult, runBacktest } from './backtest.js';
 import {
@@ -16,6 +15,7 @@ import {
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
 } from './data/index.js';
+import { minbtl } from './evidence/index.js';
 import {
   CONSTITUENTS_PATH,
   FX_PATH,

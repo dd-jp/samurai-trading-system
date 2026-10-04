@@ -1,5 +1,5 @@
 import type { V2Bar } from '../../../../contracts/index.js';
-import type { LlmClient, SpendCap } from '../../../pipeline/debate-engine/index.js';
+import type { LlmClient, SpendCap } from '../../../shared/debate/index.js';
 import { describeThrownSafely } from '../../../shared/index.js';
 
 export const SIGNAL_VETO_BARS = 20;

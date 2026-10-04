@@ -13,7 +13,7 @@ Read on every session before writing/editing code. Supplements CLAUDE.md; does n
 ### NodeNext resolution nuances
 
 - **`.js` extensions in relative imports are mandatory, not stylistic.** `tsconfig.build.json` sets `"module"`/`"moduleResolution": "NodeNext"`, and `package.json` has `"type": "module"` — Node's native ESM resolver is in play, and it needs the extension exactly as it will exist in the emitted output (`.js`, even though the source is `.ts`). Dropping it breaks the build.
-- **A barrel import still needs the explicit `/index.js`.** NodeNext does not auto-resolve a bare directory specifier the way CommonJS did — `from '../market-data-service/'` does not resolve; it must be `from '../market-data-service/index.js'`.
+- **A barrel import still needs the explicit `/index.js`.** NodeNext does not auto-resolve a bare directory specifier the way CommonJS did — `from '../calendar/'` does not resolve; it must be `from '../calendar/index.js'`.
 
 ## Vitest: test utilities are global in `server/` and `contracts/` — don't import them there
 

@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { V2Bar } from '../../../../contracts/index.js';
-import {
-  MockLlmClient,
-  type SpendCap,
-  UNCAPPED_SPEND,
-} from '../../../pipeline/debate-engine/index.js';
+import { MockLlmClient, type SpendCap, UNCAPPED_SPEND } from '../../../shared/debate/index.js';
 import {
   parseVetoReply,
   SIGNAL_VETO_BARS,

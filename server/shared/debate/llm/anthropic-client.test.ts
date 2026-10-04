@@ -1,5 +1,5 @@
-import type { AnthropicUsage } from '../../../shared/llm/index.js';
-import { hashPromptTemplate } from '../../../shared/llm/prompt-template-hash.js';
+import type { AnthropicUsage } from '../../llm/index.js';
+import { hashPromptTemplate } from '../../llm/prompt-template-hash.js';
 import type {
   AnthropicMessageRequest,
   AnthropicMessageResponse,

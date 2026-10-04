@@ -97,7 +97,7 @@ Trend wins on **both** return and drawdown at every setting, which it did not do
 
 **Best executable configuration found: 10.20%/yr = 0.040%/day, Sharpe 0.71, max drawdown −23.2%, average gross 1.22.**
 
-**Caveat, and it is not small.** The vol-target and gross-cap settings in this section were explored *after* seeing the pre-registered results. They are **not** part of the 16-trial accounting below and are exposed to exactly the selection problem this report warns about elsewhere. They indicate where to look; they are not validated. Re-running them under PBO in `server/tools/backtest/` is required before any of these numbers is treated as an expectation.
+**Caveat, and it is not small.** The vol-target and gross-cap settings in this section were explored *after* seeing the pre-registered results. They are **not** part of the 16-trial accounting below and are exposed to exactly the selection problem this report warns about elsewhere. They indicate where to look; they are not validated. Re-running them under PBO in `server/tools/backtest/` is required before any of these numbers is treated as an expectation. <!-- cite-exempt: historical — the v1 backtest library; its DSR/PBO survivors moved to server/apps/v2/evidence/ (#1748) -->
 
 Note also that the −10.7% unlevered drawdown in Result 3 depends on the gross cap of 1.0 binding during the vol-targeter's over-levering episodes. Uncapped at the same vol target the figure is −24.6%. The cap is doing real risk work and is part of the strategy, not a formality.
 
@@ -139,7 +139,7 @@ These ladder settings are exploratory and post-hoc, like Result 5 — outside th
 - **16 configurations**, pre-registered (4 lookbacks × 2 universes × 2 directions). No search, no tuning.
 - **MinBTL for 16 trials: 3.2 years. Sample: 10.0 years.** First time in this project that the trial count sits comfortably inside the sample — the direct payoff of the free-stack history.
 - **DSR on the best config: 0.989** — but the best config is the hindsight-contaminated basket, so read this as "the arithmetic finally has room to work," not as edge confirmed.
-- **PBO not computed.** It needs combinatorial purged splits, which belong in `server/tools/backtest/`, not in a standalone script. **This is not a Stage 2 pass and must not be cited as one.**
+- **PBO not computed.** It needs combinatorial purged splits, which belong in `server/tools/backtest/`, not in a standalone script. **This is not a Stage 2 pass and must not be cited as one.** <!-- cite-exempt: historical — the v1 backtest library; its DSR/PBO survivors moved to server/apps/v2/evidence/ (#1748) -->
 
 ## Disclosures
 

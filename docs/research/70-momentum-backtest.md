@@ -115,7 +115,7 @@ Saxo bars carry a 15-minute delay (doc 44 §2.9a); irrelevant to an end-of-day r
 
 The kill line has two Sharpe clauses: "beats the benchmark after a 40% Sharpe haircut" and "DSR ≥ 0.95". Q19 says DSR is "deflated over every variant tried". Doc 67 asks this step to propose whether the DSR is computed on the strategy's absolute returns or on its excess over the benchmark. The proposal is **absolute** (the benchmark test is the haircut clause; the DSR clause guards against the *selected* variant being a selection artefact), but the reason to put it to David is what the deflation does to the bar at ten years.
 
-Using the repo's own `deflatedSharpe` (`server/tools/backtest/overfitting.ts`, Bailey and López de Prado 2014), the annualised Sharpe the *best* trial must show for DSR ≥ 0.95 over 2016-01-04 to 2026-09-22, as a function of the number of trials it is deflated over:
+Using the repo's own `deflatedSharpe` (`server/apps/v2/evidence/overfitting.ts`, Bailey and López de Prado 2014), the annualised Sharpe the *best* trial must show for DSR ≥ 0.95 over 2016-01-04 to 2026-09-22, as a function of the number of trials it is deflated over:
 
 | Trials N | Monthly returns (128 obs), skew 0 | Daily returns (2,695 obs), skew 0 | Daily, skew −0.5, excess kurtosis 3 | Monthly, 9.7y evaluated (116 obs) |
 |---|---|---|---|---|
@@ -201,15 +201,15 @@ Doc 11's control construction: the identical basket, identical sizing rule (inve
 ### 2.14 Walk-forward and PBO
 
 - **Walk-forward:** anchored is not proposed. Rolling folds: 16 contiguous, non-overlapping folds over the evaluated window (about 8 months each at 10.7 years). Selection inside each training half uses only training returns; the out-of-sample path is the concatenation of test folds. **No fold overlaps**, no purging needed at monthly cadence beyond dropping the first lookback of each test fold's signals (signals are computed from full history, so no test fold's signal uses data after its own decision bar — the look-ahead test in the eval line).
-- **PBO:** `pbo()` in `server/tools/backtest/overfitting.ts` over the trial × fold matrix (combinatorially symmetric cross-validation, 12,870 partitions at 16 folds). Pass ≤ 0.10 per G9.
+- **PBO:** `pbo()` in `server/apps/v2/evidence/overfitting.ts` over the trial × fold matrix (combinatorially symmetric cross-validation, 12,870 partitions at 16 folds). Pass ≤ 0.10 per G9.
 - **Code changes in the build phase (recorded here so the eval can check them):** `KILL_LINE.maxPbo` in `server/tools/backtest/stage2-verdict.ts` (0.05 → 0.10), `max_pbo.max` in `server/shared/threshold-bounds.ts` (0.05 → 0.10), **and** `PBO_REJECT_THRESHOLD` in `server/tools/backtest/overfitting.ts` (0.05 → 0.10) — a third site doc 67 Step 1 does not list, found on reading the file — with their tests. <!-- cite-exempt: historical — deleted in v1 teardown waves 2 and 5 (#1748); preserved at tag v1-final -->
 
 ### 2.15 The strategy is written as the module live code imports
 
 Proposal:
 
-- New directory `server/pipeline/momentum/` holding a pure signal module (`bars in → target weights out`, no I/O, no clock), a sizing module (inverse-vol / equal-weight, whole-share rounding given a price and a capital), the budget-rule state machine, and the stop rule.
-- The backtest runner under `server/tools/backtest/` and the Step 3 v2 root both import the same functions; the runner adds only data loading, the fold loop and reporting.
+- New directory `server/pipeline/momentum/` holding a pure signal module (`bars in → target weights out`, no I/O, no clock), a sizing module (inverse-vol / equal-weight, whole-share rounding given a price and a capital), the budget-rule state machine, and the stop rule. <!-- cite-exempt: historical — the momentum code as built in Session B; its survivors moved to server/shared/market/ (#1748) and the loss budget to server/apps/v2/risk/ -->
+- The backtest runner under `server/tools/backtest/` and the Step 3 v2 root both import the same functions; the runner adds only data loading, the fold loop and reporting. <!-- cite-exempt: historical — the Session B runner, deleted in v1 teardown wave 1 (#1748); its DSR/PBO survivors moved to server/apps/v2/evidence/ -->
 - The eval's "the strategy module is the one live code will import" is checked by grep at the build PR and again at Step 3. This is the postmortem's "backtest = live code" line (doc 66 Language row).
 
 ### 2.16 What the run reports
@@ -513,8 +513,8 @@ which writes `data/backtest/momentum/lse/verdict-{1000,5000}-{whole,fractional}.
 
 ### 9.5 Code shipped
 
-- `server/pipeline/momentum/`: `bars` (sorted-unique-date invariant, `windowCoverage`/`coverageSatisfied` on every windowed read), `signal` (time-series trend, cross-sectional top-K), `sizing` (inverse-vol, equal-weight, whole-share rounding), `loss-budget` (G6/G10 state machine, ruling (j) reference and halt), `stop` (ATR(20), entry − 2 × ATR, never moved up, gap fill), `costs` (Saxo 0.08%/side + custody; Alpaca SEC/FINRA TAF/CAT + half spread). 73 unit tests; Stryker mutation score 98.64% across the six modules.
-- `server/tools/backtest/momentum/`: runner, simulation (1-bar execution lag, cash-limited buys, delisting exits, custody accrual, budget marking in GBP), 16-fold CSCV via `overfitting.ts` (`pbo`, `deflatedSharpe`, `minbtl`), verdict and markdown report, trial ledger, Alpaca bar puller and spread measurer, synthetic fixtures. 80 tests including an end-to-end run on a fixture and a byte-identical reproducibility test.
+- `server/pipeline/momentum/`: `bars` (sorted-unique-date invariant, `windowCoverage`/`coverageSatisfied` on every windowed read), `signal` (time-series trend, cross-sectional top-K), `sizing` (inverse-vol, equal-weight, whole-share rounding), `loss-budget` (G6/G10 state machine, ruling (j) reference and halt), `stop` (ATR(20), entry − 2 × ATR, never moved up, gap fill), `costs` (Saxo 0.08%/side + custody; Alpaca SEC/FINRA TAF/CAT + half spread). 73 unit tests; Stryker mutation score 98.64% across the six modules. <!-- cite-exempt: historical — the momentum code as built in Session B; its survivors moved to server/shared/market/ (#1748) and the loss budget to server/apps/v2/risk/ -->
+- `server/tools/backtest/momentum/`: runner, simulation (1-bar execution lag, cash-limited buys, delisting exits, custody accrual, budget marking in GBP), 16-fold CSCV via `overfitting.ts` (`pbo`, `deflatedSharpe`, `minbtl`), verdict and markdown report, trial ledger, Alpaca bar puller and spread measurer, synthetic fixtures. 80 tests including an end-to-end run on a fixture and a byte-identical reproducibility test. <!-- cite-exempt: historical — the Session B runner, deleted in v1 teardown wave 1 (#1748); its DSR/PBO survivors moved to server/apps/v2/evidence/ -->
 - G9 alignment (§2.14): `KILL_LINE.maxPbo`, `max_pbo.max` and `PBO_REJECT_THRESHOLD` are 0.10, with tests; `server/shared/threshold-bounds-readers.test.ts` proves `resolveRiskConfig` and `SqliteTuningStore.setRiskThreshold` refuse 0.11 and accept 0.10 through `threshold-bounds`. Refs #1715. <!-- cite-exempt: historical — deleted in v1 teardown wave 2 (#1748); preserved at commit 79e88af4 -->
 - Ruling (l): the Saxo appropriateness test is David's admin; nothing in the code depends on it.
 

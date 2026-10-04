@@ -5,9 +5,9 @@ import type {
   SleeveDecision,
   SleeveOutput,
 } from '../../../../contracts/index.js';
-import type { AnalystView } from '../../../pipeline/debate-engine/index.js';
-import { UNCAPPED_SPEND } from '../../../pipeline/debate-engine/index.js';
-import type { BarSeries, DailyBar } from '../../../pipeline/momentum/index.js';
+import type { AnalystView } from '../../../shared/debate/index.js';
+import { UNCAPPED_SPEND } from '../../../shared/debate/index.js';
+import type { BarSeries, DailyBar } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { addDays, NO_NEWS } from '../data/index.js';

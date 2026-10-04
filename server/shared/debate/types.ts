@@ -1,7 +1,7 @@
 export type { Direction } from '../../../contracts/index.js';
 
 import type { Direction } from '../../../contracts/index.js';
-import type { DebateTerminationCause } from '../../shared/index.js';
+import type { DebateTerminationCause } from '../index.js';
 
 export interface AnalystView {
   trace_id: string;
