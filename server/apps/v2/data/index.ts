@@ -1,3 +1,5 @@
+export type { DataSanityReport } from './bar-sanity.js';
+export { dataSanity } from './bar-sanity.js';
 export type { BarsSource } from './bars.js';
 export {
   barsBefore,
