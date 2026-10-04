@@ -890,10 +890,48 @@ describe('SaxoHttpBrokerClient', () => {
     it.each([
       [
         '/port/v1/orders?$skip=500#frag',
-        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key#frag',
+        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
       ],
-      ['/port/v1/orders#frag?x', '/port/v1/orders?AccountKey=acct-key&ClientKey=client-key#frag?x'],
-    ])('appends the missing scope before the fragment of __next %s', async (next, expected) => {
+      ['/port/v1/orders#frag?x', '/port/v1/orders?AccountKey=acct-key&ClientKey=client-key'],
+      [
+        '/../port/v1/orders?$skip=500',
+        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
+      ],
+      ['/../../../port/v1/orders', '/port/v1/orders?AccountKey=acct-key&ClientKey=client-key'],
+      [
+        '/%2e%2e/%2E/port/v1/orders?$skip=500',
+        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
+      ],
+      [
+        '/port/v1/./orders?$skip=500',
+        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
+      ],
+      [
+        '/port/v1/or\tders?$skip=500',
+        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
+      ],
+      [
+        '/port/v1/orders\n?$skip=5\r00',
+        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
+      ],
+      [
+        '/port\\v1/orders?$skip=500',
+        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
+      ],
+      [
+        '/port/v1/orders?$skip=500 ',
+        '/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
+      ],
+      [
+        '/port/v1/orders?$filter=a b',
+        '/port/v1/orders?$filter=a%20b&AccountKey=acct-key&ClientKey=client-key',
+      ],
+      ['/port/v1/orders?', '/port/v1/orders?AccountKey=acct-key&ClientKey=client-key'],
+      [
+        '/../port/v1/orders?AccountKey=acct-key&ClientKey=client-key#frag',
+        '/port/v1/orders?AccountKey=acct-key&ClientKey=client-key',
+      ],
+    ])('sends the normalised path of __next %j on the wire (#2026)', async (next, expected) => {
       const reader = READERS[0] as PagedReader;
       let pages = 0;
       const fetchMock = vi.fn(async (url: string | URL) => {
@@ -908,9 +946,8 @@ describe('SaxoHttpBrokerClient', () => {
 
       await reader.read(pinnedClient());
 
-      const page2 = calledPath(fetchMock, 2);
-      expect(page2).toBe(`https://gateway.example/sim/openapi${expected}`);
-      expect(new URL(page2).searchParams.getAll('AccountKey')).toEqual(['acct-key']);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(calledPath(fetchMock, 2)).toBe(`https://gateway.example/sim/openapi${expected}`);
     });
 
     function singleNextFetch(next: string): ReturnType<typeof vi.fn> {
@@ -927,12 +964,28 @@ describe('SaxoHttpBrokerClient', () => {
     }
 
     it.each([
+      ['/port/v1/orders?Account\tKey=other-key', 'AccountKey'],
+      ['/port/v1/orders?Client\nKey=other-key', 'ClientKey'],
+      ['/../port/v1/orders?AccountKey=other-key', 'AccountKey'],
+    ])('refuses a __next of %j that names another %s once normalised', async (next, key) => {
+      const fetchMock = singleNextFetch(next);
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(pinnedClient().listOpenOrders()).rejects.toThrow(
+        new RegExp(`__next changed ${key} between pages \\(listOpenOrders\\)`),
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
       '/port/v1/orders/me?$skip=500',
       '/port/v1/netpositions?$skip=500',
       '/port/v1/orders/../orders/me?$skip=500',
       '/port/v1/orders/%2e%2e/orders/me',
       'port/v1/orders?$skip=500',
       '/\\evil.example/port/v1/orders',
+      '/\t/evil.example/port/v1/orders',
+      '/\n\\evil.example/port/v1/orders?$skip=500',
       'https://[bad/x',
     ])('refuses to fetch page 2 when listOpenOrders __next %s leaves the route', async (next) => {
       const fetchMock = singleNextFetch(next);
