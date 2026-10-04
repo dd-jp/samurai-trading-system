@@ -140,7 +140,7 @@ interface CandidateRunSpec {
   readonly benchmark: BacktestInput['benchmark'];
   readonly window: CandidateWindow;
   readonly calendarReference: string;
-  readonly symbols: (sessions: readonly string[]) => readonly string[];
+  readonly symbolsOn: (session: string) => readonly string[];
   readonly embargo?: number;
   readonly startCapitalGbp?: number;
 }
@@ -190,7 +190,7 @@ async function runCandidateAgainst(
     signFlipped:
       baseline.verdict.checks.beatsBenchmarkAfterHaircut !==
       stressed.verdict.checks.beatsBenchmarkAfterHaircut,
-    dataSanity: dataSanity(bars, spec.symbols(sessions), sessions),
+    dataSanity: dataSanity(bars, spec.symbolsOn, sessions),
   };
 }
 
@@ -230,7 +230,7 @@ export async function runCrossAssetTrendAgainst(
       benchmark,
       window,
       calendarReference: calendarReferenceFor('saxo'),
-      symbols: () => CROSS_ASSET_TREND_TIDMS,
+      symbolsOn: () => CROSS_ASSET_TREND_TIDMS,
     },
     market,
     bars,
@@ -296,7 +296,7 @@ export async function runMeanReversionAgainst(
       benchmark,
       window,
       calendarReference: calendarReferenceFor('alpaca'),
-      symbols: (sessions) => sessions.flatMap(constituentsFor),
+      symbolsOn: constituentsFor,
       embargo: MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
     },
     market,
@@ -354,7 +354,7 @@ export async function runVolTargetIndexAgainst(
       benchmark,
       window,
       calendarReference: calendarReferenceFor('saxo'),
-      symbols: () => VOL_TARGET_INDEX_TIDMS,
+      symbolsOn: () => VOL_TARGET_INDEX_TIDMS,
       embargo: VOL_TARGET_INDEX_VOL_WINDOW,
       startCapitalGbp: VOL_TARGET_INDEX_START_CAPITAL_GBP,
     },

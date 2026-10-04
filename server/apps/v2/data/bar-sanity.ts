@@ -32,23 +32,48 @@ function assertWindow(sessions: readonly string[]): void {
   if (sessions.length < 2) throw new Error('data sanity: the window needs at least two sessions');
 }
 
-function spanCoverage(sessions: readonly string[], bars: readonly DailyBar[]) {
+interface SeriesSpan {
+  readonly first: string;
+  readonly last: string;
+}
+
+function seriesSpan(
+  sessions: readonly string[],
+  history: readonly DailyBar[],
+  bars: readonly DailyBar[],
+): SeriesSpan | undefined {
+  const firstBar = bars[0];
+  const lastBar = bars.at(-1);
+  if (firstBar === undefined || lastBar === undefined) return undefined;
+  const windowFirst = sessions[0] as string;
+  const windowLast = sessions.at(-1) as string;
+  return {
+    first: (history[0] as DailyBar).date < windowFirst ? windowFirst : firstBar.date,
+    last: (history.at(-1) as DailyBar).date > windowLast ? windowLast : lastBar.date,
+  };
+}
+
+function spanCoverage(
+  sessions: readonly string[],
+  barDates: ReadonlySet<string>,
+  span: SeriesSpan | undefined,
+) {
   const last = sessions.length - 1;
-  const firstDate = bars[0]?.date ?? sessions[last];
+  const firstDate = span?.first ?? (sessions[last] as string);
   const start = Math.min(
-    sessions.findIndex((session) => session >= (firstDate as string)),
+    sessions.findIndex((session) => session >= firstDate),
     last - 1,
   );
-  const barDates = new Set(bars.map((bar) => bar.date));
   return windowCoverage(sessions, barDates, last, last - start);
 }
 
-function interiorGaps(sessions: readonly string[], bars: readonly DailyBar[]): string[] {
-  const first = bars[0]?.date;
-  const last = bars.at(-1)?.date;
-  if (first === undefined || last === undefined) return [];
-  const barDates = new Set(bars.map((bar) => bar.date));
-  return sessions.filter((date) => date > first && date < last && !barDates.has(date));
+function interiorGaps(
+  sessions: readonly string[],
+  barDates: ReadonlySet<string>,
+  span: SeriesSpan | undefined,
+): string[] {
+  if (span === undefined) return [];
+  return sessions.filter((date) => date >= span.first && date <= span.last && !barDates.has(date));
 }
 
 function adjustedJumps(bars: readonly DailyBar[]): AdjustedJump[] {
@@ -81,9 +106,11 @@ export function seriesSanity(
   const first = sessions[0] as string;
   const last = sessions.at(-1) as string;
   const bars = history.filter((bar) => bar.date >= first && bar.date <= last);
-  const coverage = spanCoverage(sessions, bars);
+  const barDates = new Set(bars.map((bar) => bar.date));
+  const span = seriesSpan(sessions, history, bars);
+  const coverage = spanCoverage(sessions, barDates, span);
   const checks = {
-    missingSessions: interiorGaps(sessions, bars),
+    missingSessions: interiorGaps(sessions, barDates, span),
     zeroVolumeDays: bars.filter((bar) => bar.volume === 0).map((bar) => bar.date),
     adjustedJumps: adjustedJumps(bars),
   };
@@ -95,20 +122,38 @@ export function seriesSanity(
   };
 }
 
+function lastTradeableIndex(
+  sessions: readonly string[],
+  symbolsOn: (session: string) => readonly string[],
+): Map<string, number> {
+  const until = new Map<string, number>();
+  sessions.forEach((session, index) => {
+    for (const symbol of symbolsOn(session)) until.set(symbol, index);
+  });
+  return until;
+}
+
 export function dataSanity(
   bars: BarsSource,
-  symbols: readonly string[],
+  symbolsOn: (session: string) => readonly string[],
   sessions: readonly string[],
 ): DataSanityReport {
   assertWindow(sessions);
-  const unique = [...new Set(symbols)].sort();
-  const flagged = unique
-    .map((symbol) => seriesSanity(symbol, bars.load(symbol)?.bars ?? [], sessions))
+  const until = lastTradeableIndex(sessions, symbolsOn);
+  const flagged = [...until.keys()]
+    .sort()
+    .map((symbol) =>
+      seriesSanity(
+        symbol,
+        bars.load(symbol)?.bars ?? [],
+        sessions.slice(0, Math.max((until.get(symbol) as number) + 1, 2)),
+      ),
+    )
     .filter((sanity) => sanity.flags.length > 0);
   return {
     from: sessions[0] as string,
     to: sessions.at(-1) as string,
-    seriesChecked: unique.length,
+    seriesChecked: until.size,
     flagged,
   };
 }

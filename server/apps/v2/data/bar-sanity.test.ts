@@ -65,6 +65,27 @@ describe('seriesSanity', () => {
     expect(sanity.coverageRatio).toBe(1);
   });
 
+  it('counts a hole at the window start as missing when the series listed before the window', () => {
+    const history = [bar('2024-12-30'), ...clean(SESSIONS.slice(10))];
+    const sanity = seriesSanity('ISF', history, SESSIONS);
+    expect(sanity.flags).toEqual(['coverage', 'gap']);
+    expect(sanity.missingSessions).toEqual(SESSIONS.slice(0, 10));
+    expect(sanity.coverageRatio).toBeCloseTo(30 / 40);
+  });
+
+  it('counts a hole at the window end as missing when the series trades on after the window', () => {
+    const history = [...clean(SESSIONS.slice(0, 37)), bar('2025-03-01')];
+    const sanity = seriesSanity('ISF', history, SESSIONS);
+    expect(sanity.flags).toEqual(['coverage', 'gap']);
+    expect(sanity.missingSessions).toEqual(SESSIONS.slice(37));
+  });
+
+  it('fails coverage on a series whose only bars precede the window', () => {
+    const sanity = seriesSanity('OLD', [bar('2024-12-30')], SESSIONS);
+    expect(sanity.flags).toEqual(['coverage']);
+    expect(sanity.missingSessions).toEqual([]);
+  });
+
   it('fails coverage on an absent series', () => {
     const sanity = seriesSanity('NONE', [], SESSIONS);
     expect(sanity.flags).toEqual(['coverage']);
@@ -130,7 +151,7 @@ describe('dataSanity', () => {
         { symbol: 'ISF', bars: clean() },
         { symbol: 'SSLN', bars: clean().map((entry) => bar(entry.date, 100, 0)) },
       ]),
-      ['SSLN', 'ISF', 'SSLN', 'NONE'],
+      () => ['SSLN', 'ISF', 'SSLN', 'NONE'],
       SESSIONS,
     );
     expect(report.from).toBe(SESSIONS[0]);
@@ -142,7 +163,28 @@ describe('dataSanity', () => {
     ]);
   });
 
+  it('checks each series only up to the last session it can be traded', () => {
+    const leaver = clean(SESSIONS.slice(0, 20));
+    const report = dataSanity(
+      source([
+        { symbol: 'LEFT', bars: leaver },
+        { symbol: 'STALE', bars: leaver },
+        { symbol: 'ONCE', bars: clean(SESSIONS.slice(0, 2)) },
+      ]),
+      (session) => {
+        if (session === SESSIONS[0]) return ['LEFT', 'ONCE', 'STALE'];
+        if (session <= (SESSIONS[19] as string)) return ['LEFT', 'STALE'];
+        return session <= (SESSIONS[25] as string) ? ['STALE'] : [];
+      },
+      SESSIONS,
+    );
+    expect(report.seriesChecked).toBe(3);
+    expect(report.flagged.map((entry) => [entry.symbol, entry.flags])).toEqual([
+      ['STALE', ['coverage']],
+    ]);
+  });
+
   it('refuses an empty window even with no symbols', () => {
-    expect(() => dataSanity(source([]), [], [])).toThrow(/two sessions/);
+    expect(() => dataSanity(source([]), () => [], [])).toThrow(/two sessions/);
   });
 });
