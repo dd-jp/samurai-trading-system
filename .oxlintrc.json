@@ -421,6 +421,10 @@
                 "message": "reach server/shared only via its index.ts barrel"
               },
               {
+                "group": ["**/shared/**", "!**/shared/index.js", "!**/shared/index.ts"],
+                "message": "reach server/shared only via its index.ts barrel"
+              },
+              {
                 "group": ["**/contracts/**", "!**/contracts/index.js", "!**/contracts/index.ts"],
                 "message": "reach contracts only via its index.ts barrel"
               },
