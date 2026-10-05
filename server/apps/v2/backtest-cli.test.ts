@@ -134,6 +134,12 @@ describe('runCrossAssetTrendAgainst', () => {
       expect(report.minbtlLimit).toBeGreaterThan(0);
       expect(report.windowYears).toBeGreaterThan(0);
       expect(typeof report.signFlipped).toBe('boolean');
+      expect(report.dataSanity).toEqual({
+        from: window.from,
+        to: window.to,
+        seriesChecked: CROSS_ASSET_TREND_TIDMS.length,
+        flagged: [],
+      });
       // Same trials rerun at 2x cost must resolve to the same trial numbers (doc 66 ruling h):
       // a cost-sensitivity pass is never a new counted trial
       const rerun = await runCrossAssetTrendAgainst(
@@ -232,6 +238,8 @@ describe('runMeanReversionAgainst', () => {
       expect(report.minbtlLimit).toBeGreaterThan(0);
       expect(report.windowYears).toBeGreaterThan(0);
       expect(typeof report.signFlipped).toBe('boolean');
+      expect(report.dataSanity.seriesChecked).toBe(MEAN_REVERSION_SYMBOLS.length);
+      expect(report.dataSanity.flagged).toEqual([]);
       // Same trials rerun at 2x cost must resolve to the same trial numbers (doc 66 ruling h)
       const rerun = await runMeanReversionAgainst(
         market,
@@ -317,6 +325,13 @@ describe('runVolTargetIndexAgainst', () => {
       expect(report.stressed.trials).toHaveLength(2);
       expect(report.baseline.dates).toEqual(report.stressed.dates);
       expect(report.baseline.benchmark.equity[0]).toBe(7_000);
+      expect(report.dataSanity.seriesChecked).toBe(VOL_TARGET_INDEX_TIDMS.length);
+      expect(report.dataSanity.flagged.map((entry) => entry.symbol)).toEqual(
+        VOL_TARGET_INDEX_TIDMS.filter((tidm) => tidm !== 'ISF' && tidm !== 'IEEM').sort(),
+      );
+      expect(new Set(report.dataSanity.flagged.flatMap((entry) => entry.flags))).toEqual(
+        new Set(['coverage']),
+      );
       const configs = (
         db.prepare('SELECT config FROM v2_trials ORDER BY trial').all() as {
           config: string;

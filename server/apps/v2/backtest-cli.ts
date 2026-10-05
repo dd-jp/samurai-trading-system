@@ -5,12 +5,19 @@ import type { LogEntry, Logger } from '../../shared/index.js';
 import { readSeededFile, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
-import { type BacktestInput, type BacktestResult, runBacktest } from './backtest.js';
+import {
+  type BacktestInput,
+  type BacktestResult,
+  backtestSessions,
+  runBacktest,
+} from './backtest.js';
 import {
   BarsMarketData,
   type BarsSource,
   calendarReferenceFor,
   currentConstituents,
+  type DataSanityReport,
+  dataSanity,
   MultiVenueBarsSource,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
@@ -26,6 +33,7 @@ import {
 import {
   CROSS_ASSET_TREND_CANDIDATE_ID,
   CROSS_ASSET_TREND_FROM,
+  CROSS_ASSET_TREND_TIDMS,
   CROSS_ASSET_TREND_TO,
   createCrossAssetTrendBenchmarkSleeve,
   createCrossAssetTrendSleeve,
@@ -77,6 +85,7 @@ export interface CandidateRunReport {
   readonly minbtlLimit: number;
   readonly windowYears: number;
   readonly signFlipped: boolean;
+  readonly dataSanity: DataSanityReport;
 }
 export type CrossAssetTrendRunReport = CandidateRunReport;
 export type MeanReversionRunReport = CandidateRunReport;
@@ -131,6 +140,7 @@ interface CandidateRunSpec {
   readonly benchmark: BacktestInput['benchmark'];
   readonly window: CandidateWindow;
   readonly calendarReference: string;
+  readonly symbolsOn: (session: string) => readonly string[];
   readonly embargo?: number;
   readonly startCapitalGbp?: number;
 }
@@ -138,6 +148,7 @@ interface CandidateRunSpec {
 async function runCandidateAgainst(
   spec: CandidateRunSpec,
   market: MarketData,
+  bars: BarsSource,
   halfSpreadBps: (instrument: string) => number,
   ledger: TrialLedger,
   logger: Logger,
@@ -164,6 +175,12 @@ async function runCandidateAgainst(
   const start = new Date(`${spec.window.from}T00:00:00.000Z`);
   const end = new Date(`${spec.window.to}T00:00:00.000Z`);
   const minbtlLimit = minbtl({ start, end }, MINBTL_EXPECTED_ANNUAL_SHARPE).limit;
+  const sessions = backtestSessions(
+    market,
+    spec.window.from,
+    spec.window.to,
+    spec.calendarReference,
+  );
   return {
     baseline,
     stressed,
@@ -173,6 +190,7 @@ async function runCandidateAgainst(
     signFlipped:
       baseline.verdict.checks.beatsBenchmarkAfterHaircut !==
       stressed.verdict.checks.beatsBenchmarkAfterHaircut,
+    dataSanity: dataSanity(bars, spec.symbolsOn, sessions),
   };
 }
 
@@ -212,8 +230,10 @@ export async function runCrossAssetTrendAgainst(
       benchmark,
       window,
       calendarReference: calendarReferenceFor('saxo'),
+      symbolsOn: () => CROSS_ASSET_TREND_TIDMS,
     },
     market,
+    bars,
     halfSpreadBps,
     ledger,
     logger,
@@ -276,9 +296,11 @@ export async function runMeanReversionAgainst(
       benchmark,
       window,
       calendarReference: calendarReferenceFor('alpaca'),
+      symbolsOn: constituentsFor,
       embargo: MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
     },
     market,
+    bars,
     halfSpreadBps,
     ledger,
     logger,
@@ -332,10 +354,12 @@ export async function runVolTargetIndexAgainst(
       benchmark,
       window,
       calendarReference: calendarReferenceFor('saxo'),
+      symbolsOn: () => VOL_TARGET_INDEX_TIDMS,
       embargo: VOL_TARGET_INDEX_VOL_WINDOW,
       startCapitalGbp: VOL_TARGET_INDEX_START_CAPITAL_GBP,
     },
     market,
+    bars,
     halfSpreadBps,
     ledger,
     logger,
