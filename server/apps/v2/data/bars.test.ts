@@ -69,18 +69,41 @@ describe('ParquetBarsSource', () => {
 });
 
 describe('MultiVenueBarsSource', () => {
-  it('unions sources by symbol, the first source with a series winning', () => {
-    const alpaca = {
-      load: (symbol: string) => (symbol === 'AAPL' ? series('AAPL', 1, 1, 1) : undefined),
-    };
-    const saxo = {
-      load: (symbol: string) =>
-        symbol === 'ISF' || symbol === 'AAPL' ? series(symbol, 1, 2, 2) : undefined,
-    };
-    const bars = new MultiVenueBarsSource([alpaca, saxo]);
+  const alpaca = {
+    load: (symbol: string) =>
+      symbol === 'AAPL' || symbol === 'TSCO' ? series(symbol, 1, 1, 1) : undefined,
+  };
+  const saxo = {
+    load: (symbol: string) =>
+      symbol === 'ISF' || symbol === 'TSCO' ? series(symbol, 1, 2, 2) : undefined,
+  };
+  const bars = new MultiVenueBarsSource([alpaca, saxo]);
+
+  it('serves a symbol from the one venue that holds it', () => {
     expect(bars.load('AAPL')).toEqual(series('AAPL', 1, 1, 1));
     expect(bars.load('ISF')).toEqual(series('ISF', 1, 2, 2));
     expect(bars.load('ZZZZ')).toBeUndefined();
+  });
+
+  it('serves no bars for a symbol two venues both hold, rather than one venue for the other (#1914)', () => {
+    expect(bars.load('TSCO')).toBeUndefined();
+    expect(new MultiVenueBarsSource([saxo, alpaca]).load('TSCO')).toBeUndefined();
+  });
+
+  it('reports each clashing symbol once, and never a symbol one venue holds', () => {
+    const clashes: string[] = [];
+    const reporting = new MultiVenueBarsSource([alpaca, saxo], (symbol) => clashes.push(symbol));
+    reporting.load('AAPL');
+    reporting.load('ZZZZ');
+    reporting.load('TSCO');
+    reporting.load('TSCO');
+    expect(clashes).toEqual(['TSCO']);
+  });
+
+  it('fails a windowed read keyed on a clashing symbol closed', () => {
+    const sessions = sessionsBefore(bars, '2026-09-03', 'AAPL');
+    expect(sessions).toEqual(['2026-09-01']);
+    expect(sessionsBefore(bars, '2026-09-03', 'TSCO')).toEqual([]);
   });
 });
 
