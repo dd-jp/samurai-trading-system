@@ -109,6 +109,37 @@ describe('backtestVerdict', () => {
     );
   });
 
+  it('keeps each return on its own date across embargo gaps', () => {
+    const verdict = backtestVerdict(input({ embargo: 5 }));
+    const [year2020, year2021, , drawdown] = verdict.regimeSplit.periods;
+    const path = walkForwardPath(
+      input().trials.map((trial) => trial.returns),
+      foldRanges(LENGTH, 4, 5),
+    );
+    expect((year2020?.inPeriod.sessions ?? 0) + (year2021?.inPeriod.sessions ?? 0)).toBe(
+      path.returns.length,
+    );
+    expect(year2021?.inPeriod.sessions).toBe(34);
+    const trial = input().trials[0]?.returns as number[];
+    const benchmark = input().benchmark.returns;
+    expect(year2021?.inPeriod.strategySharpeHaircut).toBeCloseTo(
+      annualisedSharpe(trial.slice(366)) * 0.6,
+      12,
+    );
+    expect(year2020?.inPeriod.benchmarkSharpe).toBeCloseTo(
+      annualisedSharpe(sliceByRanges(benchmark, path.testRanges).slice(0, -34)),
+      12,
+    );
+    expect(drawdown?.withoutPeriod.strategySharpeHaircut).toBeCloseTo(
+      verdict.walkForward.strategySharpeHaircut,
+      12,
+    );
+    expect(drawdown?.withoutPeriod.benchmarkSharpe).toBeCloseTo(
+      verdict.walkForward.benchmarkSharpe,
+      12,
+    );
+  });
+
   it('fails a run whose edge is carried by one period, though the whole path beats the benchmark', () => {
     const carried = book([...noisy(366, -0.0003, 0.01, 0), ...noisy(LENGTH - 366, 0.02, 0.002, 0)]);
     const verdict = backtestVerdict(
