@@ -505,6 +505,17 @@ David ruled in chat on 2026-10-03, one question at a time; the rulings are recor
 
 *Built 2026-10-03 (#2061, after the CRAP-split PR #2062); doc 77 §5.2 has the move notes.*
 
+## Rulings of 2026-10-05 — replay input changes (#2028)
+
+David ruled on 2026-10-05, recorded on [#2028](https://github.com/dd-jp/samurai-trading-system/issues/2028#issuecomment-6001592094). They settle the open question and the three minors #1982 (PR #1992) left behind, under ruling 4 of the 2026-10-01 replay journal gaps rulings above.
+
+1. **`input_changed_since` gets its own exit code, and the report lists every changed input.** A changed input no longer shares the `DIVERGED` header and exit code 1 with a real divergence, and the report no longer prints only the first one.
+2. **A failed digest write keeps the cycle report (minor 1).** A cycle that ran and then fails to write its digest is no longer booked as a failed cycle that loses its report and daily summary; the failed write is journalled as a fault.
+3. **The digest covers only the window that was read (minor 2).** Backfilling bars older than that window no longer makes every past day report `input_changed_since`.
+4. **Align the dates (minor 3).** The PR body and the spec gave 2026-09-30 and 2026-10-01 for the digest-cost measurement.
+
+*Built 2026-10-05 (#2028).* Build notes (not rulings): `npm run v2:replay` exits 2 when any input changed, 1 for any other divergence or a failed replay, 0 when identical (`REPLAY_EXIT_CODES`, `server/apps/v2/replay.ts`). The `INPUT CHANGED` report prints every changed input, then the first other divergence in causal order. The failed write is ledgered as a `refused_cycle` fault with code `v2_input_digest_failed`, as `v2_faults` admits no other kind without a migration, so the fault-free-weeks gate counts it as it counted the failed cycle before. The window is the last 240 bars before the day (`DIGEST_FLOOR_BARS`: the deepest look-back of the readers that take a whole series rather than a counted window, the debate technical read's 200-session SMA and a candidate's session-calendar coverage check, mean reversion's 240 the deepest), or deeper where a counted read went deeper (`BarsMarketData.barsBefore`, such as a held position's split window). The replay digests the journalled row count, or 240 when the row count is smaller, so a name whose whole history was shorter than 240 bars still reports older bars added since; a digest journalled before #2028 reproduces from its row count. The two dates meant different things: 2026-09-30 is the trading date of the measured dry-run cycle, 2026-10-01 the day it was measured; spec §9 now gives both.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

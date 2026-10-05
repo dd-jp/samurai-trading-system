@@ -21,7 +21,14 @@ import {
   SPREADS_PATH,
   V2_STORE_PATH,
 } from './index.js';
-import { formatReplay, type ReplayResult, redactor, replayDay } from './replay.js';
+import {
+  formatReplay,
+  REPLAY_EXIT_CODES,
+  type ReplayResult,
+  redactor,
+  replayDay,
+  replayExitCode,
+} from './replay.js';
 
 export interface ReplayCliOptions {
   readonly tradingDate: string;
@@ -113,10 +120,10 @@ export async function main(
   try {
     const result = await replay(parseReplayArgs(argv));
     write(formatReplay(result, redact));
-    return result.divergences.length === 0 ? 0 : 1;
+    return replayExitCode(result);
   } catch (error) {
     write(redact(`replay failed: ${errorMessage(error)}`));
-    return 1;
+    return REPLAY_EXIT_CODES.failed;
   }
 }
 
