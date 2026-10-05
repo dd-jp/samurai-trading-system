@@ -69,6 +69,15 @@ describe('volTargetRiskScale', () => {
     expect(volTargetRiskScale(SIZING, history, '2026-09-25')).toBeCloseTo(0.2 / vol, 12);
   });
 
+  it('reads only the last window + 1 bars, so older history neither covers nor moves it', () => {
+    const recent = bars([100, 110, 100, 110]);
+    const history = [...bars([1, 1_000], '2026-08-01'), ...recent];
+    expect(volTargetRiskScale(SIZING, history, '2026-09-25')).toBe(
+      volTargetRiskScale(SIZING, recent, '2026-09-25'),
+    );
+    expect(volTargetRiskScale(SIZING, history, '2026-09-25')).toBeLessThan(1);
+  });
+
   it('leaves a calm line at full risk', () => {
     expect(volTargetRiskScale(SIZING, bars([100, 100, 100, 100]), '2026-09-25')).toBe(1);
   });

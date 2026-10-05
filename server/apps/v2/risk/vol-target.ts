@@ -18,7 +18,7 @@ export function assertVolTargetSizing(sizing: VolTargetSizing): void {
 }
 
 export function volTargetScale(annualTargetVol: number, realisedVol: number): number {
-  return realisedVol > annualTargetVol ? annualTargetVol / realisedVol : 1;
+  return Math.min(1, annualTargetVol / realisedVol);
 }
 
 export function volTargetBarsWanted(sizing: VolTargetSizing): number {
