@@ -309,6 +309,44 @@ describe('replay of sizing, orders, fills and marks', () => {
   });
 });
 
+describe('replay of per-position CFD carry rows (#2072)', () => {
+  const carryRow = `INSERT INTO v2_cfd_carry (book_id, trading_date, instrument, venue,
+      client_order_id, financing_gbp, borrow_gbp, recorded_at)
+    VALUES ('debate/primary', '${EXIT_DAY}', 'CFD.L', 'saxo', 'v2-cfd-entry', 0.5, 0, '${EXIT_DAY}T07:30:00.000Z')`;
+
+  it('fails a day after migration 0094 on a journalled carry row the replay did not write', async () => {
+    const result = await replayFromFiles(
+      tamperedCopy(
+        'carry-after-0094',
+        `UPDATE schema_migrations SET applied_at = '2026-01-01T00:00:00.000Z' WHERE version = 94;
+         ${carryRow}`,
+      ),
+    );
+    expect(result.skipped).not.toContainEqual(expect.objectContaining({ stage: 'carry' }));
+    expect(result.divergences).toEqual([
+      { kind: 'row_missing', stage: 'carry', key: 'debate/primary|CFD.L' },
+    ]);
+    expect(formatReplay(result, (text) => text)).toContain(
+      'carry: debate/primary|CFD.L: journalled, not replayed',
+    );
+  });
+
+  it('skips the carry stage by name on a day before migration 0094', async () => {
+    const result = await replayFromFiles(
+      tamperedCopy(
+        'carry-before-0094',
+        `UPDATE schema_migrations SET applied_at = '2027-01-01T00:00:00.000Z' WHERE version = 94;
+         ${carryRow}`,
+      ),
+    );
+    expect(result.divergences).toEqual([]);
+    expect(result.skipped).toContainEqual({ stage: 'carry', migration: 94 });
+    expect(formatReplay(result, (text) => text)).toMatch(
+      /\ncarry: not compared, the day ran before migration 0094\n(.*\n)*identical$/,
+    );
+  });
+});
+
 describe('rebuildBooks', () => {
   const clock = new SimulatedClock(new Date('2026-03-04T07:30:00.000Z'));
   const market = {
@@ -662,6 +700,78 @@ describe('tradingDivergences rescales cutover (#2019)', () => {
       replayed.close();
     },
   );
+});
+
+describe('tradingDivergences carry cutover (#2072)', () => {
+  const DAY = '2026-10-06';
+  const MARKED = `${DAY}T21:00:00.000Z`;
+
+  function stores(cutover: string | undefined) {
+    const [journal, replayed] = [migratedMemoryStore(), migratedMemoryStore()];
+    for (const db of [journal, replayed]) {
+      db.prepare(
+        `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+         VALUES ('debate/primary', 'debate', 'primary', 3000, 3000, 'now')`,
+      ).run();
+      db.prepare(
+        `INSERT INTO v2_cfd_carry (book_id, trading_date, instrument, venue, client_order_id,
+           financing_gbp, borrow_gbp, recorded_at)
+         VALUES ('debate/primary', ?, 'VOD.L', 'saxo', 'v2-entry', 0.42, 0.07, ?)`,
+      ).run(DAY, MARKED);
+    }
+    journal.prepare('DELETE FROM schema_migrations WHERE version = 94').run();
+    if (cutover !== undefined) {
+      journal
+        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (94, ?)')
+        .run(cutover);
+    }
+    const compare = () =>
+      tradingDivergences({
+        journal,
+        replayed,
+        tradingDate: DAY,
+        markedAt: MARKED,
+        startedAt: `${DAY}T07:30:00.000Z`,
+      });
+    return { journal, replayed, compare };
+  }
+
+  it('holds a day after migration 0094 to each per-position carry row', () => {
+    const { journal, replayed, compare } = stores('2026-10-05T00:00:00.000Z');
+    expect(compare()).toMatchObject({ divergences: [], skipped: [] });
+    replayed.prepare('UPDATE v2_cfd_carry SET financing_gbp = 0.43').run();
+    expect(compare().divergences).toEqual([
+      {
+        kind: 'row_field',
+        stage: 'carry',
+        key: 'debate/primary|VOD.L',
+        field: 'financing_gbp',
+        journalled: 0.42,
+        replayed: 0.43,
+      },
+    ]);
+    replayed.prepare("UPDATE v2_cfd_carry SET instrument = 'BP.L'").run();
+    expect(compare().divergences).toEqual([
+      { kind: 'row_missing', stage: 'carry', key: 'debate/primary|VOD.L' },
+      { kind: 'row_extra', stage: 'carry', key: 'debate/primary|BP.L' },
+    ]);
+    journal.close();
+    replayed.close();
+  });
+
+  it.each([
+    ['ran before the migration', '2026-10-07T00:00:00.000Z'],
+    ['ran in a store that never applied it', undefined],
+  ])('names the carry stage as skipped, not compared, on a day that %s', (_, cutover) => {
+    const { journal, replayed, compare } = stores(cutover);
+    replayed.prepare('UPDATE v2_cfd_carry SET borrow_gbp = 9').run();
+    expect(compare()).toMatchObject({
+      divergences: [],
+      skipped: [{ stage: 'carry', migration: 94 }],
+    });
+    journal.close();
+    replayed.close();
+  });
 });
 
 describe('journalledSessions', () => {
