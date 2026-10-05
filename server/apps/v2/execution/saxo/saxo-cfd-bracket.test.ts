@@ -43,6 +43,7 @@ function fakeClient(
   options: {
     placement?: SaxoOrderPlacement;
     activities?: SaxoOrderActivity[];
+    recheck?: SaxoOrderActivity[];
     open?: SaxoOpenOrder[];
     cancelError?: unknown;
   } = {},
@@ -69,7 +70,8 @@ function fakeClient(
     listOpenOrders: async () => options.open ?? [],
     listOrderActivities: async (from) => {
       activitiesFrom.push(from);
-      return options.activities ?? [];
+      const first = options.activities ?? [];
+      return activitiesFrom.length === 1 ? first : (options.recheck ?? first);
     },
   };
 }
@@ -210,6 +212,19 @@ describe('submitCfdShortBracket (#1916)', () => {
     expect(client.cancelled).toEqual(['E1']);
   });
 
+  it.each([
+    ['a not-found cancel', new SaxoBrokerProviderError('gone', 404)],
+    ['a failed cancel', new SaxoBrokerProviderError('down', 503)],
+  ])('names the possibly filled entry and its reference on %s', async (_label, failure) => {
+    const client = fakeClient({ placement: { OrderId: 'E1' }, cancelError: failure });
+    const outcome = submitCfdShortBracket(client, BRACKET);
+    await expect(outcome).rejects.toThrow(CfdBracketError);
+    await expect(outcome).rejects.toThrow(
+      `${BRACKET.clientOrderId}: Saxo placed entry E1 (ExternalReference ${REF}) without both exit legs and its cancel failed; the entry may be filled with no resting stop`,
+    );
+    await expect(outcome).rejects.toMatchObject({ cause: failure });
+  });
+
   it('places nothing for an invalid bracket', async () => {
     const client = fakeClient();
     await expect(submitCfdShortBracket(client, { ...BRACKET, stop: 190 })).rejects.toThrow(
@@ -241,6 +256,7 @@ describe('settleCfdShortBracket (#1916)', () => {
       siblingCancelled: true,
     });
     expect(client.cancelled).toEqual(['T1']);
+    expect(client.activitiesFrom).toEqual([SINCE, SINCE]);
   });
 
   it('cancels the stop when the target fills, finding it among related orders', async () => {
@@ -290,6 +306,48 @@ describe('settleCfdShortBracket (#1916)', () => {
       cancelError: failure,
     });
     await expect(settleCfdShortBracket(client, IDS, SINCE)).rejects.toBe(failure);
+  });
+
+  it('reports unresolved when the sibling filled before a not-found cancel', async () => {
+    const client = fakeClient({
+      activities: [activity('S1', 'FinalFill')],
+      recheck: [activity('S1', 'FinalFill'), activity('T1', 'FinalFill')],
+      open: [openOrder('T1')],
+      cancelError: new SaxoBrokerProviderError('gone', 404),
+    });
+    await expect(settleCfdShortBracket(client, IDS, SINCE)).resolves.toEqual({
+      kind: 'unresolved',
+      stop: 'final',
+      target: 'final',
+    });
+    expect(client.activitiesFrom).toEqual([SINCE, SINCE]);
+  });
+
+  it('reports unresolved when the sibling partly filled before a successful cancel', async () => {
+    const client = fakeClient({
+      activities: [activity('T1', 'FinalFill')],
+      recheck: [activity('T1', 'FinalFill'), activity('S1', 'Fill')],
+      open: [openOrder('S1')],
+    });
+    await expect(settleCfdShortBracket(client, IDS, SINCE)).resolves.toEqual({
+      kind: 'unresolved',
+      stop: 'partial',
+      target: 'final',
+    });
+    expect(client.cancelled).toEqual(['S1']);
+  });
+
+  it('reports unresolved when the re-read no longer shows the filled leg', async () => {
+    const client = fakeClient({
+      activities: [activity('S1', 'FinalFill')],
+      recheck: [],
+      open: [openOrder('T1')],
+    });
+    await expect(settleCfdShortBracket(client, IDS, SINCE)).resolves.toEqual({
+      kind: 'unresolved',
+      stop: 'none',
+      target: 'none',
+    });
   });
 
   it.each([

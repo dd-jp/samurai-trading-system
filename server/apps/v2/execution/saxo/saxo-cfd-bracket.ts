@@ -38,8 +38,8 @@ export type CfdBracketSettlement =
   | { readonly kind: 'unresolved'; readonly stop: LegFill; readonly target: LegFill };
 
 export class CfdBracketError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
     this.name = 'CfdBracketError';
   }
 }
@@ -116,7 +116,14 @@ export async function submitCfdShortBracket(
   if (stop !== undefined && target !== undefined) {
     return { entry: placement.OrderId, stop, target };
   }
-  await client.cancelOrder(placement.OrderId);
+  try {
+    await client.cancelOrder(placement.OrderId);
+  } catch (error) {
+    throw new CfdBracketError(
+      `${bracket.clientOrderId}: Saxo placed entry ${placement.OrderId} (ExternalReference ${reference}) without both exit legs and its cancel failed; the entry may be filled with no resting stop`,
+      { cause: error },
+    );
+  }
   throw new CfdBracketError(
     `${bracket.clientOrderId}: Saxo placed the entry without both exit legs; the entry was cancelled`,
   );
@@ -154,19 +161,34 @@ function settledLeg(stop: LegFill, target: LegFill): CfdLeg | undefined {
   return target === 'final' && stop === 'none' ? 'target' : undefined;
 }
 
+interface LegFills {
+  readonly stop: LegFill;
+  readonly target: LegFill;
+}
+
+async function readLegFills(
+  client: SaxoOpenApiClient,
+  ids: CfdBracketOrderIds,
+  since: Date,
+): Promise<LegFills> {
+  const activities = await client.listOrderActivities(since);
+  return { stop: legFill(activities, ids.stop), target: legFill(activities, ids.target) };
+}
+
 // Only one fully filled leg against an unfilled sibling is settled here; any partial fill or
-// a double fill is left untouched and reported, since cancelling then could strand cover
+// a double fill is left untouched and reported, since cancelling then could strand cover;
+// the re-read after the cancel catches a sibling that filled before the cancel landed
 export async function settleCfdShortBracket(
   client: SaxoOpenApiClient,
   ids: CfdBracketOrderIds,
   since: Date,
 ): Promise<CfdBracketSettlement> {
-  const activities = await client.listOrderActivities(since);
-  const stop = legFill(activities, ids.stop);
-  const target = legFill(activities, ids.target);
-  if (stop === 'none' && target === 'none') return { kind: 'resting' };
-  const filled = settledLeg(stop, target);
-  if (filled === undefined) return { kind: 'unresolved', stop, target };
-  const sibling = filled === 'stop' ? ids.target : ids.stop;
-  return { kind: 'closed', filled, siblingCancelled: await cancelIfOpen(client, sibling) };
+  const before = await readLegFills(client, ids, since);
+  if (before.stop === 'none' && before.target === 'none') return { kind: 'resting' };
+  const filled = settledLeg(before.stop, before.target);
+  if (filled === undefined) return { kind: 'unresolved', ...before };
+  const siblingCancelled = await cancelIfOpen(client, filled === 'stop' ? ids.target : ids.stop);
+  const after = await readLegFills(client, ids, since);
+  if (settledLeg(after.stop, after.target) !== filled) return { kind: 'unresolved', ...after };
+  return { kind: 'closed', filled, siblingCancelled };
 }
