@@ -1971,3 +1971,142 @@ describe('SaxoHttpBrokerClient priority lane (#1419)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
+
+describe('SaxoHttpBrokerClient getInfoPrice (#1916)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const NO_RETRY = { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 };
+
+  function priceClient(body: unknown) {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse(body));
+    return { fetchMock, client: makeClient(fetchMock, NO_RETRY) };
+  }
+
+  const CFD_ROW = {
+    Uic: 211,
+    AssetType: 'CfdOnStock',
+    Quote: { Bid: 199.5, Ask: 200.5 },
+    InstrumentPriceDetails: {
+      IsMarketOpen: true,
+      ShortTradeDisabled: false,
+      CfdBorrowingCost: 0.25,
+    },
+  };
+
+  it('reads a CFD quote with its short and borrow fields on the account', async () => {
+    const { fetchMock, client } = priceClient(CFD_ROW);
+    expect(await client.getInfoPrice(211, 'CfdOnStock')).toEqual({
+      Uic: 211,
+      AssetType: 'CfdOnStock',
+      Bid: 199.5,
+      Ask: 200.5,
+      IsMarketOpen: true,
+      Cfd: { ShortTradeDisabled: false, CfdBorrowingCost: 0.25 },
+    });
+    expect(calledPath(fetchMock, 1)).toBe(
+      'https://gateway.example/sim/openapi/trade/v1/infoprices?AccountKey=acct-key&Uic=211' +
+        '&AssetType=CfdOnStock&FieldGroups=Quote%2CInstrumentPriceDetails',
+    );
+    expect(calledInit(fetchMock, 1).method).toBe('GET');
+  });
+
+  it('reads the price on the background lane', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(ACCOUNTS))
+      .mockResolvedValueOnce(jsonResponse(CFD_ROW));
+    vi.stubGlobal('fetch', fetchMock);
+    const rateLimiter = permissiveLimiter();
+    const priority = vi.spyOn(rateLimiter, 'acquire');
+    const background = vi.spyOn(rateLimiter, 'acquireBackground');
+    const client = new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl: 'https://gateway.example/sim/openapi/',
+      retry: NO_RETRY,
+      rateLimiter,
+      logger: recordingLogger(),
+    });
+    await client.getInfoPrice(211, 'CfdOnStock');
+    expect(priority).toHaveBeenCalledTimes(1);
+    expect(background).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['CfdOnIndex', 'CfdOnEtf'] as const)('reads %s as a CFD', async (assetType) => {
+    const { client } = priceClient({ ...CFD_ROW, AssetType: assetType });
+    expect((await client.getInfoPrice(211, assetType)).Cfd).toEqual({
+      ShortTradeDisabled: false,
+      CfdBorrowingCost: 0.25,
+    });
+  });
+
+  it('carries no CFD fields for a cash ETF, and an absent detail block reads market closed', async () => {
+    const { client } = priceClient({
+      Uic: 7,
+      AssetType: 'Etf',
+      Quote: { Bid: 10 },
+      InstrumentPriceDetails: { ShortTradeDisabled: true },
+    });
+    expect(await client.getInfoPrice(7, 'Etf')).toEqual({
+      Uic: 7,
+      AssetType: 'Etf',
+      Bid: 10,
+      Ask: undefined,
+      IsMarketOpen: false,
+      Cfd: undefined,
+    });
+  });
+
+  it.each([
+    ['an absent detail block', {}],
+    ['a missing ShortTradeDisabled', { InstrumentPriceDetails: { IsMarketOpen: true } }],
+    ['a null ShortTradeDisabled', { InstrumentPriceDetails: { ShortTradeDisabled: null } }],
+  ])('fails closed on %s: the CFD reads short-disabled', async (_label, change) => {
+    const { InstrumentPriceDetails: _dropped, ...bare } = CFD_ROW;
+    const { client } = priceClient({ ...bare, ...change });
+    const price = await client.getInfoPrice(211, 'CfdOnStock');
+    expect(price.Cfd).toEqual({ ShortTradeDisabled: true, CfdBorrowingCost: undefined });
+  });
+
+  it('reads an explicit ShortTradeDisabled true as disabled', async () => {
+    const { client } = priceClient({
+      ...CFD_ROW,
+      InstrumentPriceDetails: { ShortTradeDisabled: true, CfdBorrowingCost: 0 },
+    });
+    expect((await client.getInfoPrice(211, 'CfdOnStock')).Cfd).toEqual({
+      ShortTradeDisabled: true,
+      CfdBorrowingCost: 0,
+    });
+  });
+
+  it.each([
+    ['not an object', 'nope', /\(getInfoPrice\): expected an object/],
+    [
+      'another Uic',
+      { ...CFD_ROW, Uic: 212 },
+      /price for Uic 211\/CfdOnStock came back as 212\/CfdOnStock/,
+    ],
+    ['another asset type', { ...CFD_ROW, AssetType: 'Stock' }, /came back as 211\/Stock/],
+    ['no Quote', { ...CFD_ROW, Quote: undefined }, /Quote must be an object/],
+    ['a string Bid', { ...CFD_ROW, Quote: { Bid: '1' } }, /Bid must be a finite number/],
+    [
+      'a negative borrow cost',
+      { ...CFD_ROW, InstrumentPriceDetails: { ShortTradeDisabled: false, CfdBorrowingCost: -0.1 } },
+      /CfdBorrowingCost must not be negative/,
+    ],
+    [
+      'a string ShortTradeDisabled',
+      { ...CFD_ROW, InstrumentPriceDetails: { ShortTradeDisabled: 'false' } },
+      /ShortTradeDisabled must be a boolean/,
+    ],
+  ])('refuses a body with %s', async (_label, body, message) => {
+    const { client } = priceClient(body);
+    await expect(client.getInfoPrice(211, 'CfdOnStock')).rejects.toThrow(SaxoBrokerProviderError);
+    const again = priceClient(body).client;
+    await expect(again.getInfoPrice(211, 'CfdOnStock')).rejects.toThrow(message);
+  });
+});

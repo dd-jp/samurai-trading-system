@@ -1,6 +1,7 @@
 import {
   classifySaxoBrokerNetworkError,
   classifySaxoBrokerResponse,
+  isOrderNotFound,
   isRetryableSaxoBrokerError,
   SaxoBrokerProviderError,
   SaxoBrokerRateLimitError,
@@ -16,6 +17,16 @@ function fakeResponse(status: number, headers: Record<string, string> = {}): Res
     text: async () => '',
   } as Response;
 }
+
+describe('isOrderNotFound', () => {
+  it('matches a 404 or an OrderNotFound code on a provider error only', () => {
+    expect(isOrderNotFound(new SaxoBrokerProviderError('gone', 404))).toBe(true);
+    expect(isOrderNotFound(new SaxoBrokerProviderError('gone', 400, 'OrderNotFound'))).toBe(true);
+    expect(isOrderNotFound(new SaxoBrokerProviderError('bad', 400, 'InvalidRequest'))).toBe(false);
+    expect(isOrderNotFound(new SaxoBrokerProviderError('down', 503))).toBe(false);
+    expect(isOrderNotFound(Object.assign(new Error('gone'), { status: 404 }))).toBe(false);
+  });
+});
 
 describe('isRetryableSaxoBrokerError', () => {
   it('retries timeouts and rate limits on a GET', () => {

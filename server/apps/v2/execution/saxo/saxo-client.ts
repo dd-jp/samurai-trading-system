@@ -1,4 +1,10 @@
-export type SaxoAssetType = 'Etn' | 'Etf' | 'Etc';
+export type SaxoCfdAssetType = 'CfdOnStock' | 'CfdOnIndex' | 'CfdOnEtf';
+
+export type SaxoAssetType = 'Etn' | 'Etf' | 'Etc' | SaxoCfdAssetType;
+
+export function isSaxoCfdAssetType(assetType: string): assetType is SaxoCfdAssetType {
+  return assetType === 'CfdOnStock' || assetType === 'CfdOnIndex' || assetType === 'CfdOnEtf';
+}
 
 export type SaxoBuySell = 'Buy' | 'Sell';
 
@@ -8,6 +14,20 @@ export interface SaxoInstrumentDetails {
   readonly CurrencyCode: string;
   readonly PriceCurrency?: string | undefined;
   readonly PriceToContractFactor: number;
+}
+
+export interface SaxoCfdPriceDetails {
+  readonly ShortTradeDisabled: boolean;
+  readonly CfdBorrowingCost?: number | undefined;
+}
+
+export interface SaxoInfoPrice {
+  readonly Uic: number;
+  readonly AssetType: SaxoAssetType;
+  readonly Bid?: number | undefined;
+  readonly Ask?: number | undefined;
+  readonly IsMarketOpen: boolean;
+  readonly Cfd?: SaxoCfdPriceDetails | undefined;
 }
 
 type SaxoOrderType = 'Market' | 'Limit' | 'StopIfTraded';
@@ -119,6 +139,7 @@ export interface SaxoAccountBalanceReader {
 
 export interface SaxoOpenApiClient {
   getInstrumentDetails(uic: number, assetType: SaxoAssetType): Promise<SaxoInstrumentDetails>;
+  getInfoPrice(uic: number, assetType: SaxoAssetType): Promise<SaxoInfoPrice>;
   placeOrder(request: SaxoOrderRequest, requestId: string): Promise<SaxoOrderPlacement>;
   cancelOrder(orderId: string): Promise<void>;
   listOpenOrders(): Promise<SaxoOpenOrder[]>;
