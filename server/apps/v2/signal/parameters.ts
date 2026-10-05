@@ -12,6 +12,7 @@ import {
   SAXO_CFD_SPREAD,
   saxoCfdBorrow,
 } from '../data/index.js';
+import type { VolTargetSizing } from '../risk/index.js';
 
 export const UNSET: unique symbol = Symbol('unset');
 
@@ -103,6 +104,15 @@ export const CFD_BORROW_MODEL = set<CfdBorrowModel>(
   saxoCfdBorrow(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR),
 );
 export const CFD_RESTING_STOP_VERIFIED = unset<boolean>('CFD_RESTING_STOP_VERIFIED', '#1916');
+// Setting it is a new counted trial (CLAUDE.md), so it stays unset until David pre-declares the
+// target, window and sleeves; unset, every sleeve sizes exactly as before
+export const VOL_TARGET_SIZING = unset<VolTargetSizing>('VOL_TARGET_SIZING', '#1860');
+
+export function declaredVolTarget(
+  parameter: Parameter<VolTargetSizing> = VOL_TARGET_SIZING,
+): VolTargetSizing | undefined {
+  return isSet(parameter) ? parameter.value : undefined;
+}
 
 export interface CfdEntryGate {
   readonly parameter: Parameter<unknown>;
@@ -243,6 +253,7 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   LSE_LIQUIDITY_SCREEN,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
   RECONCILE_CASH_TOLERANCE_GBP,
+  VOL_TARGET_SIZING,
 ];
 
 // The cycle journals only the unset ones; ARM2_ENTRY_THRESHOLDS (#1773, set) stays out of it

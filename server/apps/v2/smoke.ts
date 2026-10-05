@@ -37,6 +37,7 @@ import {
   type Parameter,
   RECONCILE_CASH_TOLERANCE_GBP,
   SqliteMonthlySpendCap,
+  VOL_TARGET_SIZING,
 } from './signal/index.js';
 
 const CFD_COST_PARAMETERS: readonly Parameter<unknown>[] = [
@@ -53,6 +54,11 @@ const SET_PARAMETERS: readonly Parameter<unknown>[] = [
 ];
 const STILL_UNSET_PARAMETERS = DECLARED_PARAMETERS.filter(
   (parameter) => !SET_PARAMETERS.includes(parameter),
+);
+// Unset means off, not refused: sizing is unchanged until David declares the trial (#1860)
+const OFF_WHEN_UNSET_PARAMETERS: readonly Parameter<unknown>[] = [VOL_TARGET_SIZING];
+const REFUSING_UNSET_PARAMETERS = STILL_UNSET_PARAMETERS.filter(
+  (parameter) => !OFF_WHEN_UNSET_PARAMETERS.includes(parameter),
 );
 
 export interface SmokeProbe {
@@ -352,7 +358,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
       ),
       probe(
         'every still-open parameter is journalled as a refusal',
-        STILL_UNSET_PARAMETERS.every((parameter) =>
+        REFUSING_UNSET_PARAMETERS.every((parameter) =>
           report.refusals.some((refusal) => refusal.includes(parameter.name)),
         ),
         report.refusals.join(' | '),

@@ -179,6 +179,52 @@ describe('composeCycle: costMultiple scales every modelled cost leg (doc 67 "2x 
   });
 });
 
+describe('composeCycle: vol-target sizing (#1860)', () => {
+  const twentyBarMarket: MarketData = {
+    ...market,
+    barsBefore: (_instrument, _date, count) =>
+      Array.from({ length: Math.min(count, 20) }, (_, back) => {
+        const date = new Date(Date.parse('2026-09-24') - back * 86_400_000)
+          .toISOString()
+          .slice(0, 10);
+        return { date, open: 20, high: 20, low: 20, close: 20, volume: 1_000_000, rawClose: 20 };
+      }).reverse(),
+  };
+  const enter = (composed: ReturnType<typeof composeCycle>) =>
+    composed.risk.approveEntry({
+      book: { id: 'debate/primary', sleeve: 'debate', variant: 'primary', instantiated: true },
+      decision: {
+        sleeve_id: 'debate',
+        instrument: 'AAPL',
+        venue: 'alpaca',
+        direction: 'bullish',
+        confidence: 1,
+        action: 'enter_long',
+        reason: 'r',
+        price: 20,
+        atr: 0.4,
+        stop_price: 19.2,
+        inputs_hash: 'h',
+        debate_id: 'd',
+        payload: {},
+      },
+      clientOrderId: 'c1',
+      tradingDate: '2026-09-25',
+      equityGbp: 1_000,
+      macroDay: false,
+    });
+
+  it('sizes as before while VOL_TARGET_SIZING is unset, and through an injected target', () => {
+    expect(enter(composeCycle(options({ market: twentyBarMarket }))).order).toBeDefined();
+    const volTarget = { annualTargetVol: 0.2, windowBars: 20, sleeveIds: ['debate'] };
+    expect(enter(composeCycle(options({ market: twentyBarMarket, volTarget })))).toEqual({
+      size: 0,
+      order: undefined,
+      refusal: 'no_realised_vol',
+    });
+  });
+});
+
 describe('composeCycle: CFD cost model (#1849, #1850)', () => {
   const book: BookSpec = {
     id: 'debate/primary',

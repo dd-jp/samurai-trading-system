@@ -28,9 +28,11 @@ import {
   ControlStore,
   PaperBooks,
   V2RiskGate,
+  type VolTargetSizing,
 } from './risk/index.js';
 import {
   cfdEntryRefusal,
+  declaredVolTarget,
   isSet,
   RECONCILE_CASH_TOLERANCE_GBP,
   SleeveRegistry,
@@ -56,6 +58,7 @@ export interface CycleCompositionOptions {
   readonly brokerMode: BrokerMode;
   readonly reconcileCashToleranceGbp?: number | undefined;
   readonly venueSessions?: VenueSessionGate | undefined;
+  readonly volTarget?: VolTargetSizing | undefined;
   readonly runStartedAt?: Date | undefined;
   // Replay only: answers every broker call from the journal, so no venue adapter is built
   readonly brokerAccess?: ((pricing: FillPricing) => BrokerAccess) | undefined;
@@ -92,6 +95,10 @@ function cfdCarryRatesFor(options: CycleCompositionOptions): CfdCarryRates | und
 
 function declaredCashToleranceGbp(): number | undefined {
   return isSet(RECONCILE_CASH_TOLERANCE_GBP) ? RECONCILE_CASH_TOLERANCE_GBP.value : undefined;
+}
+
+function volTargetFor(options: CycleCompositionOptions): VolTargetSizing | undefined {
+  return options.volTarget ?? declaredVolTarget();
 }
 
 function fillPricingFor(options: CycleCompositionOptions): FillPricing {
@@ -132,6 +139,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     market,
     spec: (sleeveId) => registry.spec(sleeveId),
     venueRefusal: (venue) => (isCfdVenue(venue) ? cfdGate() : undefined),
+    volTarget: volTargetFor(options),
   });
   const pricing = fillPricingFor(options);
   const { executor, brokerBooks, cashInLieu, cashActivities } =
