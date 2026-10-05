@@ -3278,6 +3278,7 @@ describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
     expect(last?.payload.detail).toBe('insufficient_cash');
     expect(last?.payload).not.toHaveProperty('entry_offset_bps');
     expect(last?.payload).not.toHaveProperty('approval');
+    expect(last?.payload).not.toHaveProperty('modelled_slippage_bps');
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM9')?.payload).toMatchObject({
       entry_offset_bps: 50,
     });
@@ -6889,11 +6890,38 @@ describe('journal before submit (David 2026-10-04, #1747)', () => {
     const deps = harness([longAapl], false, alpaca);
     seedPending(deps, 'unknown', 'debate/primary');
     vi.spyOn(alpaca, 'getOrder').mockRejectedValue(new Error('ECONNRESET'));
-    const report = await runCycle(deps, '2026-09-25');
+    const logs: LogEntry[] = [];
+    const report = await runCycle(
+      { ...deps, logger: { log: (entry) => logs.push(entry) } },
+      '2026-09-25',
+    );
     expect(deps.journal.orderFor('unknown')?.outcome).toBe('pending');
     expect(alpaca.brackets).toEqual([]);
     expect(report.refusals).toContain(
       'debate/primary: entries blocked, pending order resolve threw: ECONNRESET',
     );
+    expect(logs.filter((entry) => entry.event === 'v2_pending_resolve_threw')).not.toEqual([]);
+    expect(logs.map((entry) => entry.event)).not.toContain('v2_pending_order_resolved');
+  });
+
+  it('prices the modelled slippage of the pending and the settled entry at its limit, not the decision price', async () => {
+    const alpaca = new FakeAlpaca();
+    const byPrice: FillPricing = {
+      halfSpreadBps: () => 0,
+      impactBps: (_instrument, _qty, price) => price,
+      fee: () => 0,
+    };
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, byPrice);
+    const pending = new Map<string, JournalledOrder | undefined>();
+    const submit = deps.executor.submit.bind(deps.executor);
+    vi.spyOn(deps.executor, 'submit').mockImplementation((order) => {
+      pending.set(order.clientOrderId, deps.journal.orderFor(order.clientOrderId));
+      return submit(order);
+    });
+    await runCycle(deps, '2026-09-25');
+    const settled = deps.journal.orderFor(PRIMARY_ID);
+    expect(settled?.payload).toMatchObject({ price: 20, limit: 20.1 });
+    expect(pending.get(PRIMARY_ID)?.payload.modelled_slippage_bps).toBeCloseTo(20.1, 9);
+    expect(settled?.payload.modelled_slippage_bps).toBeCloseTo(20.1, 9);
   });
 });

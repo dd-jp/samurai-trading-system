@@ -233,28 +233,13 @@ function nativeRearmPrices(journal: DecisionJournal, held: Position): RearmPrice
   return { stop: stop / held.splitFactor, target: target / held.splitFactor };
 }
 
-const SIMULATED_OUTCOMES: ReadonlySet<JournalledOutcome> = new Set([
-  'simulated',
-  'refused_dry_run',
-]);
+const SIMULATED_OUTCOMES: ReadonlySet<OrderOutcome> = new Set(['simulated', 'refused_dry_run']);
 
 interface PendingResolution {
   readonly outcome: 'submitted' | 'rejected';
   readonly detail: string;
   readonly note: string;
 }
-
-const PENDING_SENT: PendingResolution = {
-  outcome: 'submitted',
-  detail: 'submitted',
-  note: 'the venue holds it, now submitted',
-};
-
-const PENDING_NOT_SENT: PendingResolution = {
-  outcome: 'rejected',
-  detail: 'not_sent: no order at the venue under this id',
-  note: 'the venue never received it, now rejected',
-};
 
 export type EntryOrderId = (book: BookSpec, instrument: string, tradingDate: string) => string;
 
@@ -454,7 +439,13 @@ class Cycle {
   }
 
   async resolvePending(book: BookSpec, order: JournalledOrder): Promise<void> {
-    const resolution = (await this.reachedVenue(book, order)) ? PENDING_SENT : PENDING_NOT_SENT;
+    const resolution: PendingResolution = (await this.reachedVenue(book, order))
+      ? { outcome: 'submitted', detail: 'submitted', note: 'the venue holds it, now submitted' }
+      : {
+          outcome: 'rejected',
+          detail: 'not_sent: no order at the venue under this id',
+          note: 'the venue never received it, now rejected',
+        };
     this.deps.journal.resolvePending(
       order.client_order_id,
       resolution.outcome,
@@ -943,7 +934,11 @@ class Cycle {
   fillSimulatedExit(held: Position): void {
     if (held.exitClientOrderId === undefined) return;
     const order = this.deps.journal.orderFor(held.exitClientOrderId);
-    if (order === undefined || !SIMULATED_OUTCOMES.has(order.outcome)) return;
+    if (
+      order === undefined ||
+      !(SIMULATED_OUTCOMES as ReadonlySet<JournalledOutcome>).has(order.outcome)
+    )
+      return;
     const price = simulateMarketExit(this.barsSince(order));
     if (price === undefined) {
       this.fillPendingExitAtLastClose(order, held);
@@ -1551,35 +1546,35 @@ class Cycle {
       dry_run: this.deps.dryRun,
     };
     if (approval.order === undefined) {
-      const refused: Submission = { outcome: 'rejected', detail: approval.refusal, approvalId: '' };
-      this.count(refused.outcome);
+      const refused: OrderOutcome = 'rejected';
+      this.count(refused);
       this.deps.journal.recordOrder({
         ...row,
-        outcome: refused.outcome,
-        payload: this.entryPayload(decision, approval, side, refused),
+        outcome: refused,
+        payload: this.entryPayload(decision, approval, side, approval.refusal, false),
       });
-      return refused.outcome;
+      return refused;
     }
     // David 2026-10-04 (#1747): journal before submit, so a crash after the send leaves an id
     // reconcile can match to the venue's order
-    const expected: Submission = {
-      outcome: this.deps.executor.simulates(routeOf(book, decision.venue))
-        ? 'simulated'
-        : 'submitted',
-      detail: '',
-      approvalId: approval.order.approvalId,
-    };
+    const sent = !this.deps.executor.simulates(routeOf(book, decision.venue));
     this.deps.journal.recordOrder({
       ...row,
       outcome: 'pending',
-      payload: this.entryPayload(decision, approval, side, expected),
+      payload: this.entryPayload(decision, approval, side, '', sent),
     });
     const submission = await this.deps.executor.submit(approval.order);
     this.count(submission.outcome);
     this.deps.journal.settleOrder(
       clientOrderId,
       submission.outcome,
-      this.entryPayload(decision, approval, side, submission),
+      this.entryPayload(
+        decision,
+        approval,
+        side,
+        submission.detail,
+        submission.outcome === 'submitted',
+      ),
     );
     return submission.outcome;
   }
@@ -1588,30 +1583,33 @@ class Cycle {
     decision: SleeveDecision,
     approval: EntryApproval,
     side: OrderSide,
-    submission: Submission,
+    detail: string,
+    sent: boolean,
   ): Record<string, unknown> {
     const limit = approvedLimit(approval);
     return {
       size: approval.size,
-      detail: submission.detail,
+      detail,
       price: decision.price,
       limit,
       entry_offset_bps: approval.entryOffsetBps,
-      modelled_slippage_bps: this.modelledSlippageBps(
-        decision.venue,
-        {
-          instrument: decision.instrument,
-          side,
-          qty: approval.size,
-          price: limit ?? decision.price,
-          crossesSpread: true,
-        },
-        submission.outcome,
-      ),
+      modelled_slippage_bps: sent
+        ? this.modelledSlippageBps(
+            decision.venue,
+            {
+              instrument: decision.instrument,
+              side,
+              qty: approval.size,
+              price: limit ?? decision.price,
+              crossesSpread: true,
+            },
+            'submitted',
+          )
+        : undefined,
       trigger: decision.entry_trigger,
       stop: decision.stop_price,
       target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
-      approval: approval.order === undefined ? undefined : submission.approvalId,
+      approval: approval.order?.approvalId,
     };
   }
 
@@ -2131,7 +2129,7 @@ interface SyncStep extends ThrowFailure {
 }
 
 // fillSimulatedEntries is not a guarded step: a fill quote error must stop the cycle (#1849)
-const SYNC_STEPS: readonly SyncStep[] = [
+const syncSteps = (): readonly SyncStep[] => [
   {
     event: 'v2_pending_resolve_threw',
     what: 'pending order resolve',
@@ -2152,7 +2150,7 @@ const SYNC_STEPS: readonly SyncStep[] = [
 
 async function syncStepThrows(cycle: Cycle): Promise<StepThrow[]> {
   const thrown: StepThrow[] = [];
-  for (const step of SYNC_STEPS) {
+  for (const step of syncSteps()) {
     try {
       await step.run(cycle);
     } catch (error) {

@@ -547,14 +547,18 @@ describe('journal before submit (David 2026-10-04, #1747)', () => {
   });
 
   it('refuses to settle an order that is not pending, and leaves it as it was', () => {
-    const { journal } = pendingJournal();
+    const { journal, pending } = pendingJournal();
     expect(() => journal.settleOrder('done', 'rejected', {})).toThrow(
       'journal: done is not a pending order',
     );
     expect(() => journal.settleOrder('missing', 'rejected', {})).toThrow(
       'journal: missing is not a pending order',
     );
-    expect(journal.orderFor('done')).toMatchObject({ outcome: 'submitted', payload: {} });
+    expect(journal.orderFor('done')).toEqual({
+      ...pending,
+      client_order_id: 'done',
+      outcome: 'submitted',
+    });
   });
 
   it('resolves a pending order in place, keeping its payload, and never touches a settled one', () => {
@@ -566,7 +570,11 @@ describe('journal before submit (David 2026-10-04, #1747)', () => {
       outcome: 'rejected',
       payload: { ...pending.payload, detail: 'not_sent: gone', resolved: '2026-09-29' },
     });
-    expect(journal.orderFor('done')).toMatchObject({ outcome: 'submitted', payload: {} });
+    expect(journal.orderFor('done')).toEqual({
+      ...pending,
+      client_order_id: 'done',
+      outcome: 'submitted',
+    });
     expect(journal.restingEntries('debate/primary').map((order) => order.client_order_id)).toEqual([
       'done',
     ]);
