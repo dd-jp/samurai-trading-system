@@ -321,7 +321,10 @@ function storePathFor(options: V2RootOptions): string {
   return options.storePath ?? (options.dryRun ? V2_DRY_RUN_STORE_PATH : V2_STORE_PATH);
 }
 
-export function barsSourceFor(options: Pick<V2RootOptions, 'bars' | 'barStoreRoot'>): {
+export function barsSourceFor(
+  options: Pick<V2RootOptions, 'bars' | 'barStoreRoot'>,
+  logger: Logger,
+): {
   bars: BarsSource;
   prime: () => Promise<void>;
 } {
@@ -330,7 +333,15 @@ export function barsSourceFor(options: Pick<V2RootOptions, 'bars' | 'barStoreRoo
   const alpaca = new ParquetBarsSource(root, 'alpaca');
   const saxo = new ParquetBarsSource(root, 'saxo', { optional: true });
   return {
-    bars: new MultiVenueBarsSource([alpaca, saxo]),
+    bars: new MultiVenueBarsSource([alpaca, saxo], (symbol) =>
+      logger.log({
+        trace_id: 'v2-root',
+        stage: 'v2',
+        level: 'warn',
+        event: 'v2_bars_symbol_clash',
+        message: `${symbol} has bars on both alpaca and saxo; served from neither, so every read on it fails closed (#1914)`,
+      }),
+    ),
     prime: async () => {
       await alpaca.prime();
       await saxo.prime();
@@ -511,7 +522,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     spendCap,
     logger,
   });
-  const source = barsSourceFor(options);
+  const source = barsSourceFor(options, logger);
   const { prime } = source;
   const bars = new RecordingBarsSource(source.bars);
   const constituents = options.constituents ?? constituentsFromCsv(options);

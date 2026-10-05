@@ -3,7 +3,7 @@ import type { DailyBar } from '../../shared/index.js';
 const UNIT_BREAK_MIN_RATIO = 90;
 const UNIT_BREAK_MAX_RATIO = 110;
 const HOLE_MIN_RATIO = 3;
-const SUSPECT_MIN_RATIO = 1.35;
+export const SUSPECT_MIN_RATIO = 1.35;
 const GLITCH_RANGE_MAX_RATIO = 1.4;
 // Measured over the raw Saxo lines (#1904): the largest genuine extreme is INXG 2022-09-28 (LDI
 // crisis) at 1.085 and the smallest glitch David named is IUSA 2020-03-09 at 1.120. Calibrated

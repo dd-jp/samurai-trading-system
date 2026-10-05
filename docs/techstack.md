@@ -60,6 +60,7 @@ The v2 stack as it stands on `main`. Rulings live in [doc 66](research/66-v2-gri
 |------|-----|
 | Vitest, with `@vitest/coverage-v8`, jsdom and Testing Library | Unit tests, server and client |
 | Playwright | Dashboard e2e (`e2e/`) |
+| fast-check | Property tests on GBP money math, the loss-budget steps and sizing bounds (`server/apps/v2/money.property.test.ts`, `server/apps/v2/risk/budget-sizing.property.test.ts`) |
 | Stryker | Mutation testing on risk, sizing and loss-budget code (`mutation:local`, and CI when those files change) |
 | CRAP gate | `npm run crap`: threshold 7 on touched functions, `server/apps/v2/` and `contracts/` in full, 15 repo-wide (`server/tools/crap-gate.ts`, #1649) |
 | oxlint and Biome | Lint and format (`npm run lint`); `eslint-plugin-no-comment-slop` runs under oxlint (`.oxlintrc.json`) |
