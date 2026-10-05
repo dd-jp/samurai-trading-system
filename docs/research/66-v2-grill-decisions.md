@@ -505,6 +505,17 @@ David ruled in chat on 2026-10-03, one question at a time; the rulings are recor
 
 *Built 2026-10-03 (#2061, after the CRAP-split PR #2062); doc 77 §5.2 has the move notes.*
 
+## Rulings of 2026-10-05 — regime split (#1747)
+
+David ruled on 2026-10-05, recorded on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/1747#issuecomment-6001502812). They define Step 4b's regime-split row (doc 67: "Per-period table (incl. 2020 crash, 2022 drawdown); no single period carries the result alone"), which doc 67 Step 1b puts in every candidate's kill line. Ruling 5 of the same comment, on the look-ahead canary, is recorded with the canary's build.
+
+1. **Period.** Each calendar year of the backtest window, plus two stress windows: 2020-02-19 to 2020-03-23 and 2022-01-03 to 2022-10-12 (S&P 500 peak to trough). The same dates apply to the LSE candidates.
+2. **Result split.** For each period, the walk-forward strategy's Sharpe after the 40% haircut minus the matched benchmark's Sharpe over the same days.
+3. **"No single period carries the result alone" is leave one out.** The existing "beats the benchmark after the 40% haircut" check must still pass with any one period removed.
+4. **On failure the candidate fails.** It is a kill-line failure and changes the verdict.
+
+*Built 2026-10-05* (`server/apps/v2/evidence/regime-split.ts`, wired in `server/apps/v2/backtest-verdict.ts`). The verdict carries `regimeSplit` and a fourth check, `beatsBenchmarkWithAnyPeriodRemoved`, which `pass` requires; each candidate report repeats the baseline's table as `regimeSplit`. Build conventions, not rulings: the series is the walk-forward test path (the folds after the first, embargo gaps excluded), each return dated by the session it was earned on, so a period inside the first fold has no sessions in it. Leave one out removes one listed period at a time, so removing a stress window removes only its days and its calendar year stays. A period with fewer than two sessions has no Sharpe (`moments` needs two), so its own row is left blank; this changes nothing, because the table reports and the leave-one-out test decides. A remainder with fewer than two sessions fails closed, as the evidence code refuses rather than guesses below two returns: a window inside one calendar year therefore always fails, since that year is the whole result. A stress window outside the backtest window is listed with no sessions, and removing it removes nothing.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

@@ -62,6 +62,7 @@ describe('backtestVerdict', () => {
     );
     expect(verdict.checks).toEqual({
       beatsBenchmarkAfterHaircut: true,
+      beatsBenchmarkWithAnyPeriodRemoved: true,
       deflatedSharpeAtLeast095: true,
       pboAtMost010: true,
     });
@@ -76,6 +77,52 @@ describe('backtestVerdict', () => {
     expect(verdict.walkForward.benchmarkSharpe).toBeGreaterThan(
       verdict.walkForward.strategySharpeHaircut,
     );
+    expect(verdict.pass).toBe(false);
+  });
+
+  it('splits the walk-forward path by calendar year and stress window, on the dates each return was earned', () => {
+    const verdict = backtestVerdict(input());
+    const rows = verdict.regimeSplit.periods;
+    expect(rows.map((row) => row.period)).toEqual(['2020', '2021', '2020-crash', '2022-drawdown']);
+    const [year2020, year2021, crash, drawdown] = rows;
+    expect((year2020?.inPeriod.sessions ?? 0) + (year2021?.inPeriod.sessions ?? 0)).toBe(300);
+    expect(year2021?.inPeriod.sessions).toBe(34);
+    expect(crash?.inPeriod.sessions).toBe(0);
+    expect(drawdown?.withoutPeriod.sessions).toBe(300);
+    const trial = input().trials[0]?.returns as number[];
+    const benchmark = input().benchmark.returns;
+    expect(year2021?.inPeriod.strategySharpeHaircut).toBeCloseTo(
+      annualisedSharpe(trial.slice(366)) * 0.6,
+      12,
+    );
+    expect(year2021?.inPeriod.benchmarkSharpe).toBeCloseTo(
+      annualisedSharpe(benchmark.slice(366)),
+      12,
+    );
+    expect(drawdown?.withoutPeriod.strategySharpeHaircut).toBeCloseTo(
+      verdict.walkForward.strategySharpeHaircut,
+      12,
+    );
+    expect(drawdown?.withoutPeriod.benchmarkSharpe).toBeCloseTo(
+      verdict.walkForward.benchmarkSharpe,
+      12,
+    );
+  });
+
+  it('fails a run whose edge is carried by one period, though the whole path beats the benchmark', () => {
+    const carried = book([...noisy(366, -0.0003, 0.01, 0), ...noisy(LENGTH - 366, 0.02, 0.002, 0)]);
+    const verdict = backtestVerdict(
+      input({
+        trials: [
+          { trial: 9, ...carried },
+          { trial: 10, ...carried },
+        ],
+      }),
+    );
+    expect(verdict.checks.beatsBenchmarkAfterHaircut).toBe(true);
+    const year2021 = verdict.regimeSplit.periods.find((row) => row.period === '2021');
+    expect(year2021?.beatsBenchmarkWithoutPeriod).toBe(false);
+    expect(verdict.checks.beatsBenchmarkWithAnyPeriodRemoved).toBe(false);
     expect(verdict.pass).toBe(false);
   });
 

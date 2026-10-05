@@ -134,6 +134,8 @@ describe('runCrossAssetTrendAgainst', () => {
       expect(report.minbtlLimit).toBeGreaterThan(0);
       expect(report.windowYears).toBeGreaterThan(0);
       expect(typeof report.signFlipped).toBe('boolean');
+      expect(report.regimeSplit).toBe(report.baseline.verdict.regimeSplit);
+      expect(report.regimeSplit.periods.map((row) => row.period)).toContain('2020-crash');
       expect(report.dataSanity).toEqual({
         from: window.from,
         to: window.to,
