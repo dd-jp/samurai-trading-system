@@ -34,13 +34,13 @@ describe('delayedBars', () => {
     ]);
   });
 
-  it('builds a series once and passes a missing series and the window note through', () => {
+  it('builds a series once and passes a missing series through and widens the window note by the lagged bar', () => {
     const noteWindow = vi.fn();
     const delayed = delayedBars({ ...source, noteWindow });
     expect(delayed.load('UP')).toBe(delayed.load('UP'));
     expect(delayed.load('NONE')).toBeUndefined();
     delayed.noteWindow?.('UP', 7);
-    expect(noteWindow).toHaveBeenCalledWith('UP', 7);
+    expect(noteWindow).toHaveBeenCalledWith('UP', 8);
     expect(() => delayedBars(source).noteWindow?.('UP', 7)).not.toThrow();
   });
 });

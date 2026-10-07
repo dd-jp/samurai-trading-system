@@ -20,7 +20,7 @@ export function delayedBars(source: BarsSource): BarsSource {
       cache.set(series, hit);
       return hit;
     },
-    noteWindow: (symbol, bars) => source.noteWindow?.(symbol, bars),
+    noteWindow: (symbol, bars) => source.noteWindow?.(symbol, bars + 1),
   };
 }
 
