@@ -1262,6 +1262,41 @@ describe('composeV2Root', () => {
     }
   });
 
+  it('keeps the cycle report when the digest write fails, and journals the failure as a fault (#2028)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'digest-fails.sqlite');
+    const seeded = seededStore(storePath);
+    seeded.exec(
+      `CREATE TRIGGER digest_write_fails BEFORE INSERT ON v2_input_digests
+       BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END`,
+    );
+    seeded.close();
+    const root = composeV2Root({
+      ...fixtures,
+      tradingDate: ENTRY_DATE,
+      dryRun: true,
+      storePath,
+      clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
+      logger: { log: () => {} },
+    });
+    try {
+      const report = await root.run();
+      expect(report).toMatchObject({ trading_date: ENTRY_DATE, skipped: false });
+      expect(root.faults.faultsOn(ENTRY_DATE)).toEqual([
+        expect.objectContaining({
+          kind: 'refused_cycle',
+          code: 'v2_input_digest_failed',
+          detail: expect.stringContaining('disk I/O error'),
+        }),
+      ]);
+      expect(count(root, 'v2_input_digests')).toBe(0);
+      expect(count(root, 'v2_book_days')).toBeGreaterThan(0);
+    } finally {
+      root.close();
+    }
+  });
+
   it('never records a day both venues were closed as a missed run, and records a one-venue holiday (#1933)', async () => {
     const fixtures = await writeFixtures();
     directory = fixtures.directory;

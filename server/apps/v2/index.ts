@@ -495,15 +495,32 @@ export async function runDigestedCycle(
   inputs.recording.clear();
   const report = await runCycle(cycle, tradingDate);
   if (!report.skipped) {
+    journalInputDigests(cycle.faults, tradingDate, inputs);
+    await readBrokerCashInLieu(cycle, tradingDate);
+  }
+  return report;
+}
+
+function journalInputDigests(
+  faults: Pick<FaultLedger, 'record'>,
+  tradingDate: string,
+  inputs: DigestedInputs,
+): void {
+  try {
     recordInputDigests(
       inputs.db,
       inputs.clock,
       tradingDate,
-      cycleInputDigests(inputs.bars, inputs.recording.names(), inputs.catalogue, tradingDate),
+      cycleInputDigests(inputs.bars, inputs.recording.windows(), inputs.catalogue, tradingDate),
     );
-    await readBrokerCashInLieu(cycle, tradingDate);
+  } catch (error) {
+    faults.record({
+      kind: 'refused_cycle',
+      trading_date: tradingDate,
+      code: 'v2_input_digest_failed',
+      detail: describeThrownSafely(error),
+    });
   }
-  return report;
 }
 
 export function composeV2Root(options: V2RootOptions): V2Root {

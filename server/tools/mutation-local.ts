@@ -398,7 +398,6 @@ export interface StrykerRun {
 }
 
 function runStryker(root: string, run: StrykerRun): SpawnSyncReturns<Buffer> {
-  const testFileGlobs = TRADING_PATH_PREFIXES.map(testFilesGlob);
   const strykerBin = fileURLToPath(new URL('../../node_modules/.bin/stryker', import.meta.url));
   mkdirSync(join(root, REPORT_DIR), { recursive: true });
   return spawnSync(
@@ -407,8 +406,6 @@ function runStryker(root: string, run: StrykerRun): SpawnSyncReturns<Buffer> {
       'run',
       '--mutate',
       run.patterns.join(','),
-      '--testFiles',
-      testFileGlobs.join(','),
       '--incremental',
       '--incrementalFile',
       run.incrementalFile,
