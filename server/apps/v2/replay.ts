@@ -564,6 +564,27 @@ function describeDivergence(divergence: Divergence, redact: Redact): string {
   return describe(divergence, redact);
 }
 
+export const REPLAY_EXIT_CODES = { identical: 0, diverged: 1, failed: 1, inputChanged: 2 } as const;
+
+function isInputChange(divergence: Divergence): boolean {
+  return divergence.kind === 'input_changed_since';
+}
+
+export function replayExitCode(result: ReplayResult): number {
+  if (result.divergences.some(isInputChange)) return REPLAY_EXIT_CODES.inputChanged;
+  return result.divergences.length === 0 ? REPLAY_EXIT_CODES.identical : REPLAY_EXIT_CODES.diverged;
+}
+
+function inputChangeLines(result: ReplayResult, redact: Redact): string[] {
+  const changes = result.divergences.filter(isInputChange);
+  const [next] = result.divergences.filter((divergence) => !isInputChange(divergence));
+  return [
+    `INPUT CHANGED (${changes.length} inputs changed since the day, ${result.divergences.length} divergences); every changed input:`,
+    ...changes.map((change) => describeDivergence(change, redact)),
+    ...(next === undefined ? [] : ['first other divergence:', describeDivergence(next, redact)]),
+  ];
+}
+
 function describeSkip({ stage, migration }: SkippedStage): string {
   return `${stage}: not compared, the day ran before migration ${String(migration).padStart(4, '0')}`;
 }
@@ -573,11 +594,11 @@ export function formatReplay(result: ReplayResult, redact: Redact): string {
   const head = [counted, ...result.skipped.map(describeSkip)].join('\n');
   const [first] = result.divergences;
   if (first === undefined) return `${head}\nidentical`;
-  return redact(
-    [
-      head,
-      `DIVERGED (${result.divergences.length} divergences); first:`,
-      describeDivergence(first, redact),
-    ].join('\n'),
-  );
+  const body = result.divergences.some(isInputChange)
+    ? inputChangeLines(result, redact)
+    : [
+        `DIVERGED (${result.divergences.length} divergences); first:`,
+        describeDivergence(first, redact),
+      ];
+  return redact([head, ...body].join('\n'));
 }

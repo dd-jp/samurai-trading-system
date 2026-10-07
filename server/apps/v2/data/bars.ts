@@ -7,6 +7,7 @@ import { quoteCurrencyOf } from './venues.js';
 
 export interface BarsSource {
   load(symbol: string): BarSeries | undefined;
+  noteWindow?(symbol: string, bars: number): void;
 }
 
 export interface ParquetBarsSourceOptions {

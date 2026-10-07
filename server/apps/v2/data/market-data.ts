@@ -25,6 +25,7 @@ export class BarsMarketData implements MarketData {
   }
 
   barsBefore(instrument: string, tradingDate: string, count: number): readonly V2Bar[] {
+    this.bars.noteWindow?.(instrument, count);
     const series = this.bars.load(instrument);
     return series === undefined || count < 1 ? [] : barsBefore(series, tradingDate).slice(-count);
   }

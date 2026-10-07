@@ -36,6 +36,14 @@ describe('BarsMarketData', () => {
     expect(market.barsBefore('MISSING', '2026-09-25', 5)).toEqual([]);
   });
 
+  it('tells a recording source how deep each counted read went (#2028)', () => {
+    const noteWindow = vi.fn();
+    const recorded = new BarsMarketData({ load, noteWindow }, []);
+    recorded.barsBefore('UP', '2026-09-25', 7);
+    recorded.lastBarBefore('UP', '2026-09-25');
+    expect(noteWindow.mock.calls).toEqual([['UP', 7]]);
+  });
+
   it('caches the year-start rate and quotes only US venues in dollars', () => {
     const first = market.gbpUsdAtYearStart(2026);
     expect(market.gbpUsdAtYearStart(2026)).toBe(first);
