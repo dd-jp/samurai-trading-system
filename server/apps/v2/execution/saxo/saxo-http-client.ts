@@ -17,6 +17,8 @@ import type {
   SaxoAccountBalance,
   SaxoAccountBalanceReader,
   SaxoAssetType,
+  SaxoCfdPriceDetails,
+  SaxoInfoPrice,
   SaxoInstrumentDetails,
   SaxoNetPosition,
   SaxoOpenApiClient,
@@ -25,6 +27,7 @@ import type {
   SaxoOrderPlacement,
   SaxoOrderRequest,
 } from './saxo-client.js';
+import { isSaxoCfdAssetType } from './saxo-client.js';
 import type { SaxoTradingEnvironment } from './saxo-environment.js';
 import {
   SAXO_CREDENTIAL_ENV_VARS,
@@ -263,6 +266,24 @@ function validateNetPosition(raw: unknown, context: string): SaxoNetPosition {
   };
 }
 
+function requireRequestedInstrument(
+  body: Record<string, unknown>,
+  context: string,
+  requested: { uic: number; assetType: SaxoAssetType },
+  what: string,
+): number {
+  const uic = requireNumber(body, 'Uic', context);
+  const assetType = requireString(body, 'AssetType', context);
+  if (uic !== requested.uic || assetType !== requested.assetType) {
+    failValidation(
+      context,
+      `${what} for Uic ${requested.uic}/${requested.assetType} came back as ${uic}/${assetType}`,
+      body,
+    );
+  }
+  return uic;
+}
+
 function validateInstrumentDetails(
   body: unknown,
   context: string,
@@ -273,22 +294,61 @@ function validateInstrumentDetails(
   if (factor <= 0) {
     failValidation(context, 'PriceToContractFactor must be positive', body);
   }
-  const uic = requireNumber(body, 'Uic', context);
-  const assetType = requireString(body, 'AssetType', context);
-  if (uic !== requested.uic || assetType !== requested.assetType) {
-    failValidation(
-      context,
-      `details for Uic ${requested.uic}/${requested.assetType} came back as ` +
-        `${uic}/${assetType}`,
-      body,
-    );
-  }
+  const uic = requireRequestedInstrument(body, context, requested, 'details');
   return {
     Uic: uic,
-    AssetType: assetType,
+    AssetType: requested.assetType,
     CurrencyCode: requireString(body, 'CurrencyCode', context),
     PriceCurrency: optionalString(body, 'PriceCurrency', context),
     PriceToContractFactor: factor,
+  };
+}
+
+function optionalBoolean(
+  row: Record<string, unknown>,
+  field: string,
+  context: string,
+): boolean | undefined {
+  const value = row[field];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'boolean') failValidation(context, `${field} must be a boolean`, row);
+  return value;
+}
+
+// Fail closed like the catalogue job: a ShortTradeDisabled Saxo stops sending reads as disabled
+function validateCfdPriceDetails(
+  details: Record<string, unknown>,
+  context: string,
+): SaxoCfdPriceDetails {
+  const borrow = optionalNumber(details, 'CfdBorrowingCost', context);
+  if ((borrow ?? 0) < 0) {
+    failValidation(context, 'CfdBorrowingCost must not be negative', details);
+  }
+  return {
+    ShortTradeDisabled: optionalBoolean(details, 'ShortTradeDisabled', context) !== false,
+    CfdBorrowingCost: borrow,
+  };
+}
+
+function validateInfoPrice(
+  body: unknown,
+  context: string,
+  requested: { uic: number; assetType: SaxoAssetType },
+): SaxoInfoPrice {
+  if (!isRecord(body)) failValidation(context, 'expected an object', body);
+  const uic = requireRequestedInstrument(body, context, requested, 'price');
+  const quote = body.Quote;
+  if (!isRecord(quote)) failValidation(context, 'Quote must be an object', body);
+  const details = isRecord(body.InstrumentPriceDetails) ? body.InstrumentPriceDetails : {};
+  return {
+    Uic: uic,
+    AssetType: requested.assetType,
+    Bid: optionalNumber(quote, 'Bid', context),
+    Ask: optionalNumber(quote, 'Ask', context),
+    IsMarketOpen: details.IsMarketOpen === true,
+    Cfd: isSaxoCfdAssetType(requested.assetType)
+      ? validateCfdPriceDetails(details, context)
+      : undefined,
   };
 }
 
@@ -545,6 +605,23 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       { method: 'GET' },
       'getInstrumentDetails',
       (body, context) => validateInstrumentDetails(body, context, { uic, assetType }),
+      'background',
+    );
+  }
+
+  async getInfoPrice(uic: number, assetType: SaxoAssetType): Promise<SaxoInfoPrice> {
+    const { accountKey } = await this.resolveIdentity();
+    const query = new URLSearchParams({
+      AccountKey: accountKey,
+      Uic: String(uic),
+      AssetType: assetType,
+      FieldGroups: 'Quote,InstrumentPriceDetails',
+    });
+    return this.request(
+      `/trade/v1/infoprices?${query.toString()}`,
+      { method: 'GET' },
+      'getInfoPrice',
+      (body, context) => validateInfoPrice(body, context, { uic, assetType }),
       'background',
     );
   }

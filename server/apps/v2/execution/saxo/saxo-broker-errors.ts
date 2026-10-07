@@ -47,6 +47,13 @@ export type SaxoBrokerError =
   | SaxoBrokerRateLimitError
   | SaxoBrokerProviderError;
 
+export function isOrderNotFound(error: unknown): boolean {
+  return (
+    error instanceof SaxoBrokerProviderError &&
+    (error.status === 404 || error.code === 'OrderNotFound')
+  );
+}
+
 export function isRetryableSaxoBrokerError(error: unknown): boolean {
   if (error instanceof SaxoBrokerTimeoutError || error instanceof SaxoBrokerRateLimitError) {
     return isRetrySafeMethod(error.method);

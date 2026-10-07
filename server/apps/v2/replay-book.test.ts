@@ -22,7 +22,7 @@ import {
   tradingDivergences,
 } from './replay-book.js';
 import { type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
-import { CapitalConfigStore, PaperBooks } from './risk/index.js';
+import { CapitalConfigStore, type CfdCarryRates, PaperBooks } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
 import { DEBATE_SLEEVE_SPEC, ScriptedTransport } from './signal/index.js';
 
@@ -306,6 +306,44 @@ describe('replay of sizing, orders, fills and marks', () => {
     expect(result.divergences).toEqual([
       { kind: 'row_missing', stage: 'orders', key: `v2-debate-primary-${EXIT_DAY}-HOLD-exit` },
     ]);
+  });
+});
+
+describe('replay of per-position CFD carry rows (#2072)', () => {
+  const carryRow = `INSERT INTO v2_cfd_carry (book_id, trading_date, instrument, venue,
+      client_order_id, financing_gbp, borrow_gbp, recorded_at)
+    VALUES ('debate/primary', '${EXIT_DAY}', 'CFD.L', 'saxo', 'v2-cfd-entry', 0.5, 0, '${EXIT_DAY}T07:30:00.000Z')`;
+
+  it('fails a day after migration 0094 on a journalled carry row the replay did not write', async () => {
+    const result = await replayFromFiles(
+      tamperedCopy(
+        'carry-after-0094',
+        `UPDATE schema_migrations SET applied_at = '2026-01-01T00:00:00.000Z' WHERE version = 94;
+         ${carryRow}`,
+      ),
+    );
+    expect(result.skipped).not.toContainEqual(expect.objectContaining({ stage: 'carry' }));
+    expect(result.divergences).toEqual([
+      { kind: 'row_missing', stage: 'carry', key: 'debate/primary|CFD.L' },
+    ]);
+    expect(formatReplay(result, (text) => text)).toContain(
+      'carry: debate/primary|CFD.L: journalled, not replayed',
+    );
+  });
+
+  it('skips the carry stage by name on a day before migration 0094', async () => {
+    const result = await replayFromFiles(
+      tamperedCopy(
+        'carry-before-0094',
+        `UPDATE schema_migrations SET applied_at = '2027-01-01T00:00:00.000Z' WHERE version = 94;
+         ${carryRow}`,
+      ),
+    );
+    expect(result.divergences).toEqual([]);
+    expect(result.skipped).toContainEqual({ stage: 'carry', migration: 94 });
+    expect(formatReplay(result, (text) => text)).toMatch(
+      /\ncarry: not compared, the day ran before migration 0094\n(.*\n)*identical$/,
+    );
   });
 });
 
@@ -662,6 +700,169 @@ describe('tradingDivergences rescales cutover (#2019)', () => {
       replayed.close();
     },
   );
+});
+
+describe('tradingDivergences carry cutover (#2072)', () => {
+  const DAY = '2026-10-06';
+  const MARKED = `${DAY}T21:00:00.000Z`;
+
+  function stores(cutover: string | undefined) {
+    const [journal, replayed] = [migratedMemoryStore(), migratedMemoryStore()];
+    for (const db of [journal, replayed]) {
+      db.prepare(
+        `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+         VALUES ('debate/primary', 'debate', 'primary', 3000, 3000, 'now')`,
+      ).run();
+      db.prepare(
+        `INSERT INTO v2_cfd_carry (book_id, trading_date, instrument, venue, client_order_id,
+           financing_gbp, borrow_gbp, recorded_at)
+         VALUES ('debate/primary', ?, 'VOD.L', 'saxo', 'v2-entry', 0.42, 0.07, ?)`,
+      ).run(DAY, MARKED);
+    }
+    journal.prepare('DELETE FROM schema_migrations WHERE version = 94').run();
+    if (cutover !== undefined) {
+      journal
+        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (94, ?)')
+        .run(cutover);
+    }
+    const compare = () =>
+      tradingDivergences({
+        journal,
+        replayed,
+        tradingDate: DAY,
+        markedAt: MARKED,
+        startedAt: `${DAY}T07:30:00.000Z`,
+      });
+    return { journal, replayed, compare };
+  }
+
+  it('holds a day after migration 0094 to each per-position carry row', () => {
+    const { journal, replayed, compare } = stores('2026-10-05T00:00:00.000Z');
+    expect(compare()).toMatchObject({ divergences: [], skipped: [] });
+    replayed.prepare('UPDATE v2_cfd_carry SET financing_gbp = 0.43').run();
+    expect(compare().divergences).toEqual([
+      {
+        kind: 'row_field',
+        stage: 'carry',
+        key: 'debate/primary|VOD.L',
+        field: 'financing_gbp',
+        journalled: 0.42,
+        replayed: 0.43,
+      },
+    ]);
+    replayed.prepare("UPDATE v2_cfd_carry SET instrument = 'BP.L'").run();
+    expect(compare().divergences).toEqual([
+      { kind: 'row_missing', stage: 'carry', key: 'debate/primary|VOD.L' },
+      { kind: 'row_extra', stage: 'carry', key: 'debate/primary|BP.L' },
+    ]);
+    journal.close();
+    replayed.close();
+  });
+
+  it('rebuilds a held CFD short from the journal and re-marks it to its journalled carry row', () => {
+    const clock = new SimulatedClock(new Date(MARKED));
+    const rates: CfdCarryRates = {
+      financing: { dailyRate: (_venue, side) => (side === 'long' ? 0.001 : 0.0003) },
+      borrow: { dailyRate: (_venue, quoted) => quoted ?? 0 },
+      quotedBorrowPerDay: () => 0.0002,
+    };
+    const sleeves = [{ id: 'debate', spec: DEBATE_SLEEVE_SPEC }];
+    const market = {
+      lastBarBefore: () => undefined,
+      barsBefore: () => [],
+      gbpUsdAtYearStart: () => 1.25,
+    };
+    const journal = migratedMemoryStore();
+    journal
+      .prepare(
+        "UPDATE schema_migrations SET applied_at = '2026-01-01T00:00:00.000Z' WHERE version = 94",
+      )
+      .run();
+    new CapitalConfigStore(journal, clock).setYear(2026, 2_000, 1_500);
+    const live = new PaperBooks(
+      journal,
+      clock,
+      new CapitalConfigStore(journal, clock),
+      '2026-10-05',
+      sleeves,
+      rates,
+    );
+    journal.exec(
+      `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+         leg, side, dry_run, outcome, payload, recorded_at)
+       VALUES ('v2-cfd-entry', NULL, 'debate/primary', '2026-10-05', 'VOD', 'saxo_cfd_gbp', 'entry',
+         'sell', 1, 'simulated', '{"stop":110,"target":90}', '2026-10-05T07:31:00.000Z');
+       INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+         side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+       VALUES ('saxo_cfd_gbp:sim-entry', 'v2-cfd-entry', 'debate/primary', '2026-10-05', 'VOD',
+         'saxo_cfd_gbp', 'entry', 'sell', 3, 100, 0.5, '2026-10-05T07:31:00.000Z', 'paper');`,
+    );
+    live.applyFill('debate/primary', {
+      instrument: 'VOD',
+      venue: 'saxo_cfd_gbp',
+      side: 'sell',
+      leg: 'entry',
+      qty: 3,
+      priceGbp: 100,
+      feeGbp: 0.5,
+      clientOrderId: 'v2-cfd-entry',
+      tradingDate: '2026-10-05',
+      stopGbp: 110,
+      targetGbp: 90,
+    });
+    live.markDay('debate/primary', '2026-10-05', () => 100, 1);
+    live.markDay('debate/primary', DAY, () => 101, 3);
+    const copy = rewoundCopy(journal, DAY, `${DAY}T07:30:00.000Z`);
+    const books = new PaperBooks(
+      copy,
+      clock,
+      new CapitalConfigStore(copy, clock),
+      DAY,
+      sleeves,
+      rates,
+    );
+    rebuildBooks({ copy, books, market, venueSessions: OPEN_EVERY_DAY });
+    books.markDay('debate/primary', DAY, () => 101, 3);
+    expect(
+      journal
+        .prepare(
+          'SELECT instrument, client_order_id, financing_gbp, borrow_gbp FROM v2_cfd_carry WHERE trading_date = ?',
+        )
+        .all(DAY),
+    ).toEqual([
+      {
+        instrument: 'VOD',
+        client_order_id: 'v2-cfd-entry',
+        financing_gbp: expect.closeTo(303 * 0.0003 * 3, 12),
+        borrow_gbp: expect.closeTo(303 * 0.0002 * 3, 12),
+      },
+    ]);
+    expect(
+      tradingDivergences({
+        journal,
+        replayed: copy,
+        tradingDate: DAY,
+        markedAt: MARKED,
+        startedAt: `${DAY}T07:30:00.000Z`,
+      }),
+    ).toMatchObject({ divergences: [], skipped: [] });
+    journal.close();
+    copy.close();
+  });
+
+  it.each([
+    ['ran before the migration', '2026-10-07T00:00:00.000Z'],
+    ['ran in a store that never applied it', undefined],
+  ])('names the carry stage as skipped, not compared, on a day that %s', (_, cutover) => {
+    const { journal, replayed, compare } = stores(cutover);
+    replayed.prepare('UPDATE v2_cfd_carry SET borrow_gbp = 9').run();
+    expect(compare()).toMatchObject({
+      divergences: [],
+      skipped: [{ stage: 'carry', migration: 94 }],
+    });
+    journal.close();
+    replayed.close();
+  });
 });
 
 describe('journalledSessions', () => {

@@ -23,5 +23,6 @@ export {
   normaliseUnitBreaks,
   quarantineImplausibleBars,
   repairBarShape,
+  SUSPECT_MIN_RATIO,
 } from './bar-hygiene.js';
 export { DEFAULT_BAR_STORE_ROOT, ParquetBarStore } from './parquet-bar-store.js';
