@@ -15,4 +15,5 @@ export { ENTRY_LIMIT_OFFSET, type EntryLimitOffset } from './entry-limit.js';
 export { V2RiskGate } from './gate.js';
 export { dailyCapGbp, sizeStepMarksGbp } from './loss-budget.js';
 export { positionSizeShares } from './position-size.js';
+export type { VolTargetSizing } from './vol-target.js';
 export { averageDailyNotional } from './volume-cap.js';

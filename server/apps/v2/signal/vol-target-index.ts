@@ -9,6 +9,7 @@ import type { SleeveFactory } from '../backtest.js';
 import {
   type BarsSource,
   calendarReferenceFor,
+  realisedVolatility,
   sessionsBefore,
   windowCovered,
 } from '../data/index.js';
@@ -39,7 +40,6 @@ export const VOL_TARGET_INDEX_TO = '2025-09-24';
 
 export const VOL_TARGET_INDEX_CEILINGS: readonly number[] = [0.2, 0.25];
 export const VOL_TARGET_INDEX_VOL_WINDOW = 20;
-const TRADING_DAYS_PER_YEAR = 252;
 export const VOL_TARGET_INDEX_ATR_WINDOW = 20;
 const STOP_ATR_MULTIPLE = 5;
 const SENTINEL_LIMIT = 1_000_000;
@@ -66,18 +66,6 @@ function volTargetIndexSpec(): SleeveSpec {
     },
     books: [{ variant: 'primary', instantiated: true }],
   };
-}
-
-export function realisedVolatility(bars: readonly V2Bar[], window: number): number | undefined {
-  if (bars.length < window + 1) return undefined;
-  const closes = bars.slice(-(window + 1)).map((bar) => bar.close);
-  if (closes.some((close) => !(close > 0))) return undefined;
-  const returns = closes
-    .slice(1)
-    .map((close, index) => Math.log(close / (closes[index] as number)));
-  const mean = returns.reduce((sum, value) => sum + value, 0) / window;
-  const variance = returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (window - 1);
-  return Math.sqrt(variance * TRADING_DAYS_PER_YEAR);
 }
 
 interface VolRead {

@@ -335,6 +335,7 @@ export async function reconcileBooks(
 }
 
 export type SyncThrowEvent =
+  | 'v2_pending_resolve_threw'
   | 'v2_fill_sweep_threw'
   | 'v2_split_rescale_threw'
   | 'v2_entry_cancel_threw'

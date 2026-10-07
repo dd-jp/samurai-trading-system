@@ -17,7 +17,9 @@ import {
   ENTRY_LIMIT_OFFSET,
   type EntryLimitOffset,
   sleeveAllocationGbp,
+  type VolTargetSizing,
 } from './risk/index.js';
+import { declaredVolTarget } from './signal/index.js';
 import type { TrialConfig, TrialLedger } from './trial-ledger.js';
 
 export type SleeveFactory = (market: MarketData) => Sleeve;
@@ -236,6 +238,14 @@ export function entryOffsetIdentity(offset: EntryLimitOffset): { entryOffset?: E
   return offset.capBps === 0 ? {} : { entryOffset: offset };
 }
 
+// #1860: the cycle sizes with the declared vol target, so a set one is part of every trial it
+// touches; unset, it is omitted so the trials recorded before #1860 keep their hashes
+export function volTargetIdentity(sizing: VolTargetSizing | undefined): {
+  volTarget?: VolTargetSizing;
+} {
+  return sizing === undefined ? {} : { volTarget: sizing };
+}
+
 function recordTrials(
   input: BacktestInput,
   trials: readonly Sleeve[],
@@ -249,6 +259,7 @@ function recordTrials(
     startCapitalGbp: input.startCapitalGbp,
     lossCapGbp: input.lossCapGbp,
     ...entryOffsetIdentity(ENTRY_LIMIT_OFFSET),
+    ...volTargetIdentity(declaredVolTarget()),
     benchmark: { id: benchmark.id, spec: benchmark.spec, config: input.benchmark.config },
   };
   return input.trials.map((trial, index) =>

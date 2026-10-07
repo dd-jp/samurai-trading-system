@@ -41,6 +41,7 @@ export {
   DEBATE_SLEEVE_SPEC,
   DECLARED_PARAMETERS,
   declaredCfdCosts,
+  declaredVolTarget,
   G18_SENTIMENT_DEDUP_RULE,
   G18_SMALL_CAP_FLOORS,
   G18_SOCIAL_SOURCE,
@@ -53,6 +54,7 @@ export {
   SIGNALS_SLEEVE_SPEC,
   SLEEVE_SPECS_BY_ID,
   UnsetParameterError,
+  VOL_TARGET_SIZING,
 } from './parameters.js';
 export {
   commonPrefixLength,
