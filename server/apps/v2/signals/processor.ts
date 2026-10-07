@@ -332,7 +332,7 @@ async function processOne(
   return settle(deps, signal, 'processed', await enter(deps, signal, tradingDate, admitted));
 }
 
-// David 2026-10-07 (#2024): an alert, not a block; vetoes keep working above the cap
+// David 2026-10-05 (#2024): an alert, not a block; vetoes keep working above the cap
 function checkVetoRate(deps: SignalProcessorDeps, tradingDate: string): void {
   const verdicts = deps.signals.vetoVerdicts(SIGNAL_VETO_RATE_WINDOW);
   if (verdicts.length < SIGNAL_VETO_RATE_WINDOW) return;

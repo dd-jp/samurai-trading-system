@@ -180,7 +180,7 @@ describe('SignalStore.due', () => {
     expect(due).not.toContain(notYet.signal_id);
   });
 
-  it('keeps a failed signal due so a later pass retries it (David 2026-10-07, #2024)', () => {
+  it('keeps a failed signal due so a later pass retries it (David 2026-10-05, #2024)', () => {
     const failed = store.record(payload({}), RECEIVED, QUEUED).signal;
     store.appendEvent(failed.signal_id, 'failed', 'disk full');
     const refused = store.record(payload({ symbol: 'AMD' }), RECEIVED, QUEUED).signal;

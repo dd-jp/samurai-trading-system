@@ -325,7 +325,7 @@ Open after these rulings: ~~whether #1854 (stale-price guard, parked "until an e
 11. **Veto unavailable:** skip the primary entry, as built; the shadow still records the trade.
 12. **Daily cap within the day:** it binds at the next mark, not mid-session. Recorded; paper decides, and it is fixed only if same-day signal clusters show up.
 
-Still open and recorded, not ruled: the universe is only the current S&P 500 constituents; the shadow fills over the whole day's bar; the ≤10% veto-rate cap is not enforced in code; a failed signal is never retried; a zone that straddles the close enters at its high. *(The first four were ruled on 2026-10-07, #2024, in the signals-sleeve rulings below; the straddling zone stays recorded, not ruled.)*
+Still open and recorded, not ruled: the universe is only the current S&P 500 constituents; the shadow fills over the whole day's bar; the ≤10% veto-rate cap is not enforced in code; a failed signal is never retried; a zone that straddles the close enters at its high. *(The first four were ruled on 2026-10-05, #2024, in the signals-sleeve rulings below; the straddling zone stays recorded, not ruled.)*
 
 ## Rulings of 2026-09-30 — venue holidays and late wakes (#1933)
 
@@ -543,7 +543,7 @@ David ruled on 2026-10-05, recorded on [#2023](https://github.com/dd-jp/samurai-
 
 *Built 2026-10-07 (#2023).* Build notes (not rulings): `vitest.mutation.config.ts` is the base `vitest.config.ts` with `include` set to `TRADING_PATH_PREFIXES` mapped through `testFilesGlob` (the globs `--testFiles` used to carry), and `stryker.config.mjs` points `vitest.configFile` at it. On one scoped local run over the module-level constants of `server/apps/v2/risk/capital-config.ts` and `server/apps/v2/split.ts` (17 mutants, 8 of them static), the 8 static mutants went from 0 killed and 8 survived to 6 killed and 2 survived, and the run's score from 47.06% to 82.35%. The two survivors drop the `^` and `$` anchors of `ISO_DATE`; they are equivalent, because `isCalendarDate` also requires the parsed date to print back as the same string, which no input with extra leading or trailing characters does. The `decide.ts` lines the ticket cites are no longer in the tree. A static mutant runs every in-scope test related to its file rather than only the tests that cover it, so it costs more than a runtime mutant. Stryker's incremental mode reuses a result whenever the mutant's code and its covering tests are unchanged and never looks at the config, so a per-PR cache written under `--testFiles` would keep a static mutant's old timeout (counted detected) or survival; CI's mutation cache key now carries a hash of `stryker.config.mjs`, `vitest.config.ts`, `vitest.mutation.config.ts` and `server/tools/mutation-local.ts`, so a change to any of them starts the PR's cache afresh.
 
-## Rulings of 2026-10-07 — signals sleeve (#2024)
+## Rulings of 2026-10-05 — signals sleeve (#2024)
 
 David ruled the four points #1941 had recorded but not ruled, recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024#issuecomment-6001591570). The spec is `docs/specs/signals-sleeve-spec.md`.
 
