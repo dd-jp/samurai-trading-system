@@ -9,6 +9,7 @@ import type { Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
 import { type BacktestVerdict, type BookSeries, backtestVerdict } from './backtest-verdict.js';
+import type { CanaryLog } from './canary-log.js';
 import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import { addDays, CALENDAR_REFERENCE } from './data/index.js';
@@ -20,13 +21,18 @@ import {
   type VolTargetSizing,
 } from './risk/index.js';
 import { declaredVolTarget } from './signal/index.js';
-import type { TrialConfig, TrialLedger } from './trial-ledger.js';
+import { type TrialConfig, type TrialLedger, trialHash } from './trial-ledger.js';
 
 export type SleeveFactory = (market: MarketData) => Sleeve;
 
 export interface BacktestTrial {
   readonly config: TrialConfig;
   readonly sleeve: SleeveFactory;
+}
+
+export interface ShiftCanaryInput {
+  readonly trials: readonly BacktestTrial[];
+  readonly log: CanaryLog;
 }
 
 export interface BacktestInput {
@@ -50,6 +56,8 @@ export interface BacktestInput {
   // Never part of recordTrials' run info: a cost-sensitivity rerun (doc 67 "2x modelled cost")
   // must resolve to the SAME trial hash as its 1x baseline, not a new permanent ledger entry
   readonly costMultiple?: number | undefined;
+  // The input's trials, in their order, one bar later (doc 66, 2026-10-07 rulings on #1747)
+  readonly shiftCanary?: ShiftCanaryInput | undefined;
 }
 
 export interface BacktestResult {
@@ -246,11 +254,11 @@ export function volTargetIdentity(sizing: VolTargetSizing | undefined): {
   return sizing === undefined ? {} : { volTarget: sizing };
 }
 
-function recordTrials(
+function trialConfigs(
   input: BacktestInput,
   trials: readonly Sleeve[],
   benchmark: Sleeve,
-): number[] {
+): TrialConfig[] {
   const run = {
     from: input.from,
     to: input.to,
@@ -262,31 +270,35 @@ function recordTrials(
     ...volTargetIdentity(declaredVolTarget()),
     benchmark: { id: benchmark.id, spec: benchmark.spec, config: input.benchmark.config },
   };
-  return input.trials.map((trial, index) =>
-    input.ledger.record(input.candidate, {
-      ...trial.config,
-      spec: (trials[index] as Sleeve).spec,
-      run,
-    }),
-  );
+  return input.trials.map((trial, index) => ({
+    ...trial.config,
+    spec: (trials[index] as Sleeve).spec,
+    run,
+  }));
 }
 
-export async function runBacktest(input: BacktestInput): Promise<BacktestResult> {
+interface Fenced {
+  readonly market: MarketData;
+  readonly today: { current: string };
+}
+
+function fenced(input: BacktestInput): Fenced {
   const today = { current: input.from };
-  const market = fencedMarket(input.market, () => today.current);
-  const trialSleeves = input.trials.map((trial) => trial.sleeve(market));
-  const benchmarkSleeve = input.benchmark.sleeve(market);
-  const sleeves = [...trialSleeves, benchmarkSleeve];
-  refuseForwardPaper(sleeves);
-  const share = trialsShare(trialSleeves);
-  const dates = backtestSessions(
-    input.market,
-    input.from,
-    input.to,
-    input.calendarReference ?? CALENDAR_REFERENCE,
-  );
+  return { market: fencedMarket(input.market, () => today.current), today };
+}
+
+interface Simulation {
+  readonly opening: CapitalYear;
+  readonly marks: readonly (readonly number[])[];
+}
+
+async function simulate(
+  input: BacktestInput,
+  sleeves: readonly Sleeve[],
+  today: { current: string },
+  dates: readonly string[],
+): Promise<Simulation> {
   const first = dates[0] as string;
-  const trialNumbers = recordTrials(input, trialSleeves, benchmarkSleeve);
   const db = openSharedStore(':memory:');
   try {
     const clock = new SimulatedClock(new Date(`${first}T00:00:00.000Z`));
@@ -308,32 +320,88 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
       halfSpreadBps: input.halfSpreadBps,
       costMultiple: input.costMultiple,
     });
-    const marks = await replay(cycle, clock, sleeves, dates, today);
-    const series = (index: number) => {
-      const sleeve = sleeves[index] as Sleeve;
-      return seriesFrom(sleeveAllocationGbp(sleeve.spec, opening), marks[index] as number[]);
-    };
-    const trials = trialSleeves.map((sleeve, index) => ({
-      trial: trialNumbers[index] as number,
-      sleeve: sleeve.id,
-      ...series(index),
-    }));
-    const benchmark = series(trialSleeves.length);
-    return {
-      dates,
-      trials,
-      benchmark,
-      verdict: backtestVerdict({
-        dates,
-        trials,
-        benchmark,
-        trialsCounted: input.ledger.count(),
-        lossCapGbp: input.lossCapGbp * share,
-        folds: input.folds,
-        embargo: input.embargo,
-      }),
-    };
+    return { opening, marks: await replay(cycle, clock, sleeves, dates, today) };
   } finally {
     db.close();
   }
+}
+
+function seriesOf(simulation: Simulation, sleeves: readonly Sleeve[]): BookSeries[] {
+  return sleeves.map((sleeve, index) =>
+    seriesFrom(
+      sleeveAllocationGbp(sleeve.spec, simulation.opening),
+      simulation.marks[index] as number[],
+    ),
+  );
+}
+
+async function delayedSeries(
+  input: BacktestInput,
+  canary: ShiftCanaryInput,
+  dates: readonly string[],
+): Promise<BookSeries[]> {
+  const view = fenced(input);
+  const sleeves = canary.trials.map((trial) => trial.sleeve(view.market));
+  refuseForwardPaper(sleeves);
+  return seriesOf(await simulate(input, sleeves, view.today, dates), sleeves);
+}
+
+function assertShiftCoversTrials(input: BacktestInput): void {
+  if (input.shiftCanary !== undefined && input.shiftCanary.trials.length !== input.trials.length) {
+    throw new Error('backtest: the shift canary must delay every trial of the run');
+  }
+}
+
+function logShift(
+  input: BacktestInput,
+  configs: readonly TrialConfig[],
+  verdict: BacktestVerdict,
+): void {
+  input.shiftCanary?.log.record({
+    candidate: input.candidate,
+    candidateHash: trialHash(input.candidate, {
+      trials: configs.map((config) => trialHash(input.candidate, config)),
+    }),
+    kind: 'shift',
+    seed: undefined,
+    result: { ...verdict.oneBarDelay },
+  });
+}
+
+export async function runBacktest(input: BacktestInput): Promise<BacktestResult> {
+  assertShiftCoversTrials(input);
+  const canary = input.shiftCanary;
+  const view = fenced(input);
+  const trialSleeves = input.trials.map((trial) => trial.sleeve(view.market));
+  const benchmarkSleeve = input.benchmark.sleeve(view.market);
+  const sleeves = [...trialSleeves, benchmarkSleeve];
+  refuseForwardPaper(sleeves);
+  const share = trialsShare(trialSleeves);
+  const dates = backtestSessions(
+    input.market,
+    input.from,
+    input.to,
+    input.calendarReference ?? CALENDAR_REFERENCE,
+  );
+  const configs = trialConfigs(input, trialSleeves, benchmarkSleeve);
+  const trialNumbers = configs.map((config) => input.ledger.record(input.candidate, config));
+  const books = seriesOf(await simulate(input, sleeves, view.today, dates), sleeves);
+  const trials = trialSleeves.map((sleeve, index) => ({
+    trial: trialNumbers[index] as number,
+    sleeve: sleeve.id,
+    ...(books[index] as BookSeries),
+  }));
+  const benchmark = books[trialSleeves.length] as BookSeries;
+  const verdict = backtestVerdict({
+    dates,
+    trials,
+    benchmark,
+    trialsCounted: input.ledger.count(),
+    lossCapGbp: input.lossCapGbp * share,
+    folds: input.folds,
+    embargo: input.embargo,
+    delayed: canary === undefined ? undefined : await delayedSeries(input, canary, dates),
+  });
+  logShift(input, configs, verdict);
+  return { dates, trials, benchmark, verdict };
 }

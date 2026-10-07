@@ -13,10 +13,18 @@ import {
   runMeanReversionAgainst,
   runVolTargetIndexAgainst,
 } from './backtest-cli.js';
+import { CanaryLog } from './canary-log.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
 import { CROSS_ASSET_TREND_TIDMS, VOL_TARGET_INDEX_TIDMS } from './signal/index.js';
 import { researchStorePath, TrialLedger } from './trial-ledger.js';
+
+function logsIn(db: ReturnType<typeof migratedMemoryStore>, ledger: TrialLedger) {
+  return {
+    ledger,
+    canaries: new CanaryLog(db, new SimulatedClock(new Date('2026-10-07T00:00:00Z'))),
+  };
+}
 
 describe('resolveCliOptions', () => {
   it('defaults every path and the logger when nothing is given', () => {
@@ -122,12 +130,18 @@ describe('runCrossAssetTrendAgainst', () => {
         market,
         trendBars,
         () => 5,
-        ledger,
+        logsIn(db, ledger),
         { log: () => undefined },
         window,
       );
       expect(report.trialsCounted).toBe(2);
       expect(ledger.count()).toBe(2);
+      expect(report.oneBarDelay).toBe(report.baseline.verdict.oneBarDelay);
+      expect(report.oneBarDelay?.selectedByFold).toHaveLength(15);
+      expect(report.stressed.verdict.oneBarDelay).toBeNull();
+      expect(db.prepare('SELECT candidate, kind, seed FROM v2_canary_runs').all()).toEqual([
+        { candidate: 'cross-asset-trend', kind: 'shift', seed: null },
+      ]);
       expect(report.baseline.trials).toHaveLength(2);
       expect(report.stressed.trials).toHaveLength(2);
       expect(report.baseline.dates).toEqual(report.stressed.dates);
@@ -148,7 +162,7 @@ describe('runCrossAssetTrendAgainst', () => {
         market,
         trendBars,
         () => 5,
-        ledger,
+        logsIn(db, ledger),
         { log: () => undefined },
         window,
       );
@@ -228,7 +242,7 @@ describe('runMeanReversionAgainst', () => {
         barsSource,
         constituentsFor,
         () => 5,
-        ledger,
+        logsIn(db, ledger),
         { log: () => undefined },
         window,
       );
@@ -248,7 +262,7 @@ describe('runMeanReversionAgainst', () => {
         barsSource,
         constituentsFor,
         () => 5,
-        ledger,
+        logsIn(db, ledger),
         { log: () => undefined },
         window,
       );
@@ -315,7 +329,7 @@ describe('runVolTargetIndexAgainst', () => {
         market,
         barsSource,
         () => 5,
-        ledger,
+        logsIn(db, ledger),
         { log: () => undefined },
         window,
       );
@@ -356,7 +370,7 @@ describe('runVolTargetIndexAgainst', () => {
         market,
         barsSource,
         () => 5,
-        ledger,
+        logsIn(db, ledger),
         { log: () => undefined },
         window,
       );
@@ -376,7 +390,7 @@ async function recordedHashes(
   run: (
     market: BarsMarketData,
     bars: { load: (symbol: string) => BarSeries },
-    ledger: TrialLedger,
+    research: ReturnType<typeof logsIn>,
   ) => Promise<unknown>,
 ): Promise<string[]> {
   const flat: DailyBar[] = weekdays('2000-01-03', 7_000).map((date) => ({
@@ -401,7 +415,7 @@ async function recordedHashes(
       if (trial === 2) throw new TrialsRecorded();
       return trial;
     };
-    await run(market, bars, ledger).catch((error: unknown) => {
+    await run(market, bars, logsIn(db, ledger)).catch((error: unknown) => {
       if (!(error instanceof TrialsRecorded)) throw error;
     });
     return ledger.list().map((row) => row.config_hash);
@@ -417,20 +431,20 @@ describe('candidate trial hashes', () => {
   const quiet = { log: () => undefined };
 
   it('candidate 1 (cross-asset trend, SMA 100 / 200) keeps its 50 bps identity', async () => {
-    const hashes = await recordedHashes((market, bars, ledger) =>
-      runCrossAssetTrendAgainst(market, bars, () => 5, ledger, quiet),
+    const hashes = await recordedHashes((market, bars, research) =>
+      runCrossAssetTrendAgainst(market, bars, () => 5, research, quiet),
     );
     expect(hashes, NEW_TRIAL).toEqual(['039ee8786818d43b', '043b721456d8d5e0']);
   });
 
   it('candidate 2 (mean reversion, RSI 10 / 15) keeps its recorded identity', async () => {
-    const hashes = await recordedHashes((market, bars, ledger) =>
+    const hashes = await recordedHashes((market, bars, research) =>
       runMeanReversionAgainst(
         market,
         bars,
         () => [],
         () => 5,
-        ledger,
+        research,
         quiet,
       ),
     );
@@ -438,8 +452,8 @@ describe('candidate trial hashes', () => {
   });
 
   it('candidate 3 (vol-target index, ceiling 20% / 25%) keeps its recorded identity', async () => {
-    const hashes = await recordedHashes((market, bars, ledger) =>
-      runVolTargetIndexAgainst(market, bars, () => 5, ledger, quiet),
+    const hashes = await recordedHashes((market, bars, research) =>
+      runVolTargetIndexAgainst(market, bars, () => 5, research, quiet),
     );
     expect(hashes, NEW_TRIAL).toEqual(['af1c47710daf23f4', 'c3839566e157ce07']);
   });

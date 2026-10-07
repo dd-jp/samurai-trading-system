@@ -24,6 +24,19 @@ const FILL_COLUMNS = `fill_seq, fill_id, client_order_id, book_id, trading_date,
 
 const CASES: readonly Case[] = [
   {
+    table: 'v2_canary_runs',
+    seed: `INSERT INTO v2_canary_runs (run_id, candidate, candidate_hash, kind, seed, result, recorded_at)
+      VALUES (1, 'c', 'h', 'shift', NULL, '{"survives":false}', '2026-10-07T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same run_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_canary_runs (run_id, candidate, candidate_hash, kind, seed, result, recorded_at)
+          VALUES (1, 'c', 'h', 'shift', NULL, '{"survives":true}', '2026-10-07T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
     table: 'v2_cash_anchors',
     seed: `INSERT INTO v2_cash_anchors (${CASH_ANCHOR_COLUMNS})
       VALUES (1, 'alpaca', 'anchor', 'USD', 12000, 7, 'go-live', '2026-10-01', '2026-10-01T07:00:00.000Z', 'live')`,

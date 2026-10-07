@@ -1,5 +1,6 @@
 export {
   argMaxIndex,
+  type FoldRange,
   foldRanges,
   foldSharpeMatrix,
   sliceByRanges,
