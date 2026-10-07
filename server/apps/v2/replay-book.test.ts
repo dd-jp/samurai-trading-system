@@ -719,6 +719,7 @@ describe('tradingDivergences carry cutover (#2072)', () => {
          VALUES ('debate/primary', ?, 'VOD.L', 'saxo', 'v2-entry', 0.42, 0.07, ?)`,
       ).run(DAY, MARKED);
     }
+    journal.prepare("UPDATE schema_migrations SET applied_at = '2026-01-01T00:00:00.000Z'").run();
     journal.prepare('DELETE FROM schema_migrations WHERE version = 94').run();
     if (cutover !== undefined) {
       journal
@@ -773,11 +774,7 @@ describe('tradingDivergences carry cutover (#2072)', () => {
       gbpUsdAtYearStart: () => 1.25,
     };
     const journal = migratedMemoryStore();
-    journal
-      .prepare(
-        "UPDATE schema_migrations SET applied_at = '2026-01-01T00:00:00.000Z' WHERE version = 94",
-      )
-      .run();
+    journal.prepare("UPDATE schema_migrations SET applied_at = '2026-01-01T00:00:00.000Z'").run();
     new CapitalConfigStore(journal, clock).setYear(2026, 2_000, 1_500);
     const live = new PaperBooks(
       journal,
