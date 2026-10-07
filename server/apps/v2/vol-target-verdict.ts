@@ -16,7 +16,8 @@ import {
   WALK_FORWARD_FOLDS,
 } from './evidence/index.js';
 
-// Doc 66 2026-09-28 (v3 feature evidence): the baseline's path noise, 2 sd of its OOS Sharpe
+// Doc 66 2026-09-28 (v3 feature evidence): the baseline's path noise, 2 sd of its OOS Sharpe;
+// using that fixed figure rather than recomputing it on this run awaits David (doc 66, 2026-10-07)
 export const BASELINE_PATH_NOISE_OOS_SHARPE = 0.25;
 
 export interface VolTargetVerdictInput {
@@ -78,6 +79,8 @@ function assertSplit(input: VolTargetVerdictInput, split: number): void {
   if (input.trialsCounted < 1) throw new Error('volTargetVerdict: the trial is not counted');
 }
 
+// Awaiting David (doc 66, 2026-10-07): a G6 year is inside when its net loss from the prior
+// year-end mark is at most the sleeve's share of the cap
 export function yearsInsideLossCap(
   dates: readonly string[],
   equity: readonly number[],
@@ -115,8 +118,8 @@ function summary(
   };
 }
 
-// #1860: one counted trial against unscaled arm 2, so CSCV ranks the pair, the only
-// configurations the run chooses between
+// Awaiting David (doc 66, 2026-10-07): one counted trial against unscaled arm 2, so CSCV ranks
+// the pair, the only configurations the run chooses between
 function pairPbo(input: VolTargetVerdictInput): number {
   const ranges = foldRanges(
     input.dates.length,
@@ -126,6 +129,8 @@ function pairPbo(input: VolTargetVerdictInput): number {
   return pbo(foldSharpeMatrix([input.baseline.returns, input.trial.returns], ranges)).pbo;
 }
 
+// Awaiting David (doc 66, 2026-10-07): DSR and the drawdown check run over the full window, the
+// out-of-sample drawdown is reported only, and no cost-stress rerun is made
 export function volTargetVerdict(input: VolTargetVerdictInput): VolTargetVerdict {
   const split = input.dates.findIndex((date) => date >= input.outOfSampleFrom);
   assertSplit(input, split);

@@ -22,11 +22,17 @@ export const VOL_TARGET_TRIAL_SIZING: VolTargetSizing = {
   windowBars: 20,
   sleeveIds: [VOL_TARGET_TRIAL_SLEEVE_ID],
 };
-// #1860's method: in-sample 2016-2022 from Alpaca SIP's first session, out of sample from 2023 to
-// the day before the 12-month locked holdout, as for candidates 1-3
+// Build defaults outside the #1860 rulings, each awaiting David before the run (doc 66,
+// 2026-10-07): in sample 2016-2022 from Alpaca SIP's first session, out of sample from 2023 to the
+// day before the 12-month locked holdout as for candidates 1-3, the £10,000 paper start capital of
+// 2026-09-30, and CSCV in 16 folds embargoed by arm 2's time stop. All but the out-of-sample split
+// are in the trial hash, so changing one after a run counts a new trial
 export const VOL_TARGET_TRIAL_FROM = '2016-01-04';
 export const VOL_TARGET_TRIAL_TO = '2025-09-24';
 export const VOL_TARGET_TRIAL_OUT_OF_SAMPLE_FROM = '2023-01-01';
+export const VOL_TARGET_TRIAL_START_CAPITAL_GBP = 10_000;
+export const VOL_TARGET_TRIAL_FOLDS = 16;
+export const VOL_TARGET_TRIAL_EMBARGO = ARM2_SLEEVE_SPEC.sizing.timeStopTradingDays;
 
 export interface Arm2BacktestDeps {
   readonly bars: BarsSource;

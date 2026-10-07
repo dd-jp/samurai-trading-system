@@ -7,9 +7,12 @@ import { openSharedStore } from '../../shared/store/index.js';
 import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import {
   VOL_TARGET_TRIAL_CANDIDATE_ID,
+  VOL_TARGET_TRIAL_EMBARGO,
+  VOL_TARGET_TRIAL_FOLDS,
   VOL_TARGET_TRIAL_FROM,
   VOL_TARGET_TRIAL_OUT_OF_SAMPLE_FROM,
   VOL_TARGET_TRIAL_SIZING,
+  VOL_TARGET_TRIAL_START_CAPITAL_GBP,
   VOL_TARGET_TRIAL_TO,
   volTargetTrialArms,
 } from './arm2-backtest.js';
@@ -42,7 +45,6 @@ import {
   SPREADS_PATH,
 } from './index.js';
 import {
-  ARM2_SLEEVE_SPEC,
   CROSS_ASSET_TREND_CANDIDATE_ID,
   CROSS_ASSET_TREND_FROM,
   CROSS_ASSET_TREND_TIDMS,
@@ -74,9 +76,8 @@ import { type VolTargetVerdict, volTargetVerdict } from './vol-target-verdict.js
 // yearly capital config David sets is not consulted here — a backtest run always sizes off a
 // fixed, reproducible starting point
 const BACKTEST_START_CAPITAL_GBP = 2_000;
-// #1785 candidate 3 ruling (d), 2026-10-02: the £10,000 paper start capital of 2026-09-30, which
-// arm 2 also trades on paper
-const PAPER_START_CAPITAL_GBP = 10_000;
+// #1785 candidate 3 ruling (d), 2026-10-02: the £10,000 paper start capital of 2026-09-30
+const VOL_TARGET_INDEX_START_CAPITAL_GBP = 10_000;
 const BACKTEST_LOSS_CAP_GBP = 1_500;
 const WALK_FORWARD_FOLDS = 16;
 const COST_STRESS_MULTIPLE = 2;
@@ -374,7 +375,7 @@ export async function runVolTargetIndexAgainst(
       calendarReference: calendarReferenceFor('saxo'),
       symbolsOn: () => VOL_TARGET_INDEX_TIDMS,
       embargo: VOL_TARGET_INDEX_VOL_WINDOW,
-      startCapitalGbp: PAPER_START_CAPITAL_GBP,
+      startCapitalGbp: VOL_TARGET_INDEX_START_CAPITAL_GBP,
     },
     market,
     bars,
@@ -417,21 +418,20 @@ export async function runVolTargetTrialAgainst(
   window: VolTargetTrialWindow = VOL_TARGET_TRIAL_WINDOW,
 ): Promise<VolTargetTrialReport> {
   const arms = volTargetTrialArms({ bars, constituents: constituentsFor });
-  const embargo = ARM2_SLEEVE_SPEC.sizing.timeStopTradingDays;
   const simulation = await simulateBacktest({
     candidate: VOL_TARGET_TRIAL_CANDIDATE_ID,
     trials: [arms.trial],
     benchmark: arms.baseline,
     from: window.from,
     to: window.to,
-    startCapitalGbp: PAPER_START_CAPITAL_GBP,
+    startCapitalGbp: VOL_TARGET_TRIAL_START_CAPITAL_GBP,
     lossCapGbp: BACKTEST_LOSS_CAP_GBP,
     market,
     halfSpreadBps,
     ledger,
     logger,
-    folds: WALK_FORWARD_FOLDS,
-    embargo,
+    folds: VOL_TARGET_TRIAL_FOLDS,
+    embargo: VOL_TARGET_TRIAL_EMBARGO,
     calendarReference: CALENDAR_REFERENCE,
     volTarget: VOL_TARGET_TRIAL_SIZING,
   });
@@ -442,8 +442,8 @@ export async function runVolTargetTrialAgainst(
     outOfSampleFrom: window.outOfSampleFrom,
     trialsCounted: ledger.count(),
     lossCapGbp: BACKTEST_LOSS_CAP_GBP * simulation.trialsShare,
-    folds: WALK_FORWARD_FOLDS,
-    embargo,
+    folds: VOL_TARGET_TRIAL_FOLDS,
+    embargo: VOL_TARGET_TRIAL_EMBARGO,
   });
   return { verdict, dataSanity: dataSanity(bars, constituentsFor, simulation.dates) };
 }
