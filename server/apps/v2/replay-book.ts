@@ -22,6 +22,7 @@ export type ReplayStage =
   | 'fills'
   | 'reconciles'
   | 'anchors'
+  | 'carry'
   | 'marks';
 
 export type BookDivergence =
@@ -604,6 +605,13 @@ const TABLES: readonly TableSpec[] = [
                  ORDER BY a.anchor_row_id`,
   },
   {
+    stage: 'carry',
+    presence: true,
+    sql: () => `SELECT book_id || '|' || instrument AS key, venue, client_order_id, financing_gbp,
+                  borrow_gbp FROM v2_cfd_carry
+                 WHERE trading_date = @date AND recorded_at <= @end ORDER BY rowid`,
+  },
+  {
     stage: 'marks',
     presence: true,
     sql: () => `SELECT book_id AS key, equity_gbp, cash_gbp, invested_gbp, ytd_loss_gbp,
@@ -677,29 +685,43 @@ export interface TradingCounts {
   readonly fills: number;
 }
 
-const RESCALES_MIGRATION = 87;
+export interface SkippedStage {
+  readonly stage: ReplayStage;
+  readonly migration: number;
+}
 
-// A day run before #1983 journals no rescale, so every simulated entry its replay fills would read
-// as an extra one. The cutover is the migration's apply instant, not the first rescale row: a
-// rescale-free day after the deploy is still held, and a later re-run of an old date holds no
-// earlier day. A run cannot straddle it, as migrations apply before the process cycles
-function comparedTables(comparison: TradingComparison): readonly TableSpec[] {
+const CUTOVERS: readonly SkippedStage[] = [
+  { stage: 'rescales', migration: 87 },
+  { stage: 'carry', migration: 94 },
+];
+
+// A day run before a table's migration journals none of its rows, so every row its replay writes
+// would read as an extra one: before #1983 no rescale, before #2071 no per-position CFD carry. The
+// cutover is the migration's apply instant, not the table's first row: a day after the deploy
+// with no such row is still held, and a later re-run of an old date holds no earlier day. A run
+// cannot straddle it, as migrations apply before the process cycles
+function skippedStages(comparison: TradingComparison): SkippedStage[] {
   const ranAt = comparison.markedAt ?? comparison.startedAt ?? LATEST;
-  const cutover = comparison.journal
-    .prepare('SELECT applied_at FROM schema_migrations WHERE version = ?')
-    .get(RESCALES_MIGRATION) as { applied_at: string } | undefined;
-  const held = cutover !== undefined && cutover.applied_at <= ranAt;
-  return held ? TABLES : TABLES.filter((spec) => spec.stage !== 'rescales');
+  const applied = comparison.journal.prepare(
+    'SELECT applied_at FROM schema_migrations WHERE version = ?',
+  );
+  return CUTOVERS.filter((cutover) => {
+    const row = applied.get(cutover.migration) as { applied_at: string } | undefined;
+    return row === undefined || row.applied_at > ranAt;
+  });
 }
 
 export function tradingDivergences(comparison: TradingComparison): {
   divergences: BookDivergence[];
   counts: TradingCounts;
+  skipped: SkippedStage[];
 } {
   const { journal, replayed, tradingDate } = comparison;
   const end = comparison.markedAt ?? LATEST;
   const counts = { orders: 0, fills: 0 };
-  const divergences = comparedTables(comparison).flatMap((spec) => {
+  const skipped = skippedStages(comparison);
+  const held = TABLES.filter((spec) => !skipped.some((skip) => skip.stage === spec.stage));
+  const divergences = held.flatMap((spec) => {
     const journalled = rowsOf(journal, spec.sql('>', true), tradingDate, end);
     if (spec.stage === 'orders' || spec.stage === 'fills') counts[spec.stage] = journalled.length;
     return tableDivergences(
@@ -708,7 +730,7 @@ export function tradingDivergences(comparison: TradingComparison): {
       rowsOf(replayed, spec.sql('>', false), tradingDate, LATEST),
     );
   });
-  return { divergences, counts };
+  return { divergences, counts, skipped };
 }
 
 const LATE_WAKE = /: (\S+) entry sits out \(late_wake_entry_cutoff\)$/;

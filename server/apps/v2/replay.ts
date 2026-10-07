@@ -35,6 +35,7 @@ import {
   lossBudgetDivergences,
   rebuildBooks,
   rewoundCopy,
+  type SkippedStage,
   tradingDivergences,
 } from './replay-book.js';
 import {
@@ -107,6 +108,7 @@ export interface ReplayResult {
   readonly calls: number;
   readonly orders: number;
   readonly fills: number;
+  readonly skipped: readonly SkippedStage[];
   readonly divergences: readonly Divergence[];
 }
 
@@ -361,6 +363,7 @@ async function replayTrading(replay: ReplayCycle): Promise<{
   state: Divergence[];
   trading: Divergence[];
   counts: { orders: number; fills: number };
+  skipped: SkippedStage[];
 }> {
   const { inputs, copy, day } = replay;
   const composition = replayComposition(replay);
@@ -381,14 +384,14 @@ async function replayTrading(replay: ReplayCycle): Promise<{
     }),
   ];
   await runCycle(composition, inputs.tradingDate);
-  const { divergences, counts } = tradingDivergences({
+  const { divergences, counts, skipped } = tradingDivergences({
     journal: inputs.db,
     replayed: copy,
     tradingDate: inputs.tradingDate,
     markedAt: day.markedAt,
     startedAt: day.startedAt,
   });
-  return { state, trading: divergences, counts };
+  return { state, trading: divergences, counts, skipped };
 }
 
 function multipleRuns(
@@ -412,6 +415,7 @@ function multipleRuns(
     calls,
     orders: 0,
     fills: 0,
+    skipped: [],
     divergences: [{ kind: 'multiple_runs', tradingDate, earlierRuns }],
   };
 }
@@ -428,6 +432,7 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
       calls: calls.length,
       orders: 0,
       fills: 0,
+      skipped: [],
       divergences: [{ kind: 'nothing_to_replay', tradingDate }],
     };
   }
@@ -444,7 +449,7 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
   const startedAt = day.startedAt ?? `${tradingDate}T00:00:00.000Z`;
   const copy = rewoundCopy(db, tradingDate, startedAt);
   try {
-    const { state, trading, counts } = await replayTrading({
+    const { state, trading, counts, skipped } = await replayTrading({
       inputs,
       copy,
       sleeves,
@@ -456,6 +461,7 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
       decisions: rows.length,
       calls: calls.length,
       ...counts,
+      skipped,
       divergences: [...changed, ...state, ...divergencesOf(rows, replayed, log, trading)],
     };
   } finally {
@@ -579,8 +585,13 @@ function inputChangeLines(result: ReplayResult, redact: Redact): string[] {
   ];
 }
 
+function describeSkip({ stage, migration }: SkippedStage): string {
+  return `${stage}: not compared, the day ran before migration ${String(migration).padStart(4, '0')}`;
+}
+
 export function formatReplay(result: ReplayResult, redact: Redact): string {
-  const head = `replay ${result.tradingDate}: ${result.decisions} journalled decisions, ${result.calls} logged calls, ${result.orders} orders, ${result.fills} fills`;
+  const counted = `replay ${result.tradingDate}: ${result.decisions} journalled decisions, ${result.calls} logged calls, ${result.orders} orders, ${result.fills} fills`;
+  const head = [counted, ...result.skipped.map(describeSkip)].join('\n');
   const [first] = result.divergences;
   if (first === undefined) return `${head}\nidentical`;
   const body = result.divergences.some(isInputChange)

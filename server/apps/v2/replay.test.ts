@@ -726,7 +726,10 @@ describe('main', () => {
       {},
     );
     expect(code).toBe(2);
-    const printed = lines.join('\n').split('\n');
+    const printed = lines
+      .join('\n')
+      .split('\n')
+      .filter((line) => !line.includes(': not compared, the day ran before migration'));
     expect(printed[1]).toMatch(
       /^INPUT CHANGED \(2 inputs changed since the day, \d+ divergences\)/,
     );
@@ -755,6 +758,7 @@ describe('main', () => {
           calls: 0,
           orders: 0,
           fills: 0,
+          skipped: [],
           divergences: [
             {
               kind: 'decision_field',
@@ -926,6 +930,7 @@ describe('formatReplay', () => {
     calls: 3,
     orders: 4,
     fills: 1,
+    skipped: [],
     divergences,
   });
   const logged: LoggedCall = {
@@ -986,6 +991,34 @@ describe('formatReplay', () => {
       expect(replayExitCode(result(divergences))).toBe(code);
     },
   );
+
+  it('names each stage a cutover skipped, identical or not', () => {
+    const skipped = [
+      { stage: 'rescales', migration: 87 },
+      { stage: 'carry', migration: 94 },
+    ] as const;
+    const head = [
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills',
+      'rescales: not compared, the day ran before migration 0087',
+      'carry: not compared, the day ran before migration 0094',
+    ].join('\n');
+    expect(formatReplay({ ...result([]), skipped }, (text) => text)).toBe(`${head}\nidentical`);
+    expect(
+      formatReplay(
+        { ...result([{ kind: 'row_extra', stage: 'carry', key: 'b|UP' }]), skipped },
+        (text) => text,
+      ),
+    ).toBe(`${head}\nDIVERGED (1 divergences); first:\ncarry: b|UP: replayed, not journalled`);
+    expect(
+      formatReplay({ ...result([catalogueChange]), skipped }, (text) => text).split('\n'),
+    ).toEqual([
+      ...head.split('\n'),
+      'INPUT CHANGED (1 inputs changed since the day, 1 divergences); every changed input:',
+      'saxo-cfd-catalogue: cfd_catalogue changed since 2026-09-30',
+      '  journalled: sha256 dddddddddddd, asOf 2026-09-29',
+      '  current:    sha256 cccccccccccc, asOf 2026-09-29',
+    ]);
+  });
 
   it('says identical when nothing diverged', () => {
     expect(formatReplay(result([]), (text) => text)).toBe(
@@ -1139,6 +1172,7 @@ describe('main redaction', () => {
           calls: 1,
           orders: 0,
           fills: 0,
+          skipped: [],
           divergences: [
             {
               kind: 'llm_request',
