@@ -82,7 +82,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 63;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 94;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 95;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -686,6 +686,51 @@ describe('openSharedStore', () => {
           )
           .run(),
       ).toThrow(/CHECK constraint/);
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0095 rebuilds v2_faults with every row and id, admitting veto_rate (#2024)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 94;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw.exec(
+        `INSERT INTO v2_faults (fault_id, kind, trading_date, code, detail, recorded_at)
+           VALUES (4, 'missed_run', '2026-09-29', 'CYCLE_NOT_RUN', 'a', 't'),
+                  (9, 'stale_bar', '2026-09-30', 'MARK_FRESHNESS', 'b', 't');`,
+      );
+      expect(() =>
+        raw.exec(`INSERT INTO v2_faults (kind, trading_date, code, detail, recorded_at)
+          VALUES ('veto_rate', '2026-09-30', 'SIGNAL_VETO_RATE', 'c', 't')`),
+      ).toThrow(/CHECK constraint/);
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      raw.exec(
+        `INSERT INTO v2_faults (kind, trading_date, code, detail, recorded_at)
+           VALUES ('veto_rate', '2026-09-30', 'SIGNAL_VETO_RATE', 'c', 't');
+         INSERT INTO v2_faults (kind, trading_date, code, detail, recorded_at)
+           VALUES ('veto_rate', '2026-09-30', 'SIGNAL_VETO_RATE', 'c', 't');`,
+      );
+      expect(raw.prepare('SELECT fault_id, kind FROM v2_faults ORDER BY fault_id').all()).toEqual([
+        { fault_id: 4, kind: 'missed_run' },
+        { fault_id: 9, kind: 'stale_bar' },
+        { fault_id: 10, kind: 'veto_rate' },
+      ]);
+      expect(() => raw.prepare("UPDATE v2_faults SET detail = 'x'").run()).toThrow(
+        'v2_faults is append-only',
+      );
+      expect(() => raw.prepare('DELETE FROM v2_faults').run()).toThrow('v2_faults is append-only');
+      expect(() =>
+        raw.exec(`INSERT OR REPLACE INTO v2_faults (fault_id, kind, trading_date, code, detail,
+          recorded_at) VALUES (4, 'missed_run', '2026-09-29', 'CYCLE_NOT_RUN', 'z', 't')`),
+      ).toThrow('v2_faults is append-only');
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

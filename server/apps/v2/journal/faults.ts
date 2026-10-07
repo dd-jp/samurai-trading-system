@@ -17,12 +17,13 @@ export const FAULT_KINDS = [
   'failed_broker_call',
   'missed_run',
   'token_failure',
+  'veto_rate',
 ] as const;
 
 export type FaultKind = (typeof FAULT_KINDS)[number];
 
-// Q7(3) names missed_stop, reconcile_mismatch and stuck_order and #1878 adds the other five;
-// counting all eight can only make the fault-free weeks harder to reach, never easier
+// Q7(3) names missed_stop, reconcile_mismatch and stuck_order, #1878 adds five and #2024 adds
+// veto_rate; counting all nine can only make the fault-free weeks harder to reach, never easier
 const GATE_FAULT_KINDS: readonly FaultKind[] = FAULT_KINDS;
 
 export interface Fault {

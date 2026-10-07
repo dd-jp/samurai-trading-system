@@ -12,6 +12,7 @@ function harness(overrides: Partial<SignalLoopDeps> = {}, pass?: () => Promise<S
   const signals: SignalProcessorStore = {
     due: () => [{ signal_id: 's1' } as never],
     appendEvent: () => {},
+    vetoVerdicts: () => [],
   };
   const processSignals = vi.fn(
     pass ?? (() => Promise.resolve<SignalPass>({ ran: true, outcomes: [] })),
@@ -44,7 +45,9 @@ describe('SignalLoop', () => {
     const closedMarket = harness({ calendar: { isOpen: () => false } });
     await closedMarket.loop.tick();
     expect(closedMarket.opened).toEqual([]);
-    const idle = harness({ signals: { due: () => [], appendEvent: () => {} } });
+    const idle = harness({
+      signals: { due: () => [], appendEvent: () => {}, vetoVerdicts: () => [] },
+    });
     await idle.loop.tick();
     expect(idle.opened).toEqual([]);
   });
@@ -171,7 +174,9 @@ describe('SignalLoop', () => {
   });
 
   it('has no pass age while nothing is due', async () => {
-    const idle = harness({ signals: { due: () => [], appendEvent: () => {} } });
+    const idle = harness({
+      signals: { due: () => [], appendEvent: () => {}, vetoVerdicts: () => [] },
+    });
     await idle.loop.tick();
     expect(idle.loop.passAgeMs()).toBeUndefined();
   });
