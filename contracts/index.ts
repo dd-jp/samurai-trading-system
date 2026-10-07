@@ -59,6 +59,7 @@ export type {
   JournalledFill,
   JournalledFillRead,
   JournalledOrder,
+  JournalledOutcome,
   JournalledReconcile,
   JournalledRefusal,
   JournalledRescale,

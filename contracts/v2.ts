@@ -5,6 +5,7 @@ export type OrderSide = 'buy' | 'sell';
 export type OrderLeg = 'entry' | 'exit';
 export type FillLeg = 'entry' | 'stop' | 'target' | 'exit' | 'cash_in_lieu';
 export type OrderOutcome = 'submitted' | 'refused_dry_run' | 'simulated' | 'rejected' | 'cancelled';
+export type JournalledOutcome = OrderOutcome | 'pending';
 
 export interface V2Bar {
   readonly date: string;
@@ -549,7 +550,7 @@ export interface JournalledOrder {
   readonly leg: OrderLeg;
   readonly side: OrderSide;
   readonly dry_run: boolean;
-  readonly outcome: OrderOutcome;
+  readonly outcome: JournalledOutcome;
   readonly payload: Record<string, unknown>;
 }
 
@@ -650,6 +651,14 @@ export interface DecisionJournal {
     sizeShares: number,
   ): string;
   recordOrder(order: JournalledOrder): void;
+  settleOrder(clientOrderId: string, outcome: OrderOutcome, payload: Record<string, unknown>): void;
+  pendingOrders(): readonly JournalledOrder[];
+  resolvePending(
+    clientOrderId: string,
+    outcome: 'submitted' | 'rejected',
+    detail: string,
+    tradingDate: string,
+  ): void;
   orderFor(clientOrderId: string): JournalledOrder | undefined;
   unfilledEntriesBefore(bookId: string, tradingDate: string): readonly JournalledOrder[];
   unfilledSimulatedEntriesBefore(tradingDate: string): readonly JournalledOrder[];

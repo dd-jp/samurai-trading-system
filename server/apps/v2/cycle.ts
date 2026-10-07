@@ -12,6 +12,7 @@ import type {
   EntryRoom,
   ExecutionRoute,
   JournalledOrder,
+  JournalledOutcome,
   LossBudgetState,
   ManualControl,
   MarketData,
@@ -234,6 +235,12 @@ function nativeRearmPrices(journal: DecisionJournal, held: Position): RearmPrice
 
 const SIMULATED_OUTCOMES: ReadonlySet<OrderOutcome> = new Set(['simulated', 'refused_dry_run']);
 
+interface PendingResolution {
+  readonly outcome: 'submitted' | 'rejected';
+  readonly detail: string;
+  readonly note: string;
+}
+
 export type EntryOrderId = (book: BookSpec, instrument: string, tradingDate: string) => string;
 
 function defaultEntryOrderId(book: BookSpec, instrument: string, tradingDate: string): string {
@@ -409,13 +416,62 @@ class Cycle {
   brokerHeld(order: JournalledOrder): Position | undefined {
     const held = this.deps.books.position(order.book_id, order.instrument);
     if (held === undefined) return undefined;
-    const book = [...this.deps.registry.ids()]
-      .flatMap((sleeveId) => this.deps.books.forSleeve(sleeveId))
-      .find((spec) => spec.id === order.book_id);
+    const book = this.bookSpec(order.book_id);
     if (book === undefined || this.deps.executor.simulates(routeOf(book, held.venue))) {
       return undefined;
     }
     return held;
+  }
+
+  bookSpec(bookId: string): BookSpec | undefined {
+    return [...this.deps.registry.ids()]
+      .flatMap((sleeveId) => this.deps.books.forSleeve(sleeveId))
+      .find((spec) => spec.id === bookId);
+  }
+
+  // A pending order outlived the run that journalled it: the venue is asked by its client order
+  // id, and one it never received was a missed entry, not an open one (David 2026-10-04, #1747)
+  async resolvePendingOrders(): Promise<void> {
+    for (const order of this.deps.journal.pendingOrders()) {
+      const book = this.bookSpec(order.book_id);
+      if (book !== undefined) await this.resolvePending(book, order);
+    }
+  }
+
+  async resolvePending(book: BookSpec, order: JournalledOrder): Promise<void> {
+    const resolution: PendingResolution = (await this.reachedVenue(book, order))
+      ? { outcome: 'submitted', detail: 'submitted', note: 'the venue holds it, now submitted' }
+      : {
+          outcome: 'rejected',
+          detail: 'not_sent: no order at the venue under this id',
+          note: 'the venue never received it, now rejected',
+        };
+    this.deps.journal.resolvePending(
+      order.client_order_id,
+      resolution.outcome,
+      resolution.detail,
+      this.tradingDate,
+    );
+    this.log(
+      'error',
+      'v2_pending_order_resolved',
+      `${order.client_order_id}: journalled pending by a run that ended before its outcome; ${resolution.note}`,
+    );
+  }
+
+  // A broker route with no adapter this run cannot say whether it holds the order, and calling it
+  // unsent would orphan an order the venue may hold
+  async reachedVenue(book: BookSpec, order: JournalledOrder): Promise<boolean> {
+    const route = routeOf(book, order.venue as Venue);
+    if (!this.deps.executor.simulates(route) && !this.deps.executor.canRoute(route)) {
+      throw new Error(`${order.client_order_id}: no broker for ${order.venue} to ask`);
+    }
+    const filled = await this.deps.executor.filledQty(
+      route,
+      order.client_order_id,
+      order.instrument,
+    );
+    return filled !== undefined;
   }
 
   // The broker reports a fill in the units of its own day. The ledger position is rescaled to
@@ -878,7 +934,11 @@ class Cycle {
   fillSimulatedExit(held: Position): void {
     if (held.exitClientOrderId === undefined) return;
     const order = this.deps.journal.orderFor(held.exitClientOrderId);
-    if (order === undefined || !SIMULATED_OUTCOMES.has(order.outcome)) return;
+    if (
+      order === undefined ||
+      !(SIMULATED_OUTCOMES as ReadonlySet<JournalledOutcome>).has(order.outcome)
+    )
+      return;
     const price = simulateMarketExit(this.barsSince(order));
     if (price === undefined) {
       this.fillPendingExitAtLastClose(order, held);
@@ -1474,46 +1534,83 @@ class Cycle {
     }
     this.tally.entries += 1;
     const side: OrderSide = decision.action === 'enter_short' ? 'sell' : 'buy';
-    const submission: Submission =
-      approval.order === undefined
-        ? { outcome: 'rejected', detail: approval.refusal, approvalId: '' }
-        : await this.deps.executor.submit(approval.order);
-    this.count(submission.outcome);
-    this.deps.journal.recordOrder({
+    const row = {
       client_order_id: clientOrderId,
       decision_id: decisionId,
       book_id: book.id,
       trading_date: this.tradingDate,
       instrument: decision.instrument,
       venue: decision.venue,
-      leg: 'entry',
+      leg: 'entry' as const,
       side,
       dry_run: this.deps.dryRun,
-      outcome: submission.outcome,
-      payload: {
-        size: approval.size,
-        detail: submission.detail,
-        price: decision.price,
-        limit: approvedLimit(approval),
-        entry_offset_bps: approval.entryOffsetBps,
-        modelled_slippage_bps: this.modelledSlippageBps(
-          decision.venue,
-          {
-            instrument: decision.instrument,
-            side,
-            qty: approval.size,
-            price: approvedLimit(approval) ?? decision.price,
-            crossesSpread: true,
-          },
-          submission.outcome,
-        ),
-        trigger: decision.entry_trigger,
-        stop: decision.stop_price,
-        target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
-        approval: approval.order === undefined ? undefined : submission.approvalId,
-      },
+    };
+    if (approval.order === undefined) {
+      const refused: OrderOutcome = 'rejected';
+      this.count(refused);
+      this.deps.journal.recordOrder({
+        ...row,
+        outcome: refused,
+        payload: this.entryPayload(decision, approval, side, approval.refusal, false),
+      });
+      return refused;
+    }
+    // David 2026-10-04 (#1747): journal before submit, so a crash after the send leaves an id
+    // reconcile can match to the venue's order
+    const sent = !this.deps.executor.simulates(routeOf(book, decision.venue));
+    this.deps.journal.recordOrder({
+      ...row,
+      outcome: 'pending',
+      payload: this.entryPayload(decision, approval, side, '', sent),
     });
+    const submission = await this.deps.executor.submit(approval.order);
+    this.count(submission.outcome);
+    this.deps.journal.settleOrder(
+      clientOrderId,
+      submission.outcome,
+      this.entryPayload(
+        decision,
+        approval,
+        side,
+        submission.detail,
+        submission.outcome === 'submitted',
+      ),
+    );
     return submission.outcome;
+  }
+
+  entryPayload(
+    decision: SleeveDecision,
+    approval: EntryApproval,
+    side: OrderSide,
+    detail: string,
+    sent: boolean,
+  ): Record<string, unknown> {
+    const limit = approvedLimit(approval);
+    return {
+      size: approval.size,
+      detail,
+      price: decision.price,
+      limit,
+      entry_offset_bps: approval.entryOffsetBps,
+      modelled_slippage_bps: sent
+        ? this.modelledSlippageBps(
+            decision.venue,
+            {
+              instrument: decision.instrument,
+              side,
+              qty: approval.size,
+              price: limit ?? decision.price,
+              crossesSpread: true,
+            },
+            'submitted',
+          )
+        : undefined,
+      trigger: decision.entry_trigger,
+      stop: decision.stop_price,
+      target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
+      approval: approval.order?.approvalId,
+    };
   }
 
   // Only a submitted order reached a broker, so only its modelled cost is ever compared. The
@@ -2032,7 +2129,12 @@ interface SyncStep extends ThrowFailure {
 }
 
 // fillSimulatedEntries is not a guarded step: a fill quote error must stop the cycle (#1849)
-const SYNC_STEPS: readonly SyncStep[] = [
+const syncSteps = (): readonly SyncStep[] => [
+  {
+    event: 'v2_pending_resolve_threw',
+    what: 'pending order resolve',
+    run: (cycle) => cycle.resolvePendingOrders(),
+  },
   { event: 'v2_fill_sweep_threw', what: 'fill sweep', run: (cycle) => cycle.sweepFills() },
   {
     event: 'v2_split_rescale_threw',
@@ -2048,7 +2150,7 @@ const SYNC_STEPS: readonly SyncStep[] = [
 
 async function syncStepThrows(cycle: Cycle): Promise<StepThrow[]> {
   const thrown: StepThrow[] = [];
-  for (const step of SYNC_STEPS) {
+  for (const step of syncSteps()) {
     try {
       await step.run(cycle);
     } catch (error) {
