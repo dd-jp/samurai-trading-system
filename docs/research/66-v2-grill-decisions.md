@@ -513,6 +513,35 @@ David ruled in chat on 2026-10-04, from the Step 4b fault matrix ([#1747](https:
 
 *Built 2026-10-04 (#1747).* Build notes (not rulings): `v2_orders.outcome` gains the value `pending` (no migration; the column is free text). The cycle writes the entry row as `pending`, with the payload it would carry if submitted, before `executor.submit`, then settles that row to the venue's outcome and payload; a sizing refusal never reaches the venue and is still journalled `rejected` in one write. A pending entry counts as resting, so reconcile, the cash reservation and the one-symbol-per-broker-book check all treat it as an order at the venue. Before the fill sweep, each run asks the venue for every pending order by its client order id. One the venue holds becomes `submitted` and is then handled like any other entry: its fill is booked, a stale one is cancelled. One the venue does not hold, or one on a simulated route, becomes `rejected` with detail `not_sent: …`, so it never rests and is not re-sent that date. Either way the row records the date it was resolved, and a `stuck_order` fault (`v2_pending_order_resolved`) is ledgered against the fault-free weeks. A failed venue read, or a broker route with no adapter in that run to ask, leaves the order pending and blocks entries for the run, like any other failed sync step. A pending order of a book no longer registered is left as it is. Exits, rearms and stop replaces still journal after the send: Alpaca's protected exit already resumes an existing order with the same id, and the rearm and stop-replace legs have no venue order of their own to look up. A replay of the day a crash happened is not proven to reproduce it.
 
+## Rulings of 2026-10-07 — vol-target trial (#1860)
+
+David ruled on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/1860) on 2026-10-07.
+
+1. **Volatility is measured per instrument**, as built in PR #2079: each entry is scaled by its own realised volatility.
+2. **The target is 25% a year over 20 days**, run as one counted trial.
+3. **The trial is a copy of arm 2's entries, judged against unscaled arm 2.** Its verdict stands in for the debate. Live sleeves are untouched.
+4. **An in-repo arm 2 backtest entry point is built**, so the trial is reproducible and counted automatically. The run itself needs the Mac bar store.
+
+*Built 2026-10-07 (#1860).* Build notes (not rulings): `npm run v2:backtest -- vol-target-sizing` runs the trial. It backtests two copies of arm 2 over the same entries: `arm2-vol-target`, sized by the 25%/20-day target, and unscaled `arm2` as the benchmark, which is never recorded as a trial. The trial is counted once in the research ledger under candidate `vol-target-sizing`, with config hash `8a6c1e64731b2058`; a rerun of the same config does not count again. The window runs from 2016-01-04 (Alpaca SIP's first session) to 2025-09-24 (the day before the locked holdout). It is in sample to 2022 and out of sample from 2023-01-01. The start capital is the £10,000 paper capital, so the arm 2 book is £3,000. The verdict reports each arm's in- and out-of-sample Sharpe, drawdown, return and the share of years inside the G6 cap. It also gives the out-of-sample Sharpe gap against the 0.25 baseline path noise (2026-09-28). It passes only if the trial's out-of-sample Sharpe after the 40% haircut beats the baseline's, its drawdown is lower, its DSR is at least 0.95 over every counted trial, and PBO is at most 0.10. `runBacktest` now accepts a backtest-only `volTarget` and marks a sleeve's first instantiated book, because arm 2's only book is `technical-only`. The live `VOL_TARGET_SIZING` stays unset.
+
+Choices the rulings do not cover, made in the build and awaiting David's confirmation before the run (each one changes the hash or the verdict, and nothing has been counted yet):
+
+- the start date of 2016-01-04 and the £10,000 start capital;
+- PBO computed by CSCV over the pair {baseline, trial} in 16 folds, with an embargo of arm 2's 10-day time stop;
+- DSR over the trial's full-window returns;
+- the drawdown check over the full window, with the out-of-sample drawdown reported only;
+- a G6 year counts as inside when its net loss from the prior year-end mark is at most the cap times arm 2's 30% share;
+- the path-noise comparison uses the fixed 0.25 rather than recomputing it;
+- no cost-stress rerun.
+
+Limits of the backtest:
+
+- the macro calendar covers only 2026–2027, so every earlier day is a fail-closed macro day at half size, in both arms;
+- whole-share sizing on a £3,000 book quantises the scaling heavily;
+- with no CFD route, arm 2 is long-only in the backtest.
+
+The trial has not been run and is not counted.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

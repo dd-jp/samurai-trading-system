@@ -311,6 +311,55 @@ describe('runBacktest', { timeout: 120_000 }, () => {
     expect(shared.count()).toBe(4);
   });
 
+  it('#1860: sizes only the sleeves the input vol target names, and records it in their identity', async () => {
+    const db = migratedMemoryStore();
+    const shared = new TrialLedger(
+      db,
+      new SimulatedClock(new Date('2026-10-07T00:00:00.000Z')),
+      SESSION_B,
+    );
+    const unscaled = await runBacktest(input({ ledger: shared }));
+    const volTarget = { annualTargetVol: 0.02, windowBars: 20, sleeveIds: ['trend-5'] };
+    const scaled = await runBacktest(input({ ledger: shared, volTarget }));
+    expect(scaled.trials.map((trial) => trial.trial)).toEqual([5, 6]);
+    const swing = (equity: readonly number[] | undefined) =>
+      Math.abs((equity?.at(-1) as number) - 1_000);
+    expect(swing(scaled.trials[0]?.equity)).toBeGreaterThan(0);
+    expect(swing(scaled.trials[0]?.equity)).toBeLessThan(swing(unscaled.trials[0]?.equity));
+    expect(scaled.trials[1]?.equity).toEqual(unscaled.trials[1]?.equity);
+    expect(scaled.benchmark).toEqual(unscaled.benchmark);
+    const configs = db
+      .prepare("SELECT config FROM v2_trials WHERE source = 'v2' ORDER BY trial")
+      .all() as { config: string }[];
+    expect(configs.map(({ config }) => JSON.parse(config).run.volTarget)).toEqual([
+      undefined,
+      undefined,
+      volTarget,
+      volTarget,
+    ]);
+  });
+
+  it('#1860: marks the first instantiated book of a sleeve with no primary book', async () => {
+    const technicalOnly: SleeveFactory = (m) => {
+      const inner = trendSleeve('trend-5', 'UP', 5)(m);
+      return {
+        ...inner,
+        spec: {
+          ...inner.spec,
+          books: [
+            { variant: 'large-cap-only', instantiated: false },
+            { variant: 'technical-only', instantiated: true },
+          ],
+        },
+      };
+    };
+    const result = await runBacktest(
+      input({ trials: [{ config: { lookback: 5 }, sleeve: technicalOnly }, FLAT_TRIAL] }),
+    );
+    const primary = await runBacktest(input());
+    expect(result.trials[0]?.equity).toEqual(primary.trials[0]?.equity);
+  });
+
   it('counts a changed sizing as a new trial', async () => {
     const shared = ledger();
     await runBacktest(input({ ledger: shared }));

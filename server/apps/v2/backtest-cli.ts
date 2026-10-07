@@ -6,14 +6,25 @@ import { readSeededFile, SystemClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import {
+  VOL_TARGET_TRIAL_CANDIDATE_ID,
+  VOL_TARGET_TRIAL_FROM,
+  VOL_TARGET_TRIAL_OUT_OF_SAMPLE_FROM,
+  VOL_TARGET_TRIAL_SIZING,
+  VOL_TARGET_TRIAL_TO,
+  volTargetTrialArms,
+} from './arm2-backtest.js';
+import {
   type BacktestInput,
   type BacktestResult,
   backtestSessions,
   runBacktest,
+  simulateBacktest,
 } from './backtest.js';
+import type { TrialSeries } from './backtest-verdict.js';
 import {
   BarsMarketData,
   type BarsSource,
+  CALENDAR_REFERENCE,
   calendarReferenceFor,
   currentConstituents,
   type DataSanityReport,
@@ -31,6 +42,7 @@ import {
   SPREADS_PATH,
 } from './index.js';
 import {
+  ARM2_SLEEVE_SPEC,
   CROSS_ASSET_TREND_CANDIDATE_ID,
   CROSS_ASSET_TREND_FROM,
   CROSS_ASSET_TREND_TIDMS,
@@ -56,13 +68,15 @@ import {
   VOL_TARGET_INDEX_VOL_WINDOW,
 } from './signal/index.js';
 import { researchStorePath, sessionBLedger, TrialLedger } from './trial-ledger.js';
+import { type VolTargetVerdict, volTargetVerdict } from './vol-target-verdict.js';
 
 // Backtest-only assumptions (doc 66 D8 exempts smoke.ts's SMOKE_* the same way): the actual
 // yearly capital config David sets is not consulted here — a backtest run always sizes off a
 // fixed, reproducible starting point
 const BACKTEST_START_CAPITAL_GBP = 2_000;
-// #1785 candidate 3 ruling (d), 2026-10-02: the £10,000 paper start capital of 2026-09-30
-const VOL_TARGET_INDEX_START_CAPITAL_GBP = 10_000;
+// #1785 candidate 3 ruling (d), 2026-10-02: the £10,000 paper start capital of 2026-09-30, which
+// arm 2 also trades on paper
+const PAPER_START_CAPITAL_GBP = 10_000;
 const BACKTEST_LOSS_CAP_GBP = 1_500;
 const WALK_FORWARD_FOLDS = 16;
 const COST_STRESS_MULTIPLE = 2;
@@ -307,22 +321,24 @@ export async function runMeanReversionAgainst(
   );
 }
 
+function constituentsReader(path: string): (tradingDate: string) => readonly string[] {
+  const csv = readFileSync(path, 'utf8');
+  return (tradingDate) => currentConstituents(csv, tradingDate);
+}
+
 export function runMeanReversionCandidate(
   cliOptions: BacktestCliOptions = {},
 ): Promise<MeanReversionRunReport> {
-  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) => {
-    const constituentsCsv = readFileSync(options.constituentsPath, 'utf8');
-    const constituentsFor = (tradingDate: string): readonly string[] =>
-      currentConstituents(constituentsCsv, tradingDate);
-    return runMeanReversionAgainst(
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) =>
+    runMeanReversionAgainst(
       market,
       bars,
-      constituentsFor,
+      constituentsReader(options.constituentsPath),
       halfSpreadBps,
       ledger,
       options.logger,
-    );
-  });
+    ),
+  );
 }
 
 export async function runVolTargetIndexAgainst(
@@ -356,7 +372,7 @@ export async function runVolTargetIndexAgainst(
       calendarReference: calendarReferenceFor('saxo'),
       symbolsOn: () => VOL_TARGET_INDEX_TIDMS,
       embargo: VOL_TARGET_INDEX_VOL_WINDOW,
-      startCapitalGbp: VOL_TARGET_INDEX_START_CAPITAL_GBP,
+      startCapitalGbp: PAPER_START_CAPITAL_GBP,
     },
     market,
     bars,
@@ -374,10 +390,82 @@ export function runVolTargetIndexCandidate(
   );
 }
 
+export interface VolTargetTrialReport {
+  readonly verdict: VolTargetVerdict;
+  readonly dataSanity: DataSanityReport;
+}
+
+export interface VolTargetTrialWindow extends CandidateWindow {
+  readonly outOfSampleFrom: string;
+}
+
+const VOL_TARGET_TRIAL_WINDOW: VolTargetTrialWindow = {
+  from: VOL_TARGET_TRIAL_FROM,
+  to: VOL_TARGET_TRIAL_TO,
+  outOfSampleFrom: VOL_TARGET_TRIAL_OUT_OF_SAMPLE_FROM,
+};
+
+export async function runVolTargetTrialAgainst(
+  market: MarketData,
+  bars: BarsSource,
+  constituentsFor: (tradingDate: string) => readonly string[],
+  halfSpreadBps: (instrument: string) => number,
+  ledger: TrialLedger,
+  logger: Logger,
+  window: VolTargetTrialWindow = VOL_TARGET_TRIAL_WINDOW,
+): Promise<VolTargetTrialReport> {
+  const arms = volTargetTrialArms({ bars, constituents: constituentsFor });
+  const embargo = ARM2_SLEEVE_SPEC.sizing.timeStopTradingDays;
+  const simulation = await simulateBacktest({
+    candidate: VOL_TARGET_TRIAL_CANDIDATE_ID,
+    trials: [arms.trial],
+    benchmark: arms.baseline,
+    from: window.from,
+    to: window.to,
+    startCapitalGbp: PAPER_START_CAPITAL_GBP,
+    lossCapGbp: BACKTEST_LOSS_CAP_GBP,
+    market,
+    halfSpreadBps,
+    ledger,
+    logger,
+    folds: WALK_FORWARD_FOLDS,
+    embargo,
+    calendarReference: CALENDAR_REFERENCE,
+    volTarget: VOL_TARGET_TRIAL_SIZING,
+  });
+  const verdict = volTargetVerdict({
+    dates: simulation.dates,
+    trial: simulation.trials[0] as TrialSeries,
+    baseline: simulation.benchmark,
+    outOfSampleFrom: window.outOfSampleFrom,
+    trialsCounted: ledger.count(),
+    lossCapGbp: BACKTEST_LOSS_CAP_GBP * simulation.trialsShare,
+    folds: WALK_FORWARD_FOLDS,
+    embargo,
+  });
+  return { verdict, dataSanity: dataSanity(bars, constituentsFor, simulation.dates) };
+}
+
+export function runVolTargetTrial(
+  cliOptions: BacktestCliOptions = {},
+): Promise<VolTargetTrialReport> {
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) =>
+    runVolTargetTrialAgainst(
+      market,
+      bars,
+      constituentsReader(options.constituentsPath),
+      halfSpreadBps,
+      ledger,
+      options.logger,
+    ),
+  );
+}
+
 const CANDIDATE_RUNNERS: Record<string, (options: BacktestCliOptions) => Promise<unknown>> = {
   [CROSS_ASSET_TREND_CANDIDATE_ID]: runCrossAssetTrendCandidate,
   [MEAN_REVERSION_CANDIDATE_ID]: runMeanReversionCandidate,
   [VOL_TARGET_INDEX_CANDIDATE_ID]: runVolTargetIndexCandidate,
+  [VOL_TARGET_TRIAL_CANDIDATE_ID]: runVolTargetTrial,
 };
 
 async function runNamedCandidate(candidateArg: string): Promise<number> {

@@ -447,7 +447,7 @@ export interface DecisionSleeveInputs {
   readonly lseLegRefusal: string | undefined;
 }
 
-function venueOf(symbol: string): Venue {
+export function venueOf(symbol: string): Venue {
   return isLseInstrument(symbol) ? 'saxo' : 'alpaca';
 }
 

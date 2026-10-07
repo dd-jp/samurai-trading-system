@@ -15,8 +15,8 @@ import {
 } from './evidence/index.js';
 
 // Q7: beat the benchmark after a 40% Sharpe haircut, applied as strategy × 0.6 > benchmark (doc 66 Session B (e))
-const SHARPE_HAIRCUT_MULTIPLIER = 0.6;
-const MIN_DEFLATED_SHARPE = 0.95;
+export const SHARPE_HAIRCUT_MULTIPLIER = 0.6;
+export const MIN_DEFLATED_SHARPE = 0.95;
 export const CAPITAL_CEILING_DRAWDOWN_MULTIPLE = 1.5;
 
 export interface BookSeries {
@@ -72,7 +72,7 @@ export interface BacktestVerdict {
   readonly pass: boolean;
 }
 
-function deflate(returns: readonly number[], trialsCounted: number): number {
+export function deflatedSharpeOfReturns(returns: readonly number[], trialsCounted: number): number {
   const stats = moments(returns);
   if (stats.stdev === 0) return 0;
   return deflatedSharpe(
@@ -123,7 +123,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
   const walkForwardBenchmark = annualisedSharpe(
     sliceByRanges(input.benchmark.returns, path.testRanges),
   );
-  const dsr = deflate(selected.returns, input.trialsCounted);
+  const dsr = deflatedSharpeOfReturns(selected.returns, input.trialsCounted);
   const probability = pbo(matrix).pbo;
   const drawdown = maxDrawdown(selected.equity);
   const checks = {
@@ -148,7 +148,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     benchmarkSharpe: annualisedSharpe(input.benchmark.returns),
     benchmarkMaxDrawdown: maxDrawdown(input.benchmark.equity),
     deflatedSharpe: dsr,
-    deflatedSharpeWalkForward: deflate(path.returns, input.trialsCounted),
+    deflatedSharpeWalkForward: deflatedSharpeOfReturns(path.returns, input.trialsCounted),
     pbo: probability,
     maxDrawdown: drawdown,
     capitalCeilingGbp: capitalCeilingGbp(input.lossCapGbp, drawdown),
