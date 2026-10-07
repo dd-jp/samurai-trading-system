@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { compareVenue } from '../reconcile-compare.js';
 import type { AlpacaBrokerClient } from './alpaca/alpaca-client.js';
 import { ALPACA_ORDER_HISTORY_LIMIT } from './alpaca/alpaca-http-client.js';
 import { AlpacaBrokerBooks, NO_BROKER_BOOKS } from './broker-books.js';
@@ -247,6 +248,29 @@ describe('AlpacaBrokerBooks held stop legs (#2086)', () => {
     );
     expect(book.openOrders).toEqual([CRL_STOP]);
   });
+
+  it.each(['canceled', 'filled', 'expired', 'replaced', 'rejected', 'done_for_day'])(
+    'a held stop leg under an OCO parent %s guards nothing, so the name reconciles unprotected',
+    async (status) => {
+      const oco = crlBracket({ side: 'sell', type: 'limit', order_class: 'oco', status }, [
+        crlLeg('stop'),
+      ]);
+      const book = await new AlpacaBrokerBooks(
+        client({ positions: HELD_CRL, history: [oco] }),
+      ).read('alpaca');
+      expect(book.openOrders).toEqual([]);
+      const store = {
+        positions: new Map([['CRL', 1]]),
+        openOrders: [],
+        protection: new Map([['CRL', { entryOrderIds: ['entry'], stops: [290.64] }]]),
+      };
+      expect(
+        compareVenue(store, { positions: new Map([['CRL', 1]]), openOrders: book.openOrders }),
+      ).toEqual([
+        { kind: 'position_unprotected', instrument: 'CRL', order_id: null, store: 1, broker: 1 },
+      ]);
+    },
+  );
 
   it.each([
     ['still working', { status: 'new', filled_qty: '0' }],

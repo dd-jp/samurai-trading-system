@@ -81,10 +81,21 @@ function legAsOrder(parent: AlpacaOrder, leg: AlpacaOrderLeg): AlpacaOrder {
 }
 
 // Measured on Alpaca paper 2026-10-07 (#2086): `status=open` leaves out `held` orders, and a filled
-// bracket's stop leg stays `held` at the venue while its take-profit rests `new`; a bracket's legs
-// guard nothing until its parent fills, an OCO re-arm's from the start
+// bracket's stop leg stays `held` at the venue while its take-profit rests `new`. Alpaca documents a
+// bracket's legs as inactive until the parent fills. An OCO re-arm's held stop is assumed to guard
+// while its take-profit parent is live; that wire is unmeasured
+const ENDED_ORDER_STATES: ReadonlySet<string> = new Set([
+  'canceled',
+  'filled',
+  'expired',
+  'replaced',
+  'rejected',
+  'done_for_day',
+]);
+
 function guardingParent(parent: AlpacaOrder): boolean {
-  return parent.status === 'filled' || parent.order_class === 'oco';
+  if (parent.order_class === 'oco') return !ENDED_ORDER_STATES.has(parent.status);
+  return parent.status === 'filled';
 }
 
 function heldStopLegs(parent: AlpacaOrder): AlpacaOrder[] {

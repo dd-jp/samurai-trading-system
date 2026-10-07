@@ -258,7 +258,7 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
       .filter((leg) => LISTED_OPEN.has(leg.status))
       .map((leg) => ({
         ...leg,
-        client_order_id: leg.id,
+        client_order_id: leg.client_order_id ?? leg.id,
         symbol: order.symbol,
         side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
         qty: order.qty,
@@ -431,6 +431,20 @@ describe('Step 4b fault matrix (#1747)', () => {
     expect(subject.broker.restingStop(AAPL_ENTRY)).toBe('19.20');
     expect(subject.reconciles('2026-09-29')).toEqual(['clean']);
     expect(subject.faultKinds('2026-09-29')).toEqual([]);
+  });
+
+  it('a bracket stop cancelled at the venue still reconciles unprotected through the held-leg read (#2086)', async () => {
+    const subject = drill();
+    await holdAapl(subject);
+    const stop = subject.broker.orders[0]?.legs?.find((leg) => leg.type === 'stop');
+    if (stop === undefined) throw new Error('drill: no stop leg');
+    stop.status = 'canceled';
+    await subject.run('2026-09-30');
+    expect(subject.reconciles('2026-09-30')[0]).toBe('mismatch');
+    expect(subject.faultKinds('2026-09-30')).toContainEqual([
+      'missed_stop',
+      'position_unprotected',
+    ]);
   });
 
   it('a filled bracket whose stop leg Alpaca holds off the open listing reconciles clean and is never re-armed (#2086)', async () => {
