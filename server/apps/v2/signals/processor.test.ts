@@ -613,7 +613,7 @@ describe('processSignals, dry run', () => {
   });
 });
 
-describe('failed signals retry inside their window (David 2026-10-07, #2024)', () => {
+describe('failed signals retry inside their window (David 2026-10-05, #2024)', () => {
   it('retries a failed signal on a later pass of its session and enters it', async () => {
     const fixtures = await writeFixtures();
     const { root, signals, transports } = open(fixtures, new SimulatedClock(IN_SESSION));
@@ -671,7 +671,7 @@ describe('failed signals retry inside their window (David 2026-10-07, #2024)', (
   });
 });
 
-describe('the veto-rate cap over a rolling 20 signals (David 2026-10-07, #2024)', () => {
+describe('the veto-rate cap over a rolling 20 signals (David 2026-10-05, #2024)', () => {
   const VETO_SCRIPT: Script = () => '{"veto": true, "reason": "stop sits inside daily noise"}';
   const passes = (count: number): ('pass' | 'veto')[] => Array<'pass'>(count).fill('pass');
 
@@ -1007,6 +1007,41 @@ describe('processSignals, paper with a fake Alpaca', () => {
       }),
     );
     expect(day.root.journal.orderFor(primaryId(id))).toMatchObject({ outcome: 'submitted' });
+  });
+
+  it('retries a signal that failed after its primary reached Alpaca without sending it again (#2024)', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const alpaca = fakeAlpaca(clock, false);
+    const day = open(fixtures, clock, paper(alpaca));
+    day.root.journal.recordReconcile({
+      trading_date: D,
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'clean',
+      book_ids: ['signals/primary'],
+      diffs: [],
+      detail: '',
+      broker_mode: 'paper',
+      cash_quote: null,
+    });
+    const id = post(day.signals, {});
+    vi.spyOn(day.root.journal, 'settleOrder').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    const failed = await day.root.processSignals(day.signals, IN_SESSION);
+    const retried = await day.root.processSignals(
+      day.signals,
+      new Date(IN_SESSION.getTime() + 30_000),
+    );
+
+    expect(failed).toMatchObject({ outcomes: [{ status: 'failed', detail: 'disk full' }] });
+    expect(retried).toMatchObject({
+      outcomes: [{ status: 'processed', detail: expect.stringMatching(/^already_submitted/) }],
+    });
+    expect(alpaca.submitOrder).toHaveBeenCalledTimes(1);
+    expect(day.root.journal.orderFor(primaryId(id))).toMatchObject({ outcome: 'pending' });
   });
 
   it('cancels an unfilled signal entry at the next daily cycle', async () => {

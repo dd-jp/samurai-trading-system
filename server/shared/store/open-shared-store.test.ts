@@ -707,13 +707,27 @@ describe('openSharedStore', () => {
         raw.exec(`INSERT INTO v2_faults (kind, trading_date, code, detail, recorded_at)
           VALUES ('veto_rate', '2026-09-30', 'SIGNAL_VETO_RATE', 'c', 't')`),
       ).toThrow(/CHECK constraint/);
+      const rows = () => raw.prepare('SELECT * FROM v2_faults ORDER BY fault_id').all();
+      const schema = () =>
+        raw
+          .prepare(
+            "SELECT type, name FROM sqlite_master WHERE tbl_name = 'v2_faults' AND type != 'table' ORDER BY name",
+          )
+          .all();
+      const rowsBefore = rows();
+      const schemaBefore = schema();
 
       expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
         MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
       );
 
+      expect(rows()).toEqual(rowsBefore);
+      expect(schema()).toEqual(schemaBefore);
+      expect(schemaBefore).toHaveLength(6);
       raw.exec(
         `INSERT INTO v2_faults (kind, trading_date, code, detail, recorded_at)
+           VALUES ('missed_run', '2026-09-29', 'CYCLE_NOT_RUN', 'a', 'later');
+         INSERT INTO v2_faults (kind, trading_date, code, detail, recorded_at)
            VALUES ('veto_rate', '2026-09-30', 'SIGNAL_VETO_RATE', 'c', 't');
          INSERT INTO v2_faults (kind, trading_date, code, detail, recorded_at)
            VALUES ('veto_rate', '2026-09-30', 'SIGNAL_VETO_RATE', 'c', 't');`,
