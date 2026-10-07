@@ -2,7 +2,13 @@ import { rmSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { BarsMarketData } from '../data/index.js';
-import { createFixtureStore, type FixtureScenario, fixtureScenarioOf } from './fixture-server.js';
+import {
+  createFixtureStore,
+  FIXTURE_START,
+  FixtureClock,
+  type FixtureScenario,
+  fixtureScenarioOf,
+} from './fixture-server.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
 
@@ -62,5 +68,21 @@ describe('fixtureScenarioOf', () => {
     expect(() => fixtureScenarioOf('halted')).toThrow(
       'V2_FIXTURE_SCENARIO must be one of default, loss-budget-halted',
     );
+  });
+});
+
+describe('FixtureClock', () => {
+  it('starts on the fixture day whatever the wall clock reads, then advances with it', () => {
+    let wall = Date.parse('2027-03-01T08:00:00.000Z');
+    const clock = new FixtureClock(FIXTURE_START, () => wall);
+    expect(clock.now().toISOString()).toBe('2026-10-05T21:45:00.000Z');
+    wall += 12_000;
+    expect(clock.now().toISOString()).toBe('2026-10-05T21:45:12.000Z');
+  });
+
+  it('defaults to the fixture start on the system wall clock', () => {
+    const drift = new FixtureClock().now().getTime() - FIXTURE_START.getTime();
+    expect(drift).toBeGreaterThanOrEqual(0);
+    expect(drift).toBeLessThan(5_000);
   });
 });

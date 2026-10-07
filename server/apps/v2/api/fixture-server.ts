@@ -1,13 +1,31 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SystemClock } from '../../../shared/index.js';
+import type { Clock } from '../../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import { DEFAULT_BUNDLE_ROOT } from './bundle.js';
 import { composeV2Dashboard } from './main.js';
 
 export const FIXTURE_TRADING_DATE = '2026-10-05';
+
+export const FIXTURE_START = new Date(`${FIXTURE_TRADING_DATE}T21:45:00.000Z`);
+
+// Anchored to the fixture day but still advancing, so the control rate limit sees real elapsed time
+export class FixtureClock implements Clock {
+  private readonly offsetMs: number;
+
+  constructor(
+    start: Date = FIXTURE_START,
+    private readonly wall: () => number = Date.now,
+  ) {
+    this.offsetMs = start.getTime() - wall();
+  }
+
+  now(): Date {
+    return new Date(this.wall() + this.offsetMs);
+  }
+}
 
 export const FIXTURE_SCENARIOS = ['default', 'loss-budget-halted'] as const;
 export type FixtureScenario = (typeof FIXTURE_SCENARIOS)[number];
@@ -128,7 +146,7 @@ async function main(env: NodeJS.ProcessEnv): Promise<void> {
       port: Number(env.PORT ?? 0),
     },
     env,
-    new SystemClock(),
+    new FixtureClock(),
   );
   await server.start();
   process.stdout.write(`v2 dashboard fixture on ${server.url}\n`);
