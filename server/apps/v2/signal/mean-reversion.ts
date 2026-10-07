@@ -39,7 +39,7 @@ const ADV_SHARE_NON_BINDING = 1;
 const ADV_WINDOW_BARS = 20;
 const CAPITAL_SHARE = 0.7;
 // Slack beyond the SMA and ATR windows lets the RSI(2) seed converge
-const LOOKBACK_BARS = SMA_WINDOW + ATR_WINDOW + 20;
+export const MEAN_REVERSION_LOOKBACK_BARS = SMA_WINDOW + ATR_WINDOW + 20;
 
 function meanReversionSpec(): SleeveSpec {
   return {
@@ -65,7 +65,7 @@ function meanReversionBenchmarkSpec(): SleeveSpec {
   return { ...spec, sizing: { ...spec.sizing, timeStopTradingDays: SENTINEL_LIMIT } };
 }
 
-// Seeded at the window's own start; at period 2 it converges well inside LOOKBACK_BARS
+// Seeded at the window's own start; at period 2 it converges well inside MEAN_REVERSION_LOOKBACK_BARS
 export function relativeStrengthIndex(bars: readonly V2Bar[], period: number): number | undefined {
   if (bars.length < period + 1) return undefined;
   let avgGain = 0;
@@ -116,7 +116,8 @@ type GatedRead =
 function gatedRead(raw: readonly V2Bar[], sessions: readonly string[]): GatedRead {
   const read = meanReversionRead(raw);
   if (read === undefined) return { skip: 'bad_last_bar', read };
-  if (!windowCovered(raw, sessions, LOOKBACK_BARS)) return { skip: 'window_coverage', read };
+  if (!windowCovered(raw, sessions, MEAN_REVERSION_LOOKBACK_BARS))
+    return { skip: 'window_coverage', read };
   const { sma, rsi, atr } = read;
   if (sma === undefined || rsi === undefined || atr === undefined) {
     return { skip: 'insufficient_history', read };
@@ -133,7 +134,7 @@ function gatedReads(
   const sessions = sessionsBefore(bars, tradingDate, calendarReferenceFor('alpaca'));
   return instruments.map((instrument) => [
     instrument,
-    gatedRead(market.barsBefore(instrument, tradingDate, LOOKBACK_BARS), sessions),
+    gatedRead(market.barsBefore(instrument, tradingDate, MEAN_REVERSION_LOOKBACK_BARS), sessions),
   ]);
 }
 

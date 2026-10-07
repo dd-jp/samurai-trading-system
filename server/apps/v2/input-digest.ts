@@ -3,8 +3,14 @@ import type { BarSeries, Clock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 import { type BarsSource, barsBefore, type CfdCatalogue } from './data/index.js';
+import { MEAN_REVERSION_LOOKBACK_BARS, SMA_LONG_WINDOW } from './signal/index.js';
 
 export const CFD_CATALOGUE_DIGEST_NAME = 'saxo-cfd-catalogue';
+
+// Readers that take a whole series rather than a counted window look back at most this far: the
+// debate technical read its 200-session SMA, and a candidate's session-calendar coverage check
+// its own look-back (mean reversion's is the deepest; cross-asset trend's is 210)
+export const DIGEST_FLOOR_BARS = Math.max(SMA_LONG_WINDOW, MEAN_REVERSION_LOOKBACK_BARS);
 
 const BAR_FIELDS = 6;
 
@@ -21,21 +27,25 @@ export interface InputDigest {
 }
 
 export class RecordingBarsSource implements BarsSource {
-  readonly #read = new Set<string>();
+  readonly #windows = new Map<string, number>();
 
   constructor(private readonly inner: BarsSource) {}
 
   load(symbol: string): BarSeries | undefined {
-    this.#read.add(symbol);
+    this.noteWindow(symbol, DIGEST_FLOOR_BARS);
     return this.inner.load(symbol);
   }
 
-  clear(): void {
-    this.#read.clear();
+  noteWindow(symbol: string, bars: number): void {
+    this.#windows.set(symbol, Math.max(bars, this.#windows.get(symbol) ?? 0));
   }
 
-  names(): readonly string[] {
-    return [...this.#read].sort();
+  clear(): void {
+    this.#windows.clear();
+  }
+
+  windows(): ReadonlyMap<string, number> {
+    return new Map([...this.#windows].sort(([a], [b]) => (a < b ? -1 : 1)));
   }
 }
 
@@ -43,8 +53,9 @@ export function barWindowDigest(
   name: string,
   series: BarSeries | undefined,
   tradingDate: string,
+  windowBars: number,
 ): InputDigest {
-  const window = series === undefined ? [] : barsBefore(series, tradingDate);
+  const window = series === undefined ? [] : barsBefore(series, tradingDate).slice(-windowBars);
   // Host byte order: every host the root runs on (x86-64, Apple silicon) is little-endian
   const values = new Float64Array(window.length * BAR_FIELDS);
   window.forEach((bar, index) => {
@@ -82,12 +93,14 @@ export function catalogueDigest(catalogue: CfdCatalogue | undefined): InputDiges
 
 export function cycleInputDigests(
   bars: BarsSource,
-  names: readonly string[],
+  windows: ReadonlyMap<string, number>,
   catalogue: CfdCatalogue | undefined,
   tradingDate: string,
 ): InputDigest[] {
   return [
-    ...names.map((name) => barWindowDigest(name, bars.load(name), tradingDate)),
+    ...[...windows].map(([name, windowBars]) =>
+      barWindowDigest(name, bars.load(name), tradingDate, windowBars),
+    ),
     catalogueDigest(catalogue),
   ];
 }
@@ -137,6 +150,12 @@ export interface InputChange {
   readonly current: InputDigest;
 }
 
+// A window shorter than the floor held the name's whole history, so older bars added since are
+// a change; a digest from before the window (#2028) covered the whole history, which this reproduces
+function replayedWindowBars(journalled: InputDigest): number {
+  return Math.max(journalled.row_count ?? 0, DIGEST_FLOOR_BARS);
+}
+
 function currentDigest(
   journalled: InputDigest,
   bars: BarsSource,
@@ -144,7 +163,12 @@ function currentDigest(
   tradingDate: string,
 ): InputDigest {
   return journalled.input === 'bars'
-    ? barWindowDigest(journalled.name, bars.load(journalled.name), tradingDate)
+    ? barWindowDigest(
+        journalled.name,
+        bars.load(journalled.name),
+        tradingDate,
+        replayedWindowBars(journalled),
+      )
     : catalogueDigest(catalogue);
 }
 
