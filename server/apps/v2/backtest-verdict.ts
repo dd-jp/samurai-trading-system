@@ -9,8 +9,13 @@ import {
   PBO_REJECT_THRESHOLD,
   pbo,
   perPeriodSharpe,
+  type RegimeDay,
+  type RegimeSplit,
+  regimePeriods,
+  regimeSplit,
   sliceByRanges,
   WALK_FORWARD_FOLDS,
+  type WalkForwardPath,
   walkForwardPath,
 } from './evidence/index.js';
 
@@ -64,8 +69,10 @@ export interface BacktestVerdict {
   readonly pbo: number;
   readonly maxDrawdown: number;
   readonly capitalCeilingGbp: number;
+  readonly regimeSplit: RegimeSplit;
   readonly checks: {
     readonly beatsBenchmarkAfterHaircut: boolean;
+    readonly beatsBenchmarkWithAnyPeriodRemoved: boolean;
     readonly deflatedSharpeAtLeast095: boolean;
     readonly pboAtMost010: boolean;
   };
@@ -97,6 +104,22 @@ function assertAligned(input: VerdictInput): void {
   }
 }
 
+function walkForwardDays(
+  dates: readonly string[],
+  path: WalkForwardPath,
+  benchmark: readonly number[],
+): RegimeDay[] {
+  const indices = sliceByRanges(
+    dates.map((_, index) => index),
+    path.testRanges,
+  );
+  return indices.map((dateIndex, position) => ({
+    date: dates[dateIndex] as string,
+    strategy: path.returns[position] as number,
+    benchmark: benchmark[dateIndex] as number,
+  }));
+}
+
 export function capitalCeilingGbp(lossCapGbp: number, drawdown: number): number {
   return lossCapGbp / (drawdown * CAPITAL_CEILING_DRAWDOWN_MULTIPLE);
 }
@@ -126,14 +149,22 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
   const dsr = deflatedSharpeOfReturns(selected.returns, input.trialsCounted);
   const probability = pbo(matrix).pbo;
   const drawdown = maxDrawdown(selected.equity);
+  const from = input.dates[0] as string;
+  const to = input.dates[input.dates.length - 1] as string;
+  const regimes = regimeSplit(
+    walkForwardDays(input.dates, path, input.benchmark.returns),
+    regimePeriods(from, to),
+    SHARPE_HAIRCUT_MULTIPLIER,
+  );
   const checks = {
     beatsBenchmarkAfterHaircut: haircut > walkForwardBenchmark,
+    beatsBenchmarkWithAnyPeriodRemoved: regimes.beatsBenchmarkWithAnyPeriodRemoved,
     deflatedSharpeAtLeast095: dsr >= MIN_DEFLATED_SHARPE,
     pboAtMost010: probability <= PBO_REJECT_THRESHOLD,
   };
   return {
-    from: input.dates[0] as string,
-    to: input.dates[input.dates.length - 1] as string,
+    from,
+    to,
     trialsCounted: input.trialsCounted,
     trials,
     selectedTrial: selected.trial,
@@ -152,6 +183,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     pbo: probability,
     maxDrawdown: drawdown,
     capitalCeilingGbp: capitalCeilingGbp(input.lossCapGbp, drawdown),
+    regimeSplit: regimes,
     checks,
     pass: Object.values(checks).every(Boolean),
   };

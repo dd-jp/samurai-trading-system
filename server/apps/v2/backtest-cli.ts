@@ -33,7 +33,7 @@ import {
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
 } from './data/index.js';
-import { minbtl } from './evidence/index.js';
+import { minbtl, type RegimeSplit } from './evidence/index.js';
 import {
   CONSTITUENTS_PATH,
   FX_PATH,
@@ -99,6 +99,7 @@ export interface CandidateRunReport {
   readonly minbtlLimit: number;
   readonly windowYears: number;
   readonly signFlipped: boolean;
+  readonly regimeSplit: RegimeSplit;
   readonly dataSanity: DataSanityReport;
 }
 export type CrossAssetTrendRunReport = CandidateRunReport;
@@ -204,6 +205,7 @@ async function runCandidateAgainst(
     signFlipped:
       baseline.verdict.checks.beatsBenchmarkAfterHaircut !==
       stressed.verdict.checks.beatsBenchmarkAfterHaircut,
+    regimeSplit: baseline.verdict.regimeSplit,
     dataSanity: dataSanity(bars, spec.symbolsOn, sessions),
   };
 }

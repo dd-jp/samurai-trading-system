@@ -7,7 +7,7 @@ export {
   createCrossAssetTrendBenchmarkSleeve,
   createCrossAssetTrendSleeve,
 } from './cross-asset-trend.js';
-export { createDebateSleeve, SPEND_CAP_REASON_PREFIX } from './debate-sleeve.js';
+export { createDebateSleeve, SMA_LONG_WINDOW, SPEND_CAP_REASON_PREFIX } from './debate-sleeve.js';
 export { buildLlmPanel, type LlmPanel } from './llm-panel.js';
 export { NousPinnedTransport } from './llm-transport.js';
 export { isLseInstrument, LSE_LINES } from './lse-lines.js';
@@ -17,6 +17,7 @@ export {
   MEAN_REVERSION_CANDIDATE_ID,
   MEAN_REVERSION_ENTRY_THRESHOLDS,
   MEAN_REVERSION_FROM,
+  MEAN_REVERSION_LOOKBACK_BARS,
   MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
   MEAN_REVERSION_TO,
 } from './mean-reversion.js';

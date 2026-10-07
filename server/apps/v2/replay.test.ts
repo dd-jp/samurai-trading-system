@@ -33,6 +33,7 @@ import {
   journalledLseRefusal,
   type ReplayResult,
   redactor,
+  replayExitCode,
 } from './replay.js';
 import { main, parseReplayArgs, type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore } from './risk/index.js';
@@ -281,7 +282,7 @@ describe('replayFromFiles', () => {
       );
       expect(rows.find((row) => row.name === 'MISSING')?.row_count).toBe(0);
       expect(rows.find((row) => row.name === 'UP')).toMatchObject({
-        row_count: 260,
+        row_count: 240,
         last_bar_date: dateAt(259),
       });
       expect(rows.find((row) => row.input === 'cfd_catalogue')?.sha256).toBeNull();
@@ -334,8 +335,13 @@ describe('replayFromFiles', () => {
     expect(changes).toEqual([
       expect.objectContaining({
         tradingDate: TRADING_DATE,
-        journalled: expect.objectContaining({ input: 'bars', name: 'UP', row_count: 260 }),
-        current: expect.objectContaining({ input: 'bars', name: 'UP', row_count: 260 }),
+        journalled: expect.objectContaining({
+          input: 'bars',
+          name: 'UP',
+          row_count: 240,
+          first_bar_date: dateAt(20),
+        }),
+        current: expect.objectContaining({ input: 'bars', name: 'UP', row_count: 240 }),
       }),
     ]);
     expect(result.divergences[0]).toBe(changes[0]);
@@ -344,6 +350,17 @@ describe('replayFromFiles', () => {
       instrument: 'UP',
       field: 'inputs_hash',
     });
+  });
+
+  it('replays identically over a bar rewritten before every window the cycle read (#2028)', async () => {
+    const barStoreRoot = await revisedBarStore('old-bar-parquet', 19);
+    expect((await replayFromFiles({ ...options, barStoreRoot })).divergences).toEqual([]);
+  });
+
+  it('names the oldest bar of the window the cycle read as an input change (#2028)', async () => {
+    const barStoreRoot = await revisedBarStore('window-edge-parquet', 20);
+    const [first] = (await replayFromFiles({ ...options, barStoreRoot })).divergences;
+    expect(first).toMatchObject({ kind: 'input_changed_since', journalled: { name: 'UP' } });
   });
 
   it('names a catalogue written since the day as an input change', async () => {
@@ -649,6 +666,34 @@ describe('replay of a spend-refused name (#1987)', { timeout: 30_000 }, () => {
   });
 });
 
+async function revisedBarStore(name: string, index: number): Promise<string> {
+  const barStoreRoot = join(directory, name);
+  const revised = await ParquetBarStore.open(barStoreRoot);
+  const bars = rising().map((bar, at) =>
+    at === index ? { ...bar, high: bar.high * 1.05, close: bar.close * 1.05 } : bar,
+  );
+  await revised.write('alpaca', [
+    { symbol: 'UP', bars },
+    { symbol: 'SPY', bars: rising() },
+  ]);
+  revised.close();
+  return barStoreRoot;
+}
+
+function cliArgs(overrides: Partial<ReplayCliOptions> = {}): string[] {
+  const chosen = { ...options, ...overrides };
+  return Object.entries({
+    '--date': chosen.tradingDate,
+    '--store': chosen.storePath,
+    '--bars': chosen.barStoreRoot,
+    '--constituents': chosen.constituentsPath,
+    '--fx': chosen.fxPath,
+    '--cfd-catalogue': chosen.cfdCataloguePath,
+    '--spreads': chosen.spreadsPath,
+    '--saxo-spreads': chosen.saxoSpreadsPath,
+  }).flat();
+}
+
 describe('main', () => {
   it('prints identical and exits 0 on a matching day', async () => {
     const lines: string[] = [];
@@ -668,6 +713,36 @@ describe('main', () => {
     );
     expect(code).toBe(0);
     expect(lines.join('\n')).toMatch(/identical$/);
+  });
+
+  it('exits 2 and lists every changed input before the first other divergence (#2028)', async () => {
+    const barStoreRoot = await revisedBarStore('cli-revised-parquet', 250);
+    const cfdCataloguePath = join(directory, 'cli-written-later.json');
+    writeFileSync(cfdCataloguePath, JSON.stringify({ asOf: TRADING_DATE, instruments: [] }));
+    const lines: string[] = [];
+    const code = await main(
+      cliArgs({ barStoreRoot, cfdCataloguePath }),
+      (line) => lines.push(line),
+      {},
+    );
+    expect(code).toBe(2);
+    const printed = lines
+      .join('\n')
+      .split('\n')
+      .filter((line) => !line.includes(': not compared, the day ran before migration'));
+    expect(printed[1]).toMatch(
+      /^INPUT CHANGED \(2 inputs changed since the day, \d+ divergences\)/,
+    );
+    expect(printed.filter((line) => /^\S+: \S+ changed since /.test(line))).toEqual([
+      `UP: bars changed since ${TRADING_DATE}`,
+      `saxo-cfd-catalogue: cfd_catalogue changed since ${TRADING_DATE}`,
+    ]);
+    const other = printed.indexOf('first other divergence:');
+    expect(other).toBeGreaterThan(
+      printed.indexOf(`saxo-cfd-catalogue: cfd_catalogue changed since ${TRADING_DATE}`),
+    );
+    expect(printed[other + 1]).toContain('inputs_hash differs');
+    expect(printed.join('\n')).not.toContain('DIVERGED');
   });
 
   it('exits 1 and redacts known secret values from the divergence it prints', async () => {
@@ -867,6 +942,56 @@ describe('formatReplay', () => {
     response: 'r',
   };
 
+  const barsChange: Divergence = {
+    kind: 'input_changed_since',
+    tradingDate: '2026-09-30',
+    journalled: BARS_DIGEST,
+    current: { ...BARS_DIGEST, sha256: 'b'.repeat(64) },
+  };
+  const catalogueChange: Divergence = {
+    kind: 'input_changed_since',
+    tradingDate: '2026-09-30',
+    journalled: CATALOGUE_DIGEST,
+    current: { ...CATALOGUE_DIGEST, sha256: 'c'.repeat(64) },
+  };
+  const missing: Divergence = { kind: 'decision_missing', bookId: 'b', instrument: 'UP' };
+
+  it('lists every changed input, then the first other divergence (#2028)', () => {
+    expect(
+      formatReplay(result([barsChange, catalogueChange, missing, missing]), (line) => line).split(
+        '\n',
+      ),
+    ).toEqual([
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills',
+      'INPUT CHANGED (2 inputs changed since the day, 4 divergences); every changed input:',
+      'UP: bars changed since 2026-09-30',
+      '  journalled: sha256 e3b0c44298fc, 2 bars 2026-09-28..2026-09-29',
+      '  current:    sha256 bbbbbbbbbbbb, 2 bars 2026-09-28..2026-09-29',
+      'saxo-cfd-catalogue: cfd_catalogue changed since 2026-09-30',
+      '  journalled: sha256 dddddddddddd, asOf 2026-09-29',
+      '  current:    sha256 cccccccccccc, asOf 2026-09-29',
+      'first other divergence:',
+      'b UP: journalled, not replayed',
+    ]);
+  });
+
+  it('prints no other divergence when only inputs changed', () => {
+    expect(formatReplay(result([catalogueChange]), (line) => line)).not.toContain('first other');
+  });
+
+  it.each([
+    [[], 0],
+    [[missing], 1],
+    [[barsChange], 2],
+    [[catalogueChange, missing], 2],
+    [[missing, catalogueChange], 2],
+  ] as [Divergence[], number][])(
+    'exits with its own code for a changed input (#2028): %o -> %i',
+    (divergences, code) => {
+      expect(replayExitCode(result(divergences))).toBe(code);
+    },
+  );
+
   it('names each stage a cutover skipped, identical or not', () => {
     const skipped = [
       { stage: 'rescales', migration: 87 },
@@ -884,6 +1009,15 @@ describe('formatReplay', () => {
         (text) => text,
       ),
     ).toBe(`${head}\nDIVERGED (1 divergences); first:\ncarry: b|UP: replayed, not journalled`);
+    expect(
+      formatReplay({ ...result([catalogueChange]), skipped }, (text) => text).split('\n'),
+    ).toEqual([
+      ...head.split('\n'),
+      'INPUT CHANGED (1 inputs changed since the day, 1 divergences); every changed input:',
+      'saxo-cfd-catalogue: cfd_catalogue changed since 2026-09-30',
+      '  journalled: sha256 dddddddddddd, asOf 2026-09-29',
+      '  current:    sha256 cccccccccccc, asOf 2026-09-29',
+    ]);
   });
 
   it('says identical when nothing diverged', () => {
@@ -993,7 +1127,11 @@ describe('formatReplay', () => {
     ],
   ] as [Divergence, string][])('describes %o', (divergence, text) => {
     const printed = formatReplay(result([divergence, divergence]), (line) => line);
-    expect(printed).toContain('DIVERGED (2 divergences); first:');
+    expect(printed).toContain(
+      divergence.kind === 'input_changed_since'
+        ? 'INPUT CHANGED (2 inputs changed since the day, 2 divergences); every changed input:'
+        : 'DIVERGED (2 divergences); first:',
+    );
     expect(printed).toContain(text);
   });
 });

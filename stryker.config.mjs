@@ -2,7 +2,7 @@ export default {
   packageManager: 'npm',
   testRunner: 'vitest',
   vitest: {
-    configFile: 'vitest.config.ts',
+    configFile: 'vitest.mutation.config.ts',
   },
   mutate: [
     'server/shared/market/**/*.ts',
