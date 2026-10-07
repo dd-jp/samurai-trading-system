@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import base from '../../vitest.config.js';
+import mutation from '../../vitest.mutation.config.js';
 import {
   assignShards,
   breakThresholdOf,
@@ -105,6 +107,20 @@ describe('testFilesGlob', () => {
     expect(testFilesGlob('server/shared/market/sizing.ts')).toBe(
       'server/shared/market/sizing.test.ts',
     );
+  });
+});
+
+describe('Stryker test scoping', () => {
+  it('scopes tests through the vitest include, not --testFiles, keeping the base setup', async () => {
+    const stryker = (await import(new URL('../../stryker.config.mjs', import.meta.url).href)) as {
+      default: { vitest: { configFile: string }; testFiles?: unknown };
+    };
+    expect(stryker.default.vitest.configFile).toBe('vitest.mutation.config.ts');
+    expect(stryker.default.testFiles).toBeUndefined();
+    expect(mutation.test?.include).toEqual(TRADING_PATH_PREFIXES.map(testFilesGlob));
+    expect(mutation.test?.setupFiles).toEqual(base.test?.setupFiles);
+    expect(mutation.test?.globalSetup).toEqual(base.test?.globalSetup);
+    expect(mutation.resolve).toEqual(base.resolve);
   });
 });
 
