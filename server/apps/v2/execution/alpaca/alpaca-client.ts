@@ -2,6 +2,9 @@ import type { BrokerActivityStatus } from '../../../../../contracts/index.js';
 
 export interface AlpacaOrderLeg {
   id: string;
+  client_order_id?: string;
+  side?: 'buy' | 'sell';
+  qty?: string;
   type: 'limit' | 'stop';
   status: string;
   filled_qty: string;
@@ -76,6 +79,7 @@ export interface AlpacaBrokerClient {
   getOrder(alpacaOrderId: string): Promise<AlpacaOrder>;
   getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null>;
   listOpenOrders(): Promise<AlpacaOrder[]>;
+  listOrderHistory(symbols: readonly string[]): Promise<AlpacaOrder[]>;
   getAccount(): Promise<AlpacaAccount>;
   listCashInLieu?(after: string, pageToken?: string): Promise<AlpacaCashInLieuActivity[]>;
   listCashActivities?(

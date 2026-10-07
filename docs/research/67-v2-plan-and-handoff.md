@@ -277,7 +277,7 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 
 | Area | Item | Pass condition |
 |---|---|---|
-| Backtest | Look-ahead canary | Shifting the signal one bar later collapses the edge; a random-signal run lands inside the null distribution |
+| Backtest | Look-ahead canary | The edge survives shifting the signal one bar later (an edge that collapses points to look-ahead; corrected 2026-10-07, doc 66); a random-signal run lands inside the null distribution |
 | Backtest | Cost stress | Result reported at 1× and 2× modelled cost; 2× must not flip the sign, or the sleeve is flagged |
 | Backtest | Regime split | Per-period table (incl. 2020 crash, 2022 drawdown); no single period carries the result alone |
 | Backtest | Locked final holdout | A final time slice the research loop can never read; read once, at promotion |
@@ -318,6 +318,8 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 **Status 2026-10-04 (data sanity row, #1747):** each candidate's backtest report carries a `dataSanity` block (`server/apps/v2/data/bar-sanity.ts`, wired in `server/apps/v2/backtest-cli.ts`). Over the replayed sessions it checks every series the candidate can trade (the declared tidms, or every constituent of any session for mean reversion), each up to the last session it can be traded (for mean reversion, its last session as a constituent), and lists the flagged ones: `coverage` (the `windowCoverage` 95% rule from the series' first bar in the window, or the window start if it has a bar before the window, to that last session, so an absent or stale series, or one that stops while still tradeable, fails), `gap` (a session missing inside that span), `zero_volume`, and `adjusted_jump` (an adjusted close-to-close move beyond the ingest hygiene's 1.35× suspect ratio, which also catches a split the adjusted series missed). Flags are reported, as the row says; they do not change the verdict.
 
 **Status 2026-10-05 (regime split row, #1747):** David ruled the row's terms (doc 66, 2026-10-05): each calendar year of the window plus the 2020 crash (2020-02-19 to 2020-03-23) and the 2022 drawdown (2022-01-03 to 2022-10-12); per period, the walk-forward strategy's haircut Sharpe minus the benchmark's; and leave one out, a kill-line failure. Each candidate's verdict now carries `regimeSplit`, the per-period table with each period's result and the result without it, and `checks.beatsBenchmarkWithAnyPeriodRemoved`, which `pass` requires (`server/apps/v2/evidence/regime-split.ts`). The report repeats the baseline's table. A remainder too short for a Sharpe fails closed. No candidate has been re-run against it.
+
+**Status 2026-10-07 (look-ahead canary row, #1747):** David ruled the row's terms (doc 66, 2026-10-05 ruling 5 and 2026-10-07 rulings 1–6), which corrected its direction: the edge must survive a one-bar delay. The shift half is built: each candidate run replays its grid with the sleeve's data one session late and fills at the session's own close, the verdict carries `oneBarDelay` and `checks.survivesOneBarDelay`, which `pass` requires, and each run is logged in `v2_canary_runs`, never as a counted trial (`server/apps/v2/look-ahead-canary.ts`). The random-signal half is not built: which run is set against the 200-run null is open with David (doc 66). No candidate has been re-run against it.
 
 ### Step 5 — v1 teardown (Q11, after step 3 runs)
 

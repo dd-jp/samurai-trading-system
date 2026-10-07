@@ -87,6 +87,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'v2_cash_anchors',
     'v2_cash_in_lieu',
     'v2_cfd_carry',
+    'v2_canary_runs',
   ],
   verdict: ['verdict_log'],
 };

@@ -201,6 +201,7 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient {
     submitOcoOrder: () => Promise.reject(new Error('unused')),
     cancelOrder: () => Promise.resolve(),
     listOpenOrders: () => Promise.resolve([]),
+    listOrderHistory: () => Promise.resolve([]),
     getPositions: () => Promise.resolve([]),
     getAccount: () => Promise.resolve(ACCOUNT as AlpacaAccount),
   };

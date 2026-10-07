@@ -19,7 +19,9 @@ import {
   volTargetIdentity,
 } from './backtest.js';
 import { capitalCeilingGbp } from './backtest-verdict.js';
+import { CanaryLog } from './canary-log.js';
 import { addDays, BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
+import { delayedTrial } from './look-ahead-canary.js';
 import { ENTRY_LIMIT_OFFSET } from './risk/index.js';
 import { type SessionBLedger, TrialLedger, trialHash } from './trial-ledger.js';
 
@@ -280,6 +282,56 @@ describe('runBacktest', { timeout: 120_000 }, () => {
     expect(result.verdict.trialsCounted).toBe(4);
     expect(result.verdict.from).toBe(DATES[40]);
     expect(run.ledger.count()).toBe(4);
+  });
+
+  it('runs the shift canary one bar later, logs it apart from the trials and leaves the count alone', async () => {
+    const db = migratedMemoryStore();
+    const shared = new TrialLedger(
+      db,
+      new SimulatedClock(new Date('2026-10-07T00:00:00Z')),
+      SESSION_B,
+    );
+    const log = new CanaryLog(db, new SimulatedClock(new Date('2026-10-07T00:00:00Z')));
+    const base = input({ ledger: shared });
+    const run = { ...base, shiftCanary: { trials: base.trials.map(delayedTrial), log } };
+    const result = await runBacktest(run);
+    const plain = await runBacktest(input({ ledger: shared }));
+    await runBacktest(run);
+    expect(shared.count()).toBe(4);
+    expect(result.verdict.trialsCounted).toBe(plain.verdict.trialsCounted);
+    expect(result.verdict.deflatedSharpe).toBe(plain.verdict.deflatedSharpe);
+    expect(result.trials).toEqual(plain.trials);
+    const delay = result.verdict.oneBarDelay;
+    expect(delay?.strategySharpe).not.toBe(result.verdict.walkForward.strategySharpe);
+    expect(delay?.benchmarkSharpe).toBe(result.verdict.walkForward.benchmarkSharpe);
+    expect(result.verdict.checks.survivesOneBarDelay).toBe(delay?.survives);
+    expect(plain.verdict.oneBarDelay).toBeNull();
+    expect(plain.verdict.pass).toBe(false);
+    const configs = db
+      .prepare("SELECT config FROM v2_trials WHERE source = 'v2' ORDER BY trial")
+      .all() as { config: string }[];
+    const candidateHash = trialHash('fixture-trend', {
+      trials: configs.map(({ config }) => trialHash('fixture-trend', JSON.parse(config))),
+    });
+    const rows = log.list();
+    expect(rows.map((row) => [row.candidate, row.candidate_hash, row.kind, row.seed])).toEqual([
+      ['fixture-trend', candidateHash, 'shift', null],
+      ['fixture-trend', candidateHash, 'shift', null],
+    ]);
+    expect(JSON.parse(rows[0]?.result as string)).toEqual(delay);
+    expect(rows[0]?.recorded_at).toBe('2026-10-07T00:00:00.000Z');
+  });
+
+  it('refuses a shift canary that does not delay every trial', async () => {
+    const db = migratedMemoryStore();
+    const log = new CanaryLog(db, new SimulatedClock(new Date('2026-10-07T00:00:00Z')));
+    const base = input();
+    const run = { ...base, shiftCanary: { trials: [delayedTrial(FLAT_TRIAL)], log } };
+    await expect(runBacktest(run)).rejects.toThrow(
+      'backtest: the shift canary must delay every trial of the run',
+    );
+    expect(log.list()).toEqual([]);
+    expect(base.ledger.count()).toBe(SESSION_B.entries.length);
   });
 
   it('has a capital row every year and a covered impact window on every fill', async () => {

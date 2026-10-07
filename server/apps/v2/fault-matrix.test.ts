@@ -28,6 +28,8 @@ import { type LeaseWait, RunLease, withRunLease } from './run-lease.js';
 
 const FX = 1.25;
 const OPEN = new Set(['new', 'accepted', 'held', 'partially_filled']);
+// The open listing and filled-bracket legs as measured in #2086
+const LISTED_OPEN = new Set(['new', 'accepted', 'partially_filled']);
 
 const SPEC: SleeveSpec = {
   capitalShare: 1,
@@ -94,6 +96,9 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
       const id = `alp-${this.orders.length + 1}`;
       const leg = (suffix: string, type: 'limit' | 'stop', price: string) => ({
         id: `${id}-${suffix}`,
+        client_order_id: `${id}-${suffix}-uuid`,
+        side: request.side === 'buy' ? ('sell' as const) : ('buy' as const),
+        qty: request.qty,
         type,
         status: 'held',
         filled_qty: '0',
@@ -176,6 +181,12 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
     return this.#answer(() => this.orders.flatMap((order) => this.#openParts(order)));
   }
 
+  listOrderHistory(symbols: readonly string[]): Promise<AlpacaOrder[]> {
+    return this.#answer(() =>
+      structuredClone(this.orders.filter((order) => symbols.includes(order.symbol)).reverse()),
+    );
+  }
+
   getPositions(): Promise<AlpacaPosition[]> {
     return this.#answer(() =>
       [...this.#netQty()].flatMap(([symbol, qty]) =>
@@ -205,7 +216,7 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
       filled_avg_price: String(price),
       filled_at: at.toISOString(),
     });
-    for (const leg of order.legs ?? []) leg.status = 'new';
+    for (const leg of order.legs ?? []) leg.status = leg.type === 'stop' ? 'held' : 'new';
   }
 
   triggerStop(clientOrderId: string, price: number, at: Date): void {
@@ -238,16 +249,16 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
   }
 
   #openParts(order: AlpacaOrder): AlpacaOrder[] {
-    if (OPEN.has(order.status)) {
+    if (LISTED_OPEN.has(order.status)) {
       const { legs: _legs, ...parent } = structuredClone(order);
       return [parent];
     }
     if (order.status !== 'filled') return [];
     return (order.legs ?? [])
-      .filter((leg) => OPEN.has(leg.status))
+      .filter((leg) => LISTED_OPEN.has(leg.status))
       .map((leg) => ({
         ...leg,
-        client_order_id: leg.id,
+        client_order_id: leg.client_order_id ?? leg.id,
         symbol: order.symbol,
         side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
         qty: order.qty,
@@ -420,6 +431,31 @@ describe('Step 4b fault matrix (#1747)', () => {
     expect(subject.broker.restingStop(AAPL_ENTRY)).toBe('19.20');
     expect(subject.reconciles('2026-09-29')).toEqual(['clean']);
     expect(subject.faultKinds('2026-09-29')).toEqual([]);
+  });
+
+  it('a bracket stop cancelled at the venue still reconciles unprotected through the held-leg read (#2086)', async () => {
+    const subject = drill();
+    await holdAapl(subject);
+    const stop = subject.broker.orders[0]?.legs?.find((leg) => leg.type === 'stop');
+    if (stop === undefined) throw new Error('drill: no stop leg');
+    stop.status = 'canceled';
+    await subject.run('2026-09-30');
+    expect(subject.reconciles('2026-09-30')[0]).toBe('mismatch');
+    expect(subject.faultKinds('2026-09-30')).toContainEqual([
+      'missed_stop',
+      'position_unprotected',
+    ]);
+  });
+
+  it('a filled bracket whose stop leg Alpaca holds off the open listing reconciles clean and is never re-armed (#2086)', async () => {
+    const subject = drill();
+    await holdAapl(subject);
+    await subject.run('2026-09-30');
+    expect(subject.reconciles('2026-09-29')).toEqual(['clean']);
+    expect(subject.reconciles('2026-09-30')).toEqual(['clean']);
+    expect(subject.refusalParameters('2026-09-30')).not.toContain('BROKER_RECONCILE');
+    expect(subject.broker.cancelled).toEqual([]);
+    expect(subject.broker.restingStop(AAPL_ENTRY)).toBe('19.20');
   });
 
   it('broker API down: no entry, the run still marks, the resting stop is untouched, both failed reads are ledgered', async () => {

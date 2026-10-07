@@ -24,12 +24,14 @@ const DATES = Array.from({ length: LENGTH }, (_, index) =>
 );
 
 function input(overrides: Partial<VerdictInput> = {}): VerdictInput {
+  const trials = overrides.trials ?? [
+    { trial: 9, ...book(noisy(LENGTH, 0.004, 0.002, 0)) },
+    { trial: 10, ...book(noisy(LENGTH, 0.0001, 0.01, 1)) },
+  ];
   return {
     dates: DATES,
-    trials: [
-      { trial: 9, ...book(noisy(LENGTH, 0.004, 0.002, 0)) },
-      { trial: 10, ...book(noisy(LENGTH, 0.0001, 0.01, 1)) },
-    ],
+    trials,
+    delayed: trials,
     benchmark: book(noisy(LENGTH, 0.0002, 0.01, 2)),
     trialsCounted: 10,
     lossCapGbp: 1_500,
@@ -63,12 +65,70 @@ describe('backtestVerdict', () => {
     expect(verdict.checks).toEqual({
       beatsBenchmarkAfterHaircut: true,
       beatsBenchmarkWithAnyPeriodRemoved: true,
+      survivesOneBarDelay: true,
       deflatedSharpeAtLeast095: true,
       pboAtMost010: true,
     });
     expect(verdict.pass).toBe(true);
     expect(verdict.maxDrawdown).toBe(verdict.trials[0]?.maxDrawdown);
     expect(verdict.capitalCeilingGbp).toBeCloseTo(capitalCeilingGbp(1_500, verdict.maxDrawdown), 9);
+  });
+
+  it('judges the delayed run by the haircut walk-forward test against the same benchmark days', () => {
+    const delayed = [book(noisy(LENGTH, 0.003, 0.002, 0.4)), book(noisy(LENGTH, 0, 0.01, 1.4))];
+    const verdict = backtestVerdict(input({ delayed }));
+    const ranges = foldRanges(LENGTH, 4, 0);
+    const path = walkForwardPath(
+      delayed.map((series) => series.returns),
+      ranges,
+    );
+    const sharpe = annualisedSharpe(path.returns);
+    const benchmark = annualisedSharpe(sliceByRanges(input().benchmark.returns, path.testRanges));
+    expect(verdict.oneBarDelay).toEqual({
+      selectedByFold: [9, 9, 9],
+      strategySharpe: sharpe,
+      strategySharpeHaircut: sharpe * 0.6,
+      benchmarkSharpe: benchmark,
+      survives: true,
+    });
+    expect(verdict.oneBarDelay?.benchmarkSharpe).toBe(verdict.walkForward.benchmarkSharpe);
+    expect(verdict.pass).toBe(true);
+  });
+
+  it('fails the candidate when its edge collapses one bar later, leaving the counted trials and DSR alone', () => {
+    const baseline = backtestVerdict(input());
+    const collapsed = input({
+      delayed: [book(noisy(LENGTH, -0.001, 0.01, 0)), book(noisy(LENGTH, -0.001, 0.01, 1))],
+    });
+    const verdict = backtestVerdict(collapsed);
+    expect(verdict.oneBarDelay?.survives).toBe(false);
+    expect(verdict.oneBarDelay?.benchmarkSharpe).toBeGreaterThan(
+      verdict.oneBarDelay?.strategySharpeHaircut as number,
+    );
+    expect(verdict.checks).toEqual({ ...baseline.checks, survivesOneBarDelay: false });
+    expect(verdict.pass).toBe(false);
+    expect(verdict.trialsCounted).toBe(baseline.trialsCounted);
+    expect(verdict.deflatedSharpe).toBe(baseline.deflatedSharpe);
+    expect(verdict.deflatedSharpeWalkForward).toBe(baseline.deflatedSharpeWalkForward);
+  });
+
+  it('cannot pass without a delayed run', () => {
+    const verdict = backtestVerdict(input({ delayed: undefined }));
+    expect(verdict.oneBarDelay).toBeNull();
+    expect(verdict.checks.survivesOneBarDelay).toBe(false);
+    expect(verdict.checks.beatsBenchmarkAfterHaircut).toBe(true);
+    expect(verdict.pass).toBe(false);
+  });
+
+  it('refuses a delayed run that misses a trial or a date', () => {
+    const [first] = input().trials;
+    expect(() => backtestVerdict(input({ delayed: [first as BookSeries] }))).toThrow(
+      'backtestVerdict: the delayed run must carry every trial',
+    );
+    const short = book(noisy(LENGTH - 1, 0, 0.01, 0));
+    expect(() => backtestVerdict(input({ delayed: [short, short] }))).toThrow(
+      'backtestVerdict: every series must cover the same dates',
+    );
   });
 
   it('fails when the benchmark beats the haircut Sharpe', () => {

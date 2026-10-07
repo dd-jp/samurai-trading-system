@@ -76,13 +76,14 @@ const TABLES = [
   'v2_cash_anchors',
   'v2_cash_in_lieu',
   'v2_cfd_carry',
+  'v2_canary_runs',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 63;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 64;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 95;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 96;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -692,9 +693,9 @@ describe('openSharedStore', () => {
     }
   });
 
-  it('migration 0095 rebuilds v2_faults with every row and id, admitting veto_rate (#2024)', () => {
+  it('migration 0096 rebuilds v2_faults with every row and id, admitting veto_rate (#2024)', () => {
     const raw = new BetterSqlite3(':memory:');
-    const preCutoverVersion = 94;
+    const preCutoverVersion = 95;
     const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
     try {
       runMigrations(raw, preCutoverDir);
