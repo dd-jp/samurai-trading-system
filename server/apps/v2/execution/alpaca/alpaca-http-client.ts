@@ -216,6 +216,8 @@ function cashActivitiesValidator(
 }
 
 export const ALPACA_ACTIVITY_PAGE_SIZE = 100;
+// Alpaca's GET /v2/orders reference: limit "defaults to 50 and max is 500"
+export const ALPACA_ORDER_HISTORY_LIMIT = 500;
 
 export type AlpacaTradingEnvironment = 'paper' | 'live';
 
@@ -475,6 +477,22 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
       '/v2/orders?status=open&nested=false&direction=asc&limit=500',
       { method: 'GET' },
       'listOpenOrders',
+      validateAlpacaOrders,
+    );
+  }
+
+  async listOrderHistory(symbols: readonly string[]): Promise<AlpacaOrder[]> {
+    const query = new URLSearchParams({
+      status: 'all',
+      nested: 'true',
+      symbols: symbols.join(','),
+      direction: 'desc',
+      limit: String(ALPACA_ORDER_HISTORY_LIMIT),
+    });
+    return this.request<AlpacaOrder[]>(
+      `/v2/orders?${query.toString()}`,
+      { method: 'GET' },
+      'listOrderHistory',
       validateAlpacaOrders,
     );
   }

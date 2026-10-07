@@ -417,6 +417,7 @@ describe('composeCycle: broker reconcile wiring (#1872)', () => {
           stop_price: '180.5',
         },
       ]),
+      listOrderHistory: vi.fn(async () => []),
       getAccount: vi.fn(async () => ({ cash: '127', equity: '127' })),
     } as unknown as AlpacaBrokerClient;
     const composed = composeCycle(options({ dryRun: false, alpacaClient }));

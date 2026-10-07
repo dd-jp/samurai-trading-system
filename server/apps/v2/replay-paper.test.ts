@@ -140,6 +140,7 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
         })),
       ),
     ),
+    listOrderHistory: vi.fn().mockResolvedValue([]),
     getPositions: vi.fn(() =>
       Promise.resolve(
         held().map((order) => ({
