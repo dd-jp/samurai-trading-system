@@ -5,7 +5,8 @@ import type {
   BrokerPosition,
   Venue,
 } from '../../../../contracts/index.js';
-import type { AlpacaBrokerClient, AlpacaOrder } from './alpaca/alpaca-client.js';
+import type { AlpacaBrokerClient, AlpacaOrder, AlpacaOrderLeg } from './alpaca/alpaca-client.js';
+import { ALPACA_ORDER_HISTORY_LIMIT } from './alpaca/alpaca-http-client.js';
 
 function finite(value: string, what: string): number {
   const parsed = Number(value);
@@ -63,6 +64,36 @@ function openOrder(held: ReadonlySet<string>): (order: AlpacaOrder) => BrokerOpe
   };
 }
 
+function legSide(symbol: string, leg: AlpacaOrderLeg): 'buy' | 'sell' {
+  if (leg.side === 'buy' || leg.side === 'sell') return leg.side;
+  throw new Error(`Alpaca ${symbol} held stop ${leg.id} side ${leg.side} is not buy or sell`);
+}
+
+function legAsOrder(parent: AlpacaOrder, leg: AlpacaOrderLeg): AlpacaOrder {
+  return {
+    ...leg,
+    client_order_id: leg.client_order_id ?? leg.id,
+    symbol: parent.symbol,
+    side: legSide(parent.symbol, leg),
+    qty: leg.qty ?? '',
+    order_class: parent.order_class,
+  };
+}
+
+// Measured on Alpaca paper 2026-10-07 (#2086): `status=open` leaves out `held` orders, and a filled
+// bracket's stop leg stays `held` at the venue while its take-profit rests `new`; a bracket's legs
+// guard nothing until its parent fills, an OCO re-arm's from the start
+function guardingParent(parent: AlpacaOrder): boolean {
+  return parent.status === 'filled' || parent.order_class === 'oco';
+}
+
+function heldStopLegs(parent: AlpacaOrder): AlpacaOrder[] {
+  if (!guardingParent(parent)) return [];
+  return (parent.legs ?? [])
+    .filter((leg) => leg.status === 'held' && PROTECTIVE_STOP_TYPES.has(leg.type))
+    .map((leg) => legAsOrder(parent, leg));
+}
+
 export class AlpacaBrokerBooks implements BrokerBookReader {
   constructor(private readonly client: AlpacaBrokerClient) {}
 
@@ -75,11 +106,27 @@ export class AlpacaBrokerBooks implements BrokerBookReader {
     ]);
     const signed = positions.map(signedPosition);
     const held = new Set(signed.filter((position) => position.qty !== 0).map((p) => p.instrument));
+    const heldStops = await this.heldStops([...held], orders);
     return {
       positions: signed,
-      openOrders: orders.map(openOrder(held)),
+      openOrders: [...orders, ...heldStops].map(openOrder(held)),
       cashQuote: finite(account.cash, 'cash'),
     };
+  }
+
+  private async heldStops(
+    symbols: readonly string[],
+    listed: readonly AlpacaOrder[],
+  ): Promise<AlpacaOrder[]> {
+    if (symbols.length === 0) return [];
+    const history = await this.client.listOrderHistory(symbols);
+    if (history.length >= ALPACA_ORDER_HISTORY_LIMIT) {
+      throw new Error(
+        `Alpaca order history for ${symbols.join(',')} filled its ${ALPACA_ORDER_HISTORY_LIMIT}-order page: a held stop past it would go unread`,
+      );
+    }
+    const listedIds = new Set(listed.map((order) => order.id));
+    return history.flatMap(heldStopLegs).filter((leg) => !listedIds.has(leg.id));
   }
 }
 

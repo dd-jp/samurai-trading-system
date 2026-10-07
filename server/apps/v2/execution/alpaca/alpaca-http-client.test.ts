@@ -1,7 +1,7 @@
 import * as shared from '../../../../shared/index.js';
 import { AlpacaBrokerProviderError, AlpacaBrokerRateLimitError } from './alpaca-broker-errors.js';
 import type { AlpacaBracketOrderRequest, AlpacaMarketOrderRequest } from './alpaca-client.js';
-import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';
+import { ALPACA_ORDER_HISTORY_LIMIT, AlpacaHttpBrokerClient } from './alpaca-http-client.js';
 
 const FAKE_KEY = 'test-fake-alpaca-key';
 const FAKE_SECRET = 'test-fake-alpaca-secret';
@@ -1016,6 +1016,25 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     expect(url).not.toContain('by_client_order_id');
     expect(url).toContain('direction=asc');
     expect(url).toContain('limit=500');
+  });
+
+  it('listOrderHistory reads every status of the named symbols, legs nested, newest first, one full page (#2086)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([ORDER_RESPONSE]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    await expect(client.listOrderHistory(['CRL', 'NUE'])).resolves.toHaveLength(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe('GET');
+    const query = new URL(url).searchParams;
+    expect(Object.fromEntries(query)).toEqual({
+      status: 'all',
+      nested: 'true',
+      symbols: 'CRL,NUE',
+      direction: 'desc',
+      limit: String(ALPACA_ORDER_HISTORY_LIMIT),
+    });
   });
 
   it('listOpenOrders rejects a response body that is not an array at all', async () => {

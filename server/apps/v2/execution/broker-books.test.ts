@@ -1,15 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AlpacaBrokerClient } from './alpaca/alpaca-client.js';
+import { ALPACA_ORDER_HISTORY_LIMIT } from './alpaca/alpaca-http-client.js';
 import { AlpacaBrokerBooks, NO_BROKER_BOOKS } from './broker-books.js';
 
 function client(overrides: {
   positions?: unknown[];
   orders?: unknown[];
+  history?: unknown[];
   cash?: string;
 }): AlpacaBrokerClient {
   return {
     getPositions: vi.fn(async () => overrides.positions ?? []),
     listOpenOrders: vi.fn(async () => overrides.orders ?? []),
+    listOrderHistory: vi.fn(async () => overrides.history ?? []),
     getAccount: vi.fn(async () => ({ cash: overrides.cash ?? '1000.50', equity: '1000.50' })),
   } as unknown as AlpacaBrokerClient;
 }
@@ -168,6 +171,142 @@ describe('AlpacaBrokerBooks', () => {
       'no broker book reader for saxo',
     );
     expect(fake.getAccount).not.toHaveBeenCalled();
+  });
+});
+
+// The wire shape Alpaca paper returned for CRL on 2026-10-07 (#2086): the bracket parent filled, its
+// take-profit leg `new` and listed open, its stop leg `held` and left out of `status=open`
+function crlLeg(type: 'limit' | 'stop', overrides: Record<string, unknown> = {}) {
+  return {
+    id: type === 'stop' ? 'leg-4df6' : 'leg-5639',
+    client_order_id: type === 'stop' ? 'stop-4df6' : 'tp-5639',
+    symbol: 'CRL',
+    side: 'sell',
+    type,
+    order_class: 'bracket',
+    qty: '1',
+    filled_qty: '0',
+    filled_avg_price: null,
+    filled_at: null,
+    status: type === 'stop' ? 'held' : 'new',
+    stop_price: type === 'stop' ? '290.65' : null,
+    limit_price: type === 'stop' ? null : '340.96',
+    ...overrides,
+  };
+}
+
+function crlBracket(
+  overrides: Record<string, unknown> = {},
+  legs = [crlLeg('limit'), crlLeg('stop')],
+) {
+  return {
+    id: 'entry-051d',
+    client_order_id: 'v2-debate-primary-2026-10-06-CRL',
+    symbol: 'CRL',
+    side: 'buy',
+    type: 'limit',
+    order_class: 'bracket',
+    qty: '1',
+    filled_qty: '1',
+    filled_avg_price: '310.77',
+    filled_at: '2026-10-06T14:20:02.108Z',
+    status: 'filled',
+    limit_price: '310.77',
+    legs,
+    ...overrides,
+  };
+}
+
+const HELD_CRL = [{ symbol: 'CRL', qty: '1', side: 'long' }];
+const CRL_TP_OPEN = { ...crlLeg('limit'), legs: [] };
+const CRL_STOP = {
+  clientOrderId: 'stop-4df6',
+  instrument: 'CRL',
+  protects: 'long',
+  qty: 1,
+  stopPrice: 290.65,
+};
+
+describe('AlpacaBrokerBooks held stop legs (#2086)', () => {
+  it('reads the held stop leg of a filled bracket, which the open listing leaves out', async () => {
+    const fake = client({ positions: HELD_CRL, orders: [CRL_TP_OPEN], history: [crlBracket()] });
+    const book = await new AlpacaBrokerBooks(fake).read('alpaca');
+    expect(book.openOrders).toEqual([
+      { clientOrderId: 'tp-5639', instrument: 'CRL', protects: null, qty: null, stopPrice: null },
+      CRL_STOP,
+    ]);
+    expect(fake.listOrderHistory).toHaveBeenCalledWith(['CRL']);
+  });
+
+  it('reads the held stop leg of a resting OCO re-arm', async () => {
+    const oco = crlBracket(
+      { side: 'sell', type: 'limit', order_class: 'oco', status: 'new', filled_qty: '0' },
+      [crlLeg('stop')],
+    );
+    const book = await new AlpacaBrokerBooks(client({ positions: HELD_CRL, history: [oco] })).read(
+      'alpaca',
+    );
+    expect(book.openOrders).toEqual([CRL_STOP]);
+  });
+
+  it.each([
+    ['still working', { status: 'new', filled_qty: '0' }],
+    ['part filled', { status: 'partially_filled', filled_qty: '0.5' }],
+    ['cancelled', { status: 'canceled', filled_qty: '0' }],
+  ])('a held stop leg of a bracket parent %s guards nothing', async (_what, parent) => {
+    const book = await new AlpacaBrokerBooks(
+      client({ positions: HELD_CRL, history: [crlBracket(parent)] }),
+    ).read('alpaca');
+    expect(book.openOrders).toEqual([]);
+  });
+
+  it('skips legs that are not held stops and a leg the open listing already returned', async () => {
+    const history = [
+      crlBracket({}, [crlLeg('limit', { status: 'held' }), crlLeg('stop', { status: 'canceled' })]),
+      crlBracket({ id: 'entry-2' }, [crlLeg('stop', { id: 'listed' })]),
+    ];
+    const listed = { ...crlLeg('stop', { id: 'listed', status: 'new' }), legs: [] };
+    const book = await new AlpacaBrokerBooks(
+      client({ positions: HELD_CRL, orders: [listed], history }),
+    ).read('alpaca');
+    expect(book.openOrders).toEqual([CRL_STOP]);
+  });
+
+  it('asks for no order history when the account holds nothing', async () => {
+    const fake = client({ positions: [{ symbol: 'CRL', qty: '0', side: 'long' }] });
+    await new AlpacaBrokerBooks(fake).read('alpaca');
+    expect(fake.listOrderHistory).not.toHaveBeenCalled();
+  });
+
+  it('fails the read when the history fills its page, since a held stop past it would go unread', async () => {
+    const history = Array.from({ length: ALPACA_ORDER_HISTORY_LIMIT }, () => crlBracket());
+    await expect(
+      new AlpacaBrokerBooks(client({ positions: HELD_CRL, history })).read('alpaca'),
+    ).rejects.toThrow(
+      `Alpaca order history for CRL filled its ${ALPACA_ORDER_HISTORY_LIMIT}-order page`,
+    );
+  });
+
+  it.each([
+    [
+      'no side',
+      { side: undefined },
+      'Alpaca CRL held stop leg-4df6 side undefined is not buy or sell',
+    ],
+    ['no qty', { qty: undefined }, 'Alpaca CRL stop stop-4df6 qty "" is not a number'],
+  ])('refuses a held stop leg with %s on a held name', async (_what, broken, message) => {
+    const history = [crlBracket({}, [crlLeg('stop', broken)])];
+    await expect(
+      new AlpacaBrokerBooks(client({ positions: HELD_CRL, history })).read('alpaca'),
+    ).rejects.toThrow(message);
+  });
+
+  it('names a held stop leg with no client order id by its venue id', async () => {
+    const history = [crlBracket({}, [crlLeg('stop', { client_order_id: undefined })])];
+    const book = await new AlpacaBrokerBooks(client({ positions: HELD_CRL, history })).read(
+      'alpaca',
+    );
+    expect(book.openOrders).toEqual([{ ...CRL_STOP, clientOrderId: 'leg-4df6' }]);
   });
 });
 

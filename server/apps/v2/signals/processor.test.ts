@@ -724,6 +724,7 @@ function client(
     submitOcoOrder: vi.fn().mockRejectedValue(new Error('unused')),
     cancelOrder: vi.fn().mockResolvedValue(undefined),
     listOpenOrders: vi.fn().mockResolvedValue([]),
+    listOrderHistory: vi.fn().mockResolvedValue([]),
     getPositions: vi.fn(() =>
       Promise.resolve(
         orders
