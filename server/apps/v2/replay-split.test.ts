@@ -206,6 +206,7 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
         })),
       ),
     ),
+    listOrderHistory: vi.fn().mockResolvedValue([]),
     getPositions: vi.fn(() =>
       Promise.resolve(
         held().map((order) => ({

@@ -238,6 +238,7 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
         })),
       ),
     ),
+    listOrderHistory: vi.fn().mockResolvedValue([]),
     getPositions: vi.fn(() =>
       Promise.resolve(
         orders.map((order) => ({

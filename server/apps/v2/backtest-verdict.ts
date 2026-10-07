@@ -2,6 +2,7 @@ import {
   annualisedSharpe,
   argMaxIndex,
   deflatedSharpe,
+  type FoldRange,
   foldRanges,
   foldSharpeMatrix,
   maxDrawdown,
@@ -41,6 +42,14 @@ export interface VerdictInput {
   readonly lossCapGbp: number;
   readonly folds?: number | undefined;
   readonly embargo?: number | undefined;
+  readonly delayed?: readonly BookSeries[] | undefined;
+}
+
+interface WalkForward {
+  readonly path: WalkForwardPath;
+  readonly strategySharpe: number;
+  readonly strategySharpeHaircut: number;
+  readonly benchmarkSharpe: number;
 }
 
 export interface TrialResult {
@@ -48,6 +57,14 @@ export interface TrialResult {
   readonly sharpe: number;
   readonly maxDrawdown: number;
   readonly foldSharpes: readonly number[];
+}
+
+export interface OneBarDelay {
+  readonly selectedByFold: readonly number[];
+  readonly strategySharpe: number;
+  readonly strategySharpeHaircut: number;
+  readonly benchmarkSharpe: number;
+  readonly survives: boolean;
 }
 
 export interface BacktestVerdict {
@@ -70,9 +87,11 @@ export interface BacktestVerdict {
   readonly maxDrawdown: number;
   readonly capitalCeilingGbp: number;
   readonly regimeSplit: RegimeSplit;
+  readonly oneBarDelay: OneBarDelay | null;
   readonly checks: {
     readonly beatsBenchmarkAfterHaircut: boolean;
     readonly beatsBenchmarkWithAnyPeriodRemoved: boolean;
+    readonly survivesOneBarDelay: boolean;
     readonly deflatedSharpeAtLeast095: boolean;
     readonly pboAtMost010: boolean;
   };
@@ -91,14 +110,21 @@ export function deflatedSharpeOfReturns(returns: readonly number[], trialsCounte
   );
 }
 
-function assertAligned(input: VerdictInput): void {
-  if (input.trials.length < 2) throw new Error('backtestVerdict: PBO needs at least 2 trials');
-  const length = input.dates.length;
-  for (const series of [...input.trials, input.benchmark]) {
-    if (series.returns.length !== length || series.equity.length !== length + 1) {
+function assertCoversDates(series: readonly BookSeries[], length: number): void {
+  for (const book of series) {
+    if (book.returns.length !== length || book.equity.length !== length + 1) {
       throw new Error('backtestVerdict: every series must cover the same dates');
     }
   }
+}
+
+function assertAligned(input: VerdictInput): void {
+  if (input.trials.length < 2) throw new Error('backtestVerdict: PBO needs at least 2 trials');
+  const delayed = input.delayed ?? input.trials;
+  if (delayed.length !== input.trials.length) {
+    throw new Error('backtestVerdict: the delayed run must carry every trial');
+  }
+  assertCoversDates([...input.trials, ...delayed, input.benchmark], input.dates.length);
   if (input.trialsCounted < input.trials.length) {
     throw new Error('backtestVerdict: the trial counter is below the trials in this run');
   }
@@ -118,6 +144,42 @@ function walkForwardDays(
     strategy: path.returns[position] as number,
     benchmark: benchmark[dateIndex] as number,
   }));
+}
+
+function walkForward(
+  trials: readonly BookSeries[],
+  ranges: readonly FoldRange[],
+  benchmark: readonly number[],
+): WalkForward {
+  const path = walkForwardPath(
+    trials.map((series) => series.returns),
+    ranges,
+  );
+  const strategySharpe = annualisedSharpe(path.returns);
+  return {
+    path,
+    strategySharpe,
+    strategySharpeHaircut: strategySharpe * SHARPE_HAIRCUT_MULTIPLIER,
+    benchmarkSharpe: annualisedSharpe(sliceByRanges(benchmark, path.testRanges)),
+  };
+}
+
+// David, 2026-10-07 on #1747 (rulings 1, 2 and 5): the edge must survive a one-bar delay, judged
+// by the verdict's own haircut test; no delayed run is no pass
+function oneBarDelay(input: VerdictInput, ranges: readonly FoldRange[]): OneBarDelay | null {
+  if (input.delayed === undefined) return null;
+  const delayed = walkForward(input.delayed, ranges, input.benchmark.returns);
+  return {
+    selectedByFold: trialNumbers(input, delayed.path),
+    strategySharpe: delayed.strategySharpe,
+    strategySharpeHaircut: delayed.strategySharpeHaircut,
+    benchmarkSharpe: delayed.benchmarkSharpe,
+    survives: delayed.strategySharpeHaircut > delayed.benchmarkSharpe,
+  };
+}
+
+function trialNumbers(input: VerdictInput, path: WalkForwardPath): number[] {
+  return path.selectedByFold.map((index) => (input.trials[index] as TrialSeries).trial);
 }
 
 export function capitalCeilingGbp(lossCapGbp: number, drawdown: number): number {
@@ -140,12 +202,11 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     foldSharpes: matrix[index] as number[],
   }));
   const selected = input.trials[argMaxIndex(trials.map((trial) => trial.sharpe))] as TrialSeries;
-  const path = walkForwardPath(returns, ranges);
-  const strategySharpe = annualisedSharpe(path.returns);
-  const haircut = strategySharpe * SHARPE_HAIRCUT_MULTIPLIER;
-  const walkForwardBenchmark = annualisedSharpe(
-    sliceByRanges(input.benchmark.returns, path.testRanges),
-  );
+  const forward = walkForward(input.trials, ranges, input.benchmark.returns);
+  const { path, strategySharpe } = forward;
+  const haircut = forward.strategySharpeHaircut;
+  const walkForwardBenchmark = forward.benchmarkSharpe;
+  const delay = oneBarDelay(input, ranges);
   const dsr = deflatedSharpeOfReturns(selected.returns, input.trialsCounted);
   const probability = pbo(matrix).pbo;
   const drawdown = maxDrawdown(selected.equity);
@@ -159,6 +220,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
   const checks = {
     beatsBenchmarkAfterHaircut: haircut > walkForwardBenchmark,
     beatsBenchmarkWithAnyPeriodRemoved: regimes.beatsBenchmarkWithAnyPeriodRemoved,
+    survivesOneBarDelay: delay?.survives === true,
     deflatedSharpeAtLeast095: dsr >= MIN_DEFLATED_SHARPE,
     pboAtMost010: probability <= PBO_REJECT_THRESHOLD,
   };
@@ -169,9 +231,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     trials,
     selectedTrial: selected.trial,
     walkForward: {
-      selectedByFold: path.selectedByFold.map(
-        (index) => (input.trials[index] as TrialSeries).trial,
-      ),
+      selectedByFold: trialNumbers(input, path),
       strategySharpe,
       strategySharpeHaircut: haircut,
       benchmarkSharpe: walkForwardBenchmark,
@@ -184,6 +244,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     maxDrawdown: drawdown,
     capitalCeilingGbp: capitalCeilingGbp(input.lossCapGbp, drawdown),
     regimeSplit: regimes,
+    oneBarDelay: delay,
     checks,
     pass: Object.values(checks).every(Boolean),
   };

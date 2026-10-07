@@ -91,6 +91,9 @@ function makeClient(overrides: Partial<AlpacaBrokerClient> = {}): AlpacaBrokerCl
     listOpenOrders: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override listOpenOrders to use it')),
+    listOrderHistory: vi
+      .fn()
+      .mockRejectedValue(new Error('makeClient: override listOrderHistory to use it')),
     getPositions: vi
       .fn()
       .mockRejectedValue(new Error('makeClient: override getPositions to use it')),

@@ -19,11 +19,13 @@ import {
 import {
   type BacktestInput,
   type BacktestResult,
+  type BacktestTrial,
   backtestSessions,
   runBacktest,
   simulateBacktest,
 } from './backtest.js';
-import type { TrialSeries } from './backtest-verdict.js';
+import type { OneBarDelay, TrialSeries } from './backtest-verdict.js';
+import { CanaryLog } from './canary-log.js';
 import {
   BarsMarketData,
   type BarsSource,
@@ -44,6 +46,7 @@ import {
   SAXO_SPREADS_PATH,
   SPREADS_PATH,
 } from './index.js';
+import { delayedBars, delayedTrial } from './look-ahead-canary.js';
 import {
   CROSS_ASSET_TREND_CANDIDATE_ID,
   CROSS_ASSET_TREND_FROM,
@@ -101,6 +104,7 @@ export interface CandidateRunReport {
   readonly windowYears: number;
   readonly signFlipped: boolean;
   readonly regimeSplit: RegimeSplit;
+  readonly oneBarDelay: OneBarDelay | null;
   readonly dataSanity: DataSanityReport;
 }
 export type CrossAssetTrendRunReport = CandidateRunReport;
@@ -152,7 +156,7 @@ const VOL_TARGET_INDEX_WINDOW: CandidateWindow = {
 
 interface CandidateRunSpec {
   readonly candidate: string;
-  readonly trials: BacktestInput['trials'];
+  readonly trials: (bars: BarsSource) => readonly BacktestTrial[];
   readonly benchmark: BacktestInput['benchmark'];
   readonly window: CandidateWindow;
   readonly calendarReference: string;
@@ -161,17 +165,22 @@ interface CandidateRunSpec {
   readonly startCapitalGbp?: number;
 }
 
+export interface ResearchLogs {
+  readonly ledger: TrialLedger;
+  readonly canaries: CanaryLog;
+}
+
 async function runCandidateAgainst(
   spec: CandidateRunSpec,
   market: MarketData,
   bars: BarsSource,
   halfSpreadBps: (instrument: string) => number,
-  ledger: TrialLedger,
+  { ledger, canaries }: ResearchLogs,
   logger: Logger,
 ): Promise<CandidateRunReport> {
   const input = (costMultiple: number): BacktestInput => ({
     candidate: spec.candidate,
-    trials: spec.trials,
+    trials: spec.trials(bars),
     benchmark: spec.benchmark,
     from: spec.window.from,
     to: spec.window.to,
@@ -186,7 +195,10 @@ async function runCandidateAgainst(
     calendarReference: spec.calendarReference,
     costMultiple,
   });
-  const baseline = await runBacktest(input(1));
+  const baseline = await runBacktest({
+    ...input(1),
+    shiftCanary: { trials: spec.trials(delayedBars(bars)).map(delayedTrial), log: canaries },
+  });
   const stressed = await runBacktest(input(COST_STRESS_MULTIPLE));
   const start = new Date(`${spec.window.from}T00:00:00.000Z`);
   const end = new Date(`${spec.window.to}T00:00:00.000Z`);
@@ -207,6 +219,7 @@ async function runCandidateAgainst(
       baseline.verdict.checks.beatsBenchmarkAfterHaircut !==
       stressed.verdict.checks.beatsBenchmarkAfterHaircut,
     regimeSplit: baseline.verdict.regimeSplit,
+    oneBarDelay: baseline.verdict.oneBarDelay,
     dataSanity: dataSanity(bars, spec.symbolsOn, sessions),
   };
 }
@@ -228,14 +241,15 @@ export async function runCrossAssetTrendAgainst(
   market: MarketData,
   bars: BarsSource,
   halfSpreadBps: (instrument: string) => number,
-  ledger: TrialLedger,
+  research: ResearchLogs,
   logger: Logger,
   window: CandidateWindow = CROSS_ASSET_TREND_WINDOW,
 ): Promise<CrossAssetTrendRunReport> {
-  const trials = [100, 200].map((sma) => ({
-    config: { sma_window: sma },
-    sleeve: createCrossAssetTrendSleeve(bars, sma as 100 | 200),
-  }));
+  const trials = (source: BarsSource) =>
+    [100, 200].map((sma) => ({
+      config: { sma_window: sma },
+      sleeve: createCrossAssetTrendSleeve(source, sma as 100 | 200),
+    }));
   const benchmark = {
     config: { benchmark: true },
     sleeve: createCrossAssetTrendBenchmarkSleeve(bars),
@@ -252,7 +266,7 @@ export async function runCrossAssetTrendAgainst(
     market,
     bars,
     halfSpreadBps,
-    ledger,
+    research,
     logger,
   );
 }
@@ -261,7 +275,7 @@ interface ResearchRun {
   readonly market: MarketData;
   readonly bars: BarsSource;
   readonly halfSpreadBps: (instrument: string) => number;
-  readonly ledger: TrialLedger;
+  readonly research: ResearchLogs;
   readonly options: ResolvedCliOptions;
 }
 
@@ -274,8 +288,12 @@ async function withResearchLedger<T>(
   const halfSpreadBps = halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath);
   const db = openSharedStore(options.storePath);
   try {
-    const ledger = new TrialLedger(db, new SystemClock(), sessionBLedger());
-    return await run({ market, bars, halfSpreadBps, ledger, options });
+    const clock = new SystemClock();
+    const research = {
+      ledger: new TrialLedger(db, clock, sessionBLedger()),
+      canaries: new CanaryLog(db, clock),
+    };
+    return await run({ market, bars, halfSpreadBps, research, options });
   } finally {
     db.close();
   }
@@ -284,8 +302,8 @@ async function withResearchLedger<T>(
 export function runCrossAssetTrendCandidate(
   cliOptions: BacktestCliOptions = {},
 ): Promise<CrossAssetTrendRunReport> {
-  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) =>
-    runCrossAssetTrendAgainst(market, bars, halfSpreadBps, ledger, options.logger),
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, research, options }) =>
+    runCrossAssetTrendAgainst(market, bars, halfSpreadBps, research, options.logger),
   );
 }
 
@@ -294,14 +312,15 @@ export async function runMeanReversionAgainst(
   bars: BarsSource,
   constituentsFor: (tradingDate: string) => readonly string[],
   halfSpreadBps: (instrument: string) => number,
-  ledger: TrialLedger,
+  research: ResearchLogs,
   logger: Logger,
   window: CandidateWindow = MEAN_REVERSION_WINDOW,
 ): Promise<MeanReversionRunReport> {
-  const trials = MEAN_REVERSION_ENTRY_THRESHOLDS.map((threshold) => ({
-    config: { rsi_entry_threshold: threshold },
-    sleeve: createMeanReversionSleeve(bars, constituentsFor, threshold),
-  }));
+  const trials = (source: BarsSource) =>
+    MEAN_REVERSION_ENTRY_THRESHOLDS.map((threshold) => ({
+      config: { rsi_entry_threshold: threshold },
+      sleeve: createMeanReversionSleeve(source, constituentsFor, threshold),
+    }));
   const benchmark = {
     config: { benchmark: true },
     sleeve: createMeanReversionBenchmarkSleeve(bars, constituentsFor),
@@ -319,7 +338,7 @@ export async function runMeanReversionAgainst(
     market,
     bars,
     halfSpreadBps,
-    ledger,
+    research,
     logger,
   );
 }
@@ -332,13 +351,13 @@ function constituentsReader(path: string): (tradingDate: string) => readonly str
 export function runMeanReversionCandidate(
   cliOptions: BacktestCliOptions = {},
 ): Promise<MeanReversionRunReport> {
-  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) =>
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, research, options }) =>
     runMeanReversionAgainst(
       market,
       bars,
       constituentsReader(options.constituentsPath),
       halfSpreadBps,
-      ledger,
+      research,
       options.logger,
     ),
   );
@@ -348,20 +367,21 @@ export async function runVolTargetIndexAgainst(
   market: MarketData,
   bars: BarsSource,
   halfSpreadBps: (instrument: string) => number,
-  ledger: TrialLedger,
+  research: ResearchLogs,
   logger: Logger,
   window: CandidateWindow = VOL_TARGET_INDEX_WINDOW,
 ): Promise<VolTargetIndexRunReport> {
-  const trials = VOL_TARGET_INDEX_CEILINGS.map((ceiling) => ({
-    config: {
-      vol_ceiling: ceiling,
-      universe: VOL_TARGET_INDEX_TIDMS,
-      vol_window: VOL_TARGET_INDEX_VOL_WINDOW,
-      atr_window: VOL_TARGET_INDEX_ATR_WINDOW,
-      lookback_bars: VOL_TARGET_INDEX_LOOKBACK_BARS,
-    },
-    sleeve: createVolTargetIndexSleeve(bars, ceiling),
-  }));
+  const trials = (source: BarsSource) =>
+    VOL_TARGET_INDEX_CEILINGS.map((ceiling) => ({
+      config: {
+        vol_ceiling: ceiling,
+        universe: VOL_TARGET_INDEX_TIDMS,
+        vol_window: VOL_TARGET_INDEX_VOL_WINDOW,
+        atr_window: VOL_TARGET_INDEX_ATR_WINDOW,
+        lookback_bars: VOL_TARGET_INDEX_LOOKBACK_BARS,
+      },
+      sleeve: createVolTargetIndexSleeve(source, ceiling),
+    }));
   const benchmark = {
     config: { benchmark: true },
     sleeve: createVolTargetIndexBenchmarkSleeve(bars),
@@ -380,7 +400,7 @@ export async function runVolTargetIndexAgainst(
     market,
     bars,
     halfSpreadBps,
-    ledger,
+    research,
     logger,
   );
 }
@@ -388,8 +408,8 @@ export async function runVolTargetIndexAgainst(
 export function runVolTargetIndexCandidate(
   cliOptions: BacktestCliOptions = {},
 ): Promise<VolTargetIndexRunReport> {
-  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) =>
-    runVolTargetIndexAgainst(market, bars, halfSpreadBps, ledger, options.logger),
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, research, options }) =>
+    runVolTargetIndexAgainst(market, bars, halfSpreadBps, research, options.logger),
   );
 }
 
@@ -451,13 +471,13 @@ export async function runVolTargetTrialAgainst(
 export function runVolTargetTrial(
   cliOptions: BacktestCliOptions = {},
 ): Promise<VolTargetTrialReport> {
-  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, ledger, options }) =>
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, research, options }) =>
     runVolTargetTrialAgainst(
       market,
       bars,
       constituentsReader(options.constituentsPath),
       halfSpreadBps,
-      ledger,
+      research.ledger,
       options.logger,
     ),
   );
