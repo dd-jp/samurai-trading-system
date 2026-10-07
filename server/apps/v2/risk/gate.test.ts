@@ -12,8 +12,10 @@ import type {
   V2Bar,
   Venue,
 } from '../../../../contracts/index.js';
+import { realisedVolatility } from '../data/index.js';
 import { isRiskApproved } from './approval.js';
 import { V2RiskGate } from './gate.js';
+import type { VolTargetSizing } from './vol-target.js';
 
 const FX = 1.25;
 const primary: BookSpec = {
@@ -90,6 +92,7 @@ function gate(
     spec?: SleeveSpec;
     venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
     fixDate?: string;
+    volTarget?: VolTargetSizing;
   } = {},
 ) {
   const lastDay = (): BookDay | undefined =>
@@ -124,6 +127,7 @@ function gate(
     },
     spec: () => options.spec ?? SPEC,
     venueRefusal: 'venueRefusal' in options ? options.venueRefusal : () => undefined,
+    volTarget: options.volTarget,
   });
 }
 
@@ -565,6 +569,51 @@ describe('V2RiskGate', () => {
     expect(
       gate({ bars: liquidBars(20, 1_000_000, '2026-09-20') }).approveEntry(request()).size,
     ).toBe(6);
+  });
+
+  describe('vol-target sizing (#1860)', () => {
+    const volTarget: VolTargetSizing = {
+      annualTargetVol: 0.5,
+      windowBars: 20,
+      sleeveIds: ['debate'],
+    };
+    const choppy = liquidBars(21).map((bar, index) => ({
+      ...bar,
+      close: index % 2 === 0 ? 20 : 22,
+    }));
+    const rich = request({ equityGbp: 100_000 });
+    const riskPerShareGbp = (20 * 1.005 - 19.2) / FX;
+
+    it('sizes a covered high-vol line at target over realised times the risk fraction', () => {
+      const vol = realisedVolatility(choppy, 20) as number;
+      const unscaledShares = (100_000 * 0.005) / riskPerShareGbp;
+      expect(unscaledShares * (0.5 / vol)).toBeLessThan(unscaledShares / 2);
+      const size = gate({ bars: choppy, volTarget }).approveEntry(rich).size;
+      expect(size).toBe(Math.floor((100_000 * 0.005 * (0.5 / vol)) / riskPerShareGbp));
+      expect(gate({ bars: choppy }).approveEntry(rich).size).toBeGreaterThan(size * 2);
+    });
+
+    it('leaves a calm line, another sleeve and an unset target sized exactly as before', () => {
+      const calm = gate({ bars: liquidBars(21), volTarget }).approveEntry(request());
+      expect(calm).toEqual(gate({ bars: liquidBars(21) }).approveEntry(request()));
+      const other = { ...volTarget, sleeveIds: ['signals'] };
+      expect(gate({ bars: choppy, volTarget: other }).approveEntry(rich)).toEqual(
+        gate({ bars: choppy }).approveEntry(rich),
+      );
+    });
+
+    it('refuses an entry whose vol window is not covered, ahead of sizing', () => {
+      expect(gate({ bars: liquidBars(20), volTarget }).approveEntry(request())).toEqual({
+        size: 0,
+        order: undefined,
+        refusal: 'no_realised_vol',
+      });
+      expect(gate({ bars: liquidBars(20) }).approveEntry(request()).size).toBe(6);
+    });
+
+    it('refuses an out-of-range target at construction', () => {
+      expect(() => gate({ volTarget: { ...volTarget, annualTargetVol: 0 } })).toThrow(/#1860/);
+    });
   });
 
   it('refuses every entry without a capital config in force but still approves exits', () => {

@@ -16,6 +16,7 @@ import {
   fencedMarket,
   runBacktest,
   type SleeveFactory,
+  volTargetIdentity,
 } from './backtest.js';
 import { capitalCeilingGbp } from './backtest-verdict.js';
 import { addDays, BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
@@ -702,5 +703,31 @@ describe('entryOffsetIdentity (#1815)', () => {
         run: { ...run, ...entryOffsetIdentity(ENTRY_LIMIT_OFFSET) },
       }),
     ).not.toBe(before);
+  });
+});
+
+describe('volTargetIdentity (#1860)', () => {
+  const run = { from: '2024-01-01', to: '2024-12-31' };
+  const sizing = { annualTargetVol: 0.15, windowBars: 20, sleeveIds: ['arm2'] };
+
+  it('leaves an unset vol target hashing as every trial recorded before #1860', () => {
+    expect(volTargetIdentity(undefined)).toEqual({});
+    expect(
+      trialHash('candidate', { lookback: 5, run: { ...run, ...volTargetIdentity(undefined) } }),
+    ).toBe(trialHash('candidate', { lookback: 5, run }));
+  });
+
+  it('makes each declared target, window and sleeve set a new trial', () => {
+    const shared = ledger();
+    const at = (volTarget: typeof sizing | undefined) =>
+      shared.record('candidate', { lookback: 5, run: { ...run, ...volTargetIdentity(volTarget) } });
+    expect([
+      at(undefined),
+      at(sizing),
+      at({ ...sizing, annualTargetVol: 0.1 }),
+      at({ ...sizing, windowBars: 60 }),
+      at({ ...sizing, sleeveIds: ['debate'] }),
+      at(sizing),
+    ]).toEqual([3, 4, 5, 6, 7, 4]);
   });
 });

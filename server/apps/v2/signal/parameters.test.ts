@@ -18,6 +18,7 @@ import {
   DEBATE_TIME_STOP_TRADING_DAYS,
   DECLARED_PARAMETERS,
   declaredCfdCosts,
+  declaredVolTarget,
   G18_SENTIMENT_DEDUP_RULE,
   G18_SMALL_CAP_FLOORS,
   G18_SOCIAL_SOURCE,
@@ -30,6 +31,7 @@ import {
   SAXO_APPROPRIATENESS_TEST_TAKEN,
   UNSET,
   UnsetParameterError,
+  VOL_TARGET_SIZING,
 } from './parameters.js';
 
 const CFD_GATE_PARAMETERS = [
@@ -65,6 +67,7 @@ describe('parameters', () => {
       LSE_LIQUIDITY_SCREEN,
       ...CFD_GATE_PARAMETERS,
       RECONCILE_CASH_TOLERANCE_GBP,
+      VOL_TARGET_SIZING,
     ]);
     expect(CYCLE_LEVEL_PARAMETERS).toEqual([
       G18_SOCIAL_SOURCE,
@@ -104,6 +107,15 @@ describe('parameters', () => {
     expect(DEBATE_TARGET_ATR_MULTIPLE).toBe(3);
     expect(DEBATE_TIME_STOP_TRADING_DAYS).toBe(10);
     expect(MOVERS_MIN_DOLLAR_VOLUME_USD).toBe(50_000_000);
+  });
+
+  it('vol-target sizing stays unset until David pre-declares the trial, and off the cycle journal (#1860)', () => {
+    expect(VOL_TARGET_SIZING.ticket).toBe('#1860');
+    expect(isSet(VOL_TARGET_SIZING)).toBe(false);
+    expect(declaredVolTarget()).toBeUndefined();
+    expect(CYCLE_LEVEL_PARAMETERS).not.toContain(VOL_TARGET_SIZING);
+    const sizing = { annualTargetVol: 0.15, windowBars: 20, sleeveIds: ['arm2'] };
+    expect(declaredVolTarget({ name: 'X', ticket: '#0', value: sizing })).toBe(sizing);
   });
 
   it('requireSet throws naming the parameter and ticket', () => {
