@@ -53,6 +53,7 @@ export { heldKey, ParquetMarkSource } from './marks.js';
 export type { NewsSource } from './news.js';
 export { AlpacaNewsSource, NO_NEWS, newsFailureReason, newsForVenue } from './news.js';
 export { SqliteNewsLedger } from './news-ledger.js';
+export { realisedVolatility } from './realised-vol.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
 export { CLOSED_VENUE_ROUTER, createVenueRouter } from './venue-routes.js';
 export type { SitOutCode, VenueSessionGate } from './venue-sessions.js';

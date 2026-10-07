@@ -23,11 +23,17 @@ import { entryLimitFor, entryOffsetBps, offsetRefusal } from './entry-limit.js';
 import { entryRoomRefusal, grossRoomGbp } from './gross-cap.js';
 import { sizeMultiplierFor } from './loss-budget.js';
 import { CFD_SHORT_GAP_BUDGET_FRACTION, positionSizeShares } from './position-size.js';
+import {
+  assertVolTargetSizing,
+  type VolTargetSizing,
+  volTargetBarsWanted,
+  volTargetRiskScale,
+} from './vol-target.js';
 import { averageDailyNotional, volumeCapShares } from './volume-cap.js';
 
 interface Sizing {
   readonly size: number;
-  readonly refusal?: 'no_allocation' | 'no_adv';
+  readonly refusal?: 'no_allocation' | 'no_adv' | 'no_realised_vol';
 }
 
 function bracketRefusal(
@@ -104,10 +110,13 @@ export interface RiskGateDeps {
   readonly market: MarketData;
   readonly spec: (sleeveId: string) => SleeveSpec;
   readonly venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
+  readonly volTarget?: VolTargetSizing | undefined;
 }
 
 export class V2RiskGate implements RiskGate {
-  constructor(private readonly deps: RiskGateDeps) {}
+  constructor(private readonly deps: RiskGateDeps) {
+    if (deps.volTarget !== undefined) assertVolTargetSizing(deps.volTarget);
+  }
 
   capitalRefusal(tradingDate: string): string | undefined {
     if (this.deps.capital.inForce(tradingDate) !== undefined) return undefined;
@@ -254,10 +263,12 @@ export class V2RiskGate implements RiskGate {
     const limit = entryLimitFor(sideOf(decision), decision);
     const volumeCap = this.#volumeCap(decision.instrument, limit, spec, tradingDate);
     if (volumeCap === undefined) return { size: 0, refusal: 'no_adv' };
+    const volScale = this.#volScale(book.sleeve, decision.instrument, tradingDate);
+    if (volScale === undefined) return { size: 0, refusal: 'no_realised_vol' };
     const fx = quotePerGbp(this.deps.market, decision.venue, tradingDate);
     const size = positionSizeShares({
       equityGbp: request.equityGbp,
-      riskFraction: spec.sizing.riskFraction,
+      riskFraction: spec.sizing.riskFraction * volScale,
       priceGbp: limit / fx,
       atrGbp: (decision.atr ?? 0) / fx,
       stopAtrMultiple: spec.sizing.stopAtrMultiple,
@@ -268,6 +279,13 @@ export class V2RiskGate implements RiskGate {
       entryToStopGbp: entryToStop(limit, decision.stop_price) / fx,
     });
     return { size };
+  }
+
+  #volScale(sleeveId: string, instrument: string, tradingDate: string): number | undefined {
+    const sizing = this.deps.volTarget;
+    if (sizing === undefined || !sizing.sleeveIds.includes(sleeveId)) return 1;
+    const bars = this.deps.market.barsBefore(instrument, tradingDate, volTargetBarsWanted(sizing));
+    return volTargetRiskScale(sizing, bars, tradingDate);
   }
 
   #volumeCap(

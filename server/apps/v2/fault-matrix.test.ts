@@ -412,10 +412,6 @@ async function holdAapl(subject: Drill): Promise<void> {
   await subject.run('2026-09-29');
 }
 
-function events(subject: Drill, event: string): LogEntry[] {
-  return subject.logs.filter((entry) => entry.event === event);
-}
-
 describe('Step 4b fault matrix (#1747)', () => {
   it('baseline: a held position has one bracket, its stop resting, a clean reconcile and no fault', async () => {
     const subject = drill();
@@ -583,31 +579,64 @@ describe('Step 4b fault matrix (#1747)', () => {
     expect(subject.reconciles('2026-09-28')).toEqual(['clean', 'clean']);
   });
 
-  // Nothing adopts the broker quantity (#1872): the orphan stays guarded by its own bracket stop
-  // while every entry on the venue is refused and the mismatch is ledgered each run
-  it('crash mid-order (before the journal): the broker holds an order the store never wrote; entries stop, the stop rests, nothing is flattened', async () => {
+  // David 2026-10-04 (#1747): the entry is journalled pending before it is sent, so a crash
+  // between the send and its outcome leaves an id the next run finds at the venue
+  it('crash mid-order (after the send): the retry finds the pending entry at the broker, reconciles clean and books its fill', async () => {
     const subject = drill();
     subject.decisions = [longEntry('AAPL')];
-    vi.spyOn(subject.cycle.journal, 'recordOrder').mockImplementationOnce(() => {
+    vi.spyOn(subject.cycle.journal, 'settleOrder').mockImplementationOnce(() => {
       throw new Error('SIGKILL');
     });
     await expect(subject.run('2026-09-28')).rejects.toThrow('SIGKILL');
-    subject.restart();
-    await subject.run('2026-09-28', '2026-09-28T07:00:00.000Z');
     expect(subject.broker.bracketsFor('AAPL')).toBe(1);
-    expect(subject.cycle.journal.orderFor(AAPL_ENTRY)).toBeUndefined();
-    expect(subject.reconciles('2026-09-28')).toEqual(['clean', 'mismatch']);
+    expect(subject.cycle.journal.orderFor(AAPL_ENTRY)?.outcome).toBe('pending');
+    subject.restart();
+    const retry = await subject.run('2026-09-28', '2026-09-28T07:00:00.000Z');
+    expect(retry).toMatchObject({ skipped: false, submitted_orders: 0 });
+    expect(subject.broker.bracketsFor('AAPL')).toBe(1);
+    expect(subject.cycle.journal.orderFor(AAPL_ENTRY)).toMatchObject({
+      outcome: 'submitted',
+      payload: { detail: 'submitted', resolved: '2026-09-28', approval: expect.any(String) },
+    });
+    expect(subject.reconciles('2026-09-28')).toEqual(['clean', 'clean']);
+    expect(subject.faultKinds('2026-09-28')).toEqual([
+      ['stuck_order', 'v2_pending_order_resolved'],
+    ]);
     subject.broker.fillEntry(AAPL_ENTRY, 20, subject.clock.now());
     subject.decisions = [longEntry('MSFT')];
     await subject.run('2026-09-29');
-    expect(subject.broker.bracketsFor('MSFT')).toBe(0);
-    expect(subject.reconciles('2026-09-29')).toEqual(['mismatch']);
-    expect(subject.faultKinds('2026-09-29')).toEqual([['reconcile_mismatch', 'BROKER_RECONCILE']]);
-    expect(events(subject, 'v2_reconcile_mismatch').at(-1)).toMatchObject({
-      message: expect.stringContaining('position_missing_in_store AAPL store 0 broker 6'),
-    });
+    expect(subject.cycle.books.position('debate/primary', 'AAPL')?.qty).toBe(6);
+    expect(subject.reconciles('2026-09-29')).toEqual(['clean']);
+    expect(subject.broker.bracketsFor('MSFT')).toBe(1);
     expect(subject.broker.restingStop(AAPL_ENTRY)).toBe('19.20');
-    expect(subject.broker.orders.filter((order) => order.type === 'market')).toEqual([]);
+    expect(subject.faultKinds('2026-09-29')).toEqual([]);
+  });
+
+  it('crash mid-order (before the send): the pending entry the broker never saw resolves rejected, a missed entry with no position', async () => {
+    const subject = drill();
+    subject.decisions = [longEntry('AAPL')];
+    const cash = subject.cycle.books.cash('debate/primary');
+    vi.spyOn(subject.cycle.executor, 'submit').mockRejectedValueOnce(new Error('SIGKILL'));
+    await expect(subject.run('2026-09-28')).rejects.toThrow('SIGKILL');
+    expect(subject.cycle.journal.orderFor(AAPL_ENTRY)?.outcome).toBe('pending');
+    subject.restart();
+    const retry = await subject.run('2026-09-28', '2026-09-28T07:00:00.000Z');
+    expect(retry).toMatchObject({ skipped: false, submitted_orders: 0 });
+    expect(subject.broker.orders).toEqual([]);
+    expect(subject.cycle.journal.orderFor(AAPL_ENTRY)).toMatchObject({
+      outcome: 'rejected',
+      payload: { detail: expect.stringMatching(/^not_sent: /), resolved: '2026-09-28' },
+    });
+    expect(subject.cycle.journal.restingEntries('debate/primary')).toEqual([]);
+    expect(subject.reconciles('2026-09-28')).toEqual(['clean', 'clean']);
+    expect(subject.faultKinds('2026-09-28')).toEqual([
+      ['stuck_order', 'v2_pending_order_resolved'],
+    ]);
+    expect(subject.cycle.books.position('debate/primary', 'AAPL')).toBeUndefined();
+    expect(subject.cycle.books.cash('debate/primary')).toBe(cash);
+    await subject.run('2026-09-29');
+    expect(subject.broker.bracketsFor('AAPL')).toBe(1);
+    expect(subject.reconciles('2026-09-29')).toEqual(['clean']);
   });
 
   it('restart with an open position: a fresh process reconciles clean, leaves the stop resting and books its later fill', async () => {
