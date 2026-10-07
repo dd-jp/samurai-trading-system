@@ -174,8 +174,7 @@ describe('AlpacaBrokerBooks', () => {
   });
 });
 
-// The wire shape Alpaca paper returned for CRL on 2026-10-07 (#2086): the bracket parent filled, its
-// take-profit leg `new` and listed open, its stop leg `held` and left out of `status=open`
+// The wire shape Alpaca paper returned for CRL on 2026-10-07 (#2086)
 function crlLeg(type: 'limit' | 'stop', overrides: Record<string, unknown> = {}) {
   return {
     id: type === 'stop' ? 'leg-4df6' : 'leg-5639',
@@ -279,13 +278,26 @@ describe('AlpacaBrokerBooks held stop legs (#2086)', () => {
   });
 
   it('fails the read when the history fills its page, since a held stop past it would go unread', async () => {
-    const history = Array.from({ length: ALPACA_ORDER_HISTORY_LIMIT }, () => crlBracket());
+    const history = Array.from({ length: ALPACA_ORDER_HISTORY_LIMIT }, () => crlBracket({}, []));
     await expect(
       new AlpacaBrokerBooks(client({ positions: HELD_CRL, history })).read('alpaca'),
     ).rejects.toThrow(
       `Alpaca order history for CRL filled its ${ALPACA_ORDER_HISTORY_LIMIT}-order page`,
     );
   });
+
+  it.each([
+    [Math.floor(ALPACA_ORDER_HISTORY_LIMIT / 3), 'reads'],
+    [Math.ceil(ALPACA_ORDER_HISTORY_LIMIT / 3), 'fails the read'],
+  ])(
+    'counts each bracket leg against the page: %i brackets of three orders %s',
+    async (brackets, outcome) => {
+      const history = Array.from({ length: brackets }, () => crlBracket());
+      const read = new AlpacaBrokerBooks(client({ positions: HELD_CRL, history })).read('alpaca');
+      if (outcome === 'reads') await expect(read).resolves.toBeDefined();
+      else await expect(read).rejects.toThrow('filled its');
+    },
+  );
 
   it.each([
     [

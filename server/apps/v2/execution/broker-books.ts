@@ -94,6 +94,12 @@ function heldStopLegs(parent: AlpacaOrder): AlpacaOrder[] {
     .map((leg) => legAsOrder(parent, leg));
 }
 
+// Measured on Alpaca paper 2026-10-07 (#2086): with `nested=true` the limit counts legs as well as
+// parents, and a page it cuts short lists a leg whose parent fell outside it as an order of its own
+function flatOrderCount(history: readonly AlpacaOrder[]): number {
+  return history.reduce((count, order) => count + 1 + (order.legs?.length ?? 0), 0);
+}
+
 export class AlpacaBrokerBooks implements BrokerBookReader {
   constructor(private readonly client: AlpacaBrokerClient) {}
 
@@ -120,7 +126,7 @@ export class AlpacaBrokerBooks implements BrokerBookReader {
   ): Promise<AlpacaOrder[]> {
     if (symbols.length === 0) return [];
     const history = await this.client.listOrderHistory(symbols);
-    if (history.length >= ALPACA_ORDER_HISTORY_LIMIT) {
+    if (flatOrderCount(history) >= ALPACA_ORDER_HISTORY_LIMIT) {
       throw new Error(
         `Alpaca order history for ${symbols.join(',')} filled its ${ALPACA_ORDER_HISTORY_LIMIT}-order page: a held stop past it would go unread`,
       );

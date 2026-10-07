@@ -28,8 +28,7 @@ import { type LeaseWait, RunLease, withRunLease } from './run-lease.js';
 
 const FX = 1.25;
 const OPEN = new Set(['new', 'accepted', 'held', 'partially_filled']);
-// Measured on Alpaca paper 2026-10-07 (#2086): `status=open` leaves out `held` orders, and a filled
-// bracket's stop leg stays `held` while its take-profit goes `new`
+// The open listing and filled-bracket legs as measured in #2086
 const LISTED_OPEN = new Set(['new', 'accepted', 'partially_filled']);
 
 const SPEC: SleeveSpec = {

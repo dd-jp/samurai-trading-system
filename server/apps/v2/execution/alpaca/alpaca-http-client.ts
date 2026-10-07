@@ -216,7 +216,7 @@ function cashActivitiesValidator(
 }
 
 export const ALPACA_ACTIVITY_PAGE_SIZE = 100;
-// Alpaca's ceiling on one order-list page
+// Alpaca's GET /v2/orders reference: limit "defaults to 50 and max is 500"
 export const ALPACA_ORDER_HISTORY_LIMIT = 500;
 
 export type AlpacaTradingEnvironment = 'paper' | 'live';
