@@ -322,6 +322,48 @@ describe('runBacktest', { timeout: 120_000 }, () => {
     expect(rows[0]?.recorded_at).toBe('2026-10-07T00:00:00.000Z');
   });
 
+  it('runs seeded random entries matched to the walk-forward trades through the same harness and logs each run and the band', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const shared = new TrialLedger(db, clock, SESSION_B);
+    const log = new CanaryLog(db, clock);
+    const run = input({ ledger: shared, randomCanary: { log, runs: 3 } });
+    const result = await runBacktest(run);
+    const again = await runBacktest(run);
+    const plain = await runBacktest(input({ ledger: shared }));
+    expect(shared.count()).toBe(4);
+    expect(result.trials).toEqual(plain.trials);
+    expect(result.verdict.deflatedSharpe).toBe(plain.verdict.deflatedSharpe);
+    expect(plain.verdict.randomEntries).toBeNull();
+    const random = result.verdict.randomEntries;
+    expect(random?.runs).toBe(3);
+    expect(random?.edges).toEqual(again.verdict.randomEntries?.edges);
+    expect(new Set(random?.edges).size).toBe(3);
+    expect(random?.edge).toBe(
+      result.verdict.walkForward.strategySharpe - result.verdict.walkForward.benchmarkSharpe,
+    );
+    expect(result.verdict.checks.beatsRandomEntries).toBe(random?.beats);
+    const rows = log.list().slice(0, 4);
+    expect(rows.map((row) => [row.kind, row.seed])).toEqual([
+      ['random', 1],
+      ['random', 2],
+      ['random', 3],
+      ['random_band', null],
+    ]);
+    const results = rows.map((row) => JSON.parse(row.result));
+    const { edges: _edges, ...band } = random as NonNullable<typeof random>;
+    expect(results[3]).toEqual(band);
+    for (const [index, row] of results.slice(0, 3).entries()) {
+      expect(row.seed).toBe(index + 1);
+      expect(row.edge).toBe(random?.edges[index]);
+      expect(row.matched).toBeGreaterThan(0);
+      expect(row.scheduled).toBe(row.matched);
+      expect(row.traded).toBe(row.matched);
+      expect(row.matchedSessions).toBeGreaterThan(row.matched);
+      expect(row.heldSessions).toBe(row.matchedSessions);
+    }
+  });
+
   it('refuses a shift canary that does not delay every trial', async () => {
     const db = migratedMemoryStore();
     const log = new CanaryLog(db, new SimulatedClock(new Date('2026-10-07T00:00:00Z')));

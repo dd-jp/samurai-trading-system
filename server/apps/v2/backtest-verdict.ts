@@ -24,6 +24,8 @@ import {
 const SHARPE_HAIRCUT_MULTIPLIER = 0.6;
 const MIN_DEFLATED_SHARPE = 0.95;
 export const CAPITAL_CEILING_DRAWDOWN_MULTIPLE = 1.5;
+// David, 2026-10-08 on #1747 (ruling 1): above the 95th percentile of the random-entry runs
+export const RANDOM_BAND_QUANTILE = 0.95;
 
 export interface BookSeries {
   readonly equity: readonly number[];
@@ -43,6 +45,7 @@ export interface VerdictInput {
   readonly folds?: number | undefined;
   readonly embargo?: number | undefined;
   readonly delayed?: readonly BookSeries[] | undefined;
+  readonly random?: readonly BookSeries[] | undefined;
 }
 
 interface WalkForward {
@@ -67,6 +70,14 @@ export interface OneBarDelay {
   readonly survives: boolean;
 }
 
+export interface RandomEntries {
+  readonly runs: number;
+  readonly edge: number;
+  readonly band: number;
+  readonly edges: readonly number[];
+  readonly beats: boolean;
+}
+
 export interface BacktestVerdict {
   readonly from: string;
   readonly to: string;
@@ -88,10 +99,12 @@ export interface BacktestVerdict {
   readonly capitalCeilingGbp: number;
   readonly regimeSplit: RegimeSplit;
   readonly oneBarDelay: OneBarDelay | null;
+  readonly randomEntries: RandomEntries | null;
   readonly checks: {
     readonly beatsBenchmarkAfterHaircut: boolean;
     readonly beatsBenchmarkWithAnyPeriodRemoved: boolean;
     readonly survivesOneBarDelay: boolean;
+    readonly beatsRandomEntries: boolean;
     readonly deflatedSharpeAtLeast095: boolean;
     readonly pboAtMost010: boolean;
   };
@@ -118,6 +131,12 @@ function assertCoversDates(series: readonly BookSeries[], length: number): void 
   }
 }
 
+function assertRandomRuns(random: readonly BookSeries[] | undefined, length: number): void {
+  if (random === undefined) return;
+  if (random.length === 0) throw new Error('backtestVerdict: the random canary has no runs');
+  assertCoversDates(random, length);
+}
+
 function assertAligned(input: VerdictInput): void {
   if (input.trials.length < 2) throw new Error('backtestVerdict: PBO needs at least 2 trials');
   const delayed = input.delayed ?? input.trials;
@@ -125,6 +144,7 @@ function assertAligned(input: VerdictInput): void {
     throw new Error('backtestVerdict: the delayed run must carry every trial');
   }
   assertCoversDates([...input.trials, ...delayed, input.benchmark], input.dates.length);
+  assertRandomRuns(input.random, input.dates.length);
   if (input.trialsCounted < input.trials.length) {
     throw new Error('backtestVerdict: the trial counter is below the trials in this run');
   }
@@ -178,6 +198,38 @@ function oneBarDelay(input: VerdictInput, ranges: readonly FoldRange[]): OneBarD
   };
 }
 
+// Linear interpolation between order statistics (Hyndman and Fan type 7)
+function quantile(values: readonly number[], q: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const position = (sorted.length - 1) * q;
+  const below = Math.floor(position);
+  const lower = sorted[below] as number;
+  const upper = sorted[Math.min(below + 1, sorted.length - 1)] as number;
+  return lower + (upper - lower) * (position - below);
+}
+
+// David, 2026-10-08 on #1747 (rulings 1 and 2): the edge is walk-forward Sharpe minus the
+// benchmark's over the same days, and the candidate must sit above the random runs' band
+function randomEntries(input: VerdictInput, forward: WalkForward): RandomEntries | null {
+  if (input.random === undefined) return null;
+  const edges = input.random.map(
+    (series) =>
+      annualisedSharpe(sliceByRanges(series.returns, forward.path.testRanges)) -
+      forward.benchmarkSharpe,
+  );
+  const band = quantile(edges, RANDOM_BAND_QUANTILE);
+  const edge = forward.strategySharpe - forward.benchmarkSharpe;
+  return { runs: edges.length, edge, band, edges, beats: edge > band };
+}
+
+export function walkForwardRanges(
+  length: number,
+  folds: number | undefined,
+  embargo: number | undefined,
+): FoldRange[] {
+  return foldRanges(length, folds ?? WALK_FORWARD_FOLDS, embargo ?? 0);
+}
+
 function trialNumbers(input: VerdictInput, path: WalkForwardPath): number[] {
   return path.selectedByFold.map((index) => (input.trials[index] as TrialSeries).trial);
 }
@@ -189,11 +241,7 @@ export function capitalCeilingGbp(lossCapGbp: number, drawdown: number): number 
 export function backtestVerdict(input: VerdictInput): BacktestVerdict {
   assertAligned(input);
   const returns = input.trials.map((series) => series.returns);
-  const ranges = foldRanges(
-    input.dates.length,
-    input.folds ?? WALK_FORWARD_FOLDS,
-    input.embargo ?? 0,
-  );
+  const ranges = walkForwardRanges(input.dates.length, input.folds, input.embargo);
   const matrix = foldSharpeMatrix(returns, ranges);
   const trials = input.trials.map((series, index) => ({
     trial: series.trial,
@@ -207,6 +255,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
   const haircut = forward.strategySharpeHaircut;
   const walkForwardBenchmark = forward.benchmarkSharpe;
   const delay = oneBarDelay(input, ranges);
+  const random = randomEntries(input, forward);
   const dsr = deflate(selected.returns, input.trialsCounted);
   const probability = pbo(matrix).pbo;
   const drawdown = maxDrawdown(selected.equity);
@@ -221,6 +270,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     beatsBenchmarkAfterHaircut: haircut > walkForwardBenchmark,
     beatsBenchmarkWithAnyPeriodRemoved: regimes.beatsBenchmarkWithAnyPeriodRemoved,
     survivesOneBarDelay: delay?.survives === true,
+    beatsRandomEntries: random?.beats === true,
     deflatedSharpeAtLeast095: dsr >= MIN_DEFLATED_SHARPE,
     pboAtMost010: probability <= PBO_REJECT_THRESHOLD,
   };
@@ -245,6 +295,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     capitalCeilingGbp: capitalCeilingGbp(input.lossCapGbp, drawdown),
     regimeSplit: regimes,
     oneBarDelay: delay,
+    randomEntries: random,
     checks,
     pass: Object.values(checks).every(Boolean),
   };

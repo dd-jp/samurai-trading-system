@@ -12,7 +12,7 @@ import {
   backtestSessions,
   runBacktest,
 } from './backtest.js';
-import type { OneBarDelay } from './backtest-verdict.js';
+import type { OneBarDelay, RandomEntries } from './backtest-verdict.js';
 import { CanaryLog } from './canary-log.js';
 import {
   BarsMarketData,
@@ -91,6 +91,7 @@ export interface CandidateRunReport {
   readonly signFlipped: boolean;
   readonly regimeSplit: RegimeSplit;
   readonly oneBarDelay: OneBarDelay | null;
+  readonly randomEntries: RandomEntries | null;
   readonly dataSanity: DataSanityReport;
 }
 export type CrossAssetTrendRunReport = CandidateRunReport;
@@ -154,6 +155,7 @@ interface CandidateRunSpec {
 export interface ResearchLogs {
   readonly ledger: TrialLedger;
   readonly canaries: CanaryLog;
+  readonly randomCanaryRuns?: number | undefined;
 }
 
 async function runCandidateAgainst(
@@ -161,7 +163,7 @@ async function runCandidateAgainst(
   market: MarketData,
   bars: BarsSource,
   halfSpreadBps: (instrument: string) => number,
-  { ledger, canaries }: ResearchLogs,
+  { ledger, canaries, randomCanaryRuns }: ResearchLogs,
   logger: Logger,
 ): Promise<CandidateRunReport> {
   const input = (costMultiple: number): BacktestInput => ({
@@ -184,6 +186,7 @@ async function runCandidateAgainst(
   const baseline = await runBacktest({
     ...input(1),
     shiftCanary: { trials: spec.trials(delayedBars(bars)).map(delayedTrial), log: canaries },
+    randomCanary: { log: canaries, runs: randomCanaryRuns },
   });
   const stressed = await runBacktest(input(COST_STRESS_MULTIPLE));
   const start = new Date(`${spec.window.from}T00:00:00.000Z`);
@@ -206,6 +209,7 @@ async function runCandidateAgainst(
       stressed.verdict.checks.beatsBenchmarkAfterHaircut,
     regimeSplit: baseline.verdict.regimeSplit,
     oneBarDelay: baseline.verdict.oneBarDelay,
+    randomEntries: baseline.verdict.randomEntries,
     dataSanity: dataSanity(bars, spec.symbolsOn, sessions),
   };
 }

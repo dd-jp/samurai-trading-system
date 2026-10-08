@@ -1,4 +1,5 @@
 export { createArm2Sleeve } from './arm2-sleeve.js';
+export { baseRead } from './bar-quality.js';
 export {
   CROSS_ASSET_TREND_CANDIDATE_ID,
   CROSS_ASSET_TREND_FROM,

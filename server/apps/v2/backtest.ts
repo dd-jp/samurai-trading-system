@@ -4,15 +4,35 @@ import type {
   Sleeve,
   SleeveContext,
   SleeveDecision,
+  SleeveSpec,
 } from '../../../contracts/index.js';
 import type { Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
-import { type BacktestVerdict, type BookSeries, backtestVerdict } from './backtest-verdict.js';
+import {
+  type BacktestVerdict,
+  type BookSeries,
+  backtestVerdict,
+  walkForwardRanges,
+} from './backtest-verdict.js';
 import type { CanaryLog } from './canary-log.js';
 import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import { addDays, CALENDAR_REFERENCE } from './data/index.js';
+import { walkForwardPath } from './evidence/index.js';
+import {
+  bookTrades,
+  matchedSessions,
+  matchedTrades,
+  RANDOM_CANARY_FIRST_SEED,
+  RANDOM_CANARY_RUNS,
+  randomEntrySleeve,
+  randomScheduler,
+  type ScheduledTrade,
+  type ScheduleInput,
+  sessionsHeld,
+  type Trade,
+} from './random-canary.js';
 import {
   CapitalConfigStore,
   ENTRY_LIMIT_OFFSET,
@@ -33,6 +53,11 @@ export interface BacktestTrial {
 export interface ShiftCanaryInput {
   readonly trials: readonly BacktestTrial[];
   readonly log: CanaryLog;
+}
+
+export interface RandomCanaryInput {
+  readonly log: CanaryLog;
+  readonly runs?: number | undefined;
 }
 
 export interface BacktestInput {
@@ -58,6 +83,7 @@ export interface BacktestInput {
   readonly costMultiple?: number | undefined;
   // The input's trials, in their order, one bar later (doc 66, 2026-10-07 rulings on #1747)
   readonly shiftCanary?: ShiftCanaryInput | undefined;
+  readonly randomCanary?: RandomCanaryInput | undefined;
 }
 
 export interface BacktestResult {
@@ -290,6 +316,7 @@ function fenced(input: BacktestInput): Fenced {
 interface Simulation {
   readonly opening: CapitalYear;
   readonly marks: readonly (readonly number[])[];
+  readonly trades: readonly (readonly Trade[])[];
 }
 
 async function simulate(
@@ -320,7 +347,9 @@ async function simulate(
       halfSpreadBps: input.halfSpreadBps,
       costMultiple: input.costMultiple,
     });
-    return { opening, marks: await replay(cycle, clock, sleeves, dates, today) };
+    const marks = await replay(cycle, clock, sleeves, dates, today);
+    const books = sleeves.map((sleeve) => `${sleeve.id}/primary`);
+    return { opening, marks, trades: bookTrades(db, books, dates) };
   } finally {
     db.close();
   }
@@ -352,20 +381,140 @@ function assertShiftCoversTrials(input: BacktestInput): void {
   }
 }
 
-function logShift(
-  input: BacktestInput,
-  configs: readonly TrialConfig[],
-  verdict: BacktestVerdict,
-): void {
+function candidateHash(input: BacktestInput, configs: readonly TrialConfig[]): string {
+  return trialHash(input.candidate, {
+    trials: configs.map((config) => trialHash(input.candidate, config)),
+  });
+}
+
+function logShift(input: BacktestInput, hash: string, verdict: BacktestVerdict): void {
   input.shiftCanary?.log.record({
     candidate: input.candidate,
-    candidateHash: trialHash(input.candidate, {
-      trials: configs.map((config) => trialHash(input.candidate, config)),
-    }),
+    candidateHash: hash,
     kind: 'shift',
     seed: undefined,
     result: { ...verdict.oneBarDelay },
   });
+}
+
+interface CandidateRun {
+  readonly dates: readonly string[];
+  readonly sleeves: readonly Sleeve[];
+  readonly books: readonly BookSeries[];
+  readonly trades: readonly (readonly Trade[])[];
+}
+
+interface RandomRun {
+  readonly seed: number;
+  readonly scheduled: number;
+  readonly traded: number;
+  readonly heldSessions: number;
+}
+
+interface RandomCanaryRuns {
+  readonly matched: number;
+  readonly matchedSessions: number;
+  readonly runs: readonly RandomRun[];
+  readonly series: readonly BookSeries[];
+}
+
+function mostSelected(selectedByFold: readonly number[]): number {
+  const counts = new Map<number, number>();
+  for (const trial of selectedByFold) counts.set(trial, (counts.get(trial) ?? 0) + 1);
+  return [...counts].reduce((best, entry) => (entry[1] > best[1] ? entry : best))[0];
+}
+
+interface RandomPlan {
+  readonly schedule: ScheduleInput;
+  readonly spec: SleeveSpec;
+}
+
+// Awaiting David (#1747): the random sleeve sizes with the spec of the trial the walk-forward
+// path selects most often, ties to the earliest selected
+function randomPlan(input: BacktestInput, run: CandidateRun): RandomPlan {
+  const path = walkForwardPath(
+    run.books.map((book) => book.returns),
+    walkForwardRanges(run.dates.length, input.folds, input.embargo),
+  );
+  const universe = (trial: number, tradingDate: string) =>
+    (run.sleeves[trial] as Sleeve).universe({ tradingDate, macroDay: false, dryRun: true })
+      .instruments;
+  return {
+    schedule: {
+      matched: matchedTrades(path, run.trades),
+      dates: run.dates,
+      market: input.market,
+      universe,
+    },
+    spec: (run.sleeves[mostSelected(path.selectedByFold)] as Sleeve).spec,
+  };
+}
+
+async function randomCanaryRuns(
+  input: BacktestInput,
+  canary: RandomCanaryInput,
+  run: CandidateRun,
+): Promise<RandomCanaryRuns> {
+  const { schedule, spec } = randomPlan(input, run);
+  const seeds = Array.from(
+    { length: canary.runs ?? RANDOM_CANARY_RUNS },
+    (_, index) => RANDOM_CANARY_FIRST_SEED + index,
+  );
+  const schedules = seeds.map(randomScheduler(schedule));
+  const view = fenced(input);
+  const sleeves = seeds.map((seed, index) =>
+    randomEntrySleeve(
+      {
+        id: `${input.candidate}-random-${seed}`,
+        spec,
+        schedule: schedules[index] as readonly ScheduledTrade[],
+        dates: run.dates,
+      },
+      view.market,
+    ),
+  );
+  const simulation = await simulate(input, sleeves, view.today, run.dates);
+  return {
+    matched: schedule.matched.length,
+    matchedSessions: matchedSessions(schedule.matched),
+    runs: seeds.map((seed, index) => {
+      const traded = simulation.trades[index] as readonly Trade[];
+      return {
+        seed,
+        scheduled: (schedules[index] as readonly ScheduledTrade[]).length,
+        traded: traded.length,
+        heldSessions: sessionsHeld(traded),
+      };
+    }),
+    series: seriesOf(simulation, sleeves),
+  };
+}
+
+function logRandom(
+  input: BacktestInput,
+  hash: string,
+  random: RandomCanaryRuns | undefined,
+  verdict: BacktestVerdict,
+): void {
+  const entries = verdict.randomEntries;
+  const log = input.randomCanary?.log;
+  if (log === undefined || random === undefined || entries === null) return;
+  const row = { candidate: input.candidate, candidateHash: hash };
+  random.runs.forEach((run, index) => {
+    log.record({
+      ...row,
+      kind: 'random',
+      seed: run.seed,
+      result: {
+        ...run,
+        matched: random.matched,
+        matchedSessions: random.matchedSessions,
+        edge: entries.edges[index],
+      },
+    });
+  });
+  const { edges: _edges, ...band } = entries;
+  log.record({ ...row, kind: 'random_band', seed: undefined, result: { ...band } });
 }
 
 export async function runBacktest(input: BacktestInput): Promise<BacktestResult> {
@@ -385,13 +534,23 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
   );
   const configs = trialConfigs(input, trialSleeves, benchmarkSleeve);
   const trialNumbers = configs.map((config) => input.ledger.record(input.candidate, config));
-  const books = seriesOf(await simulate(input, sleeves, view.today, dates), sleeves);
+  const simulation = await simulate(input, sleeves, view.today, dates);
+  const books = seriesOf(simulation, sleeves);
   const trials = trialSleeves.map((sleeve, index) => ({
     trial: trialNumbers[index] as number,
     sleeve: sleeve.id,
     ...(books[index] as BookSeries),
   }));
   const benchmark = books[trialSleeves.length] as BookSeries;
+  const random =
+    input.randomCanary === undefined
+      ? undefined
+      : await randomCanaryRuns(input, input.randomCanary, {
+          dates,
+          sleeves: trialSleeves,
+          books: books.slice(0, trialSleeves.length),
+          trades: simulation.trades,
+        });
   const verdict = backtestVerdict({
     dates,
     trials,
@@ -401,7 +560,10 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
     folds: input.folds,
     embargo: input.embargo,
     delayed: canary === undefined ? undefined : await delayedSeries(input, canary, dates),
+    random: random?.series,
   });
-  logShift(input, configs, verdict);
+  const hash = candidateHash(input, configs);
+  logShift(input, hash, verdict);
+  logRandom(input, hash, random, verdict);
   return { dates, trials, benchmark, verdict };
 }
