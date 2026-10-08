@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { compareVenue } from '../reconcile-compare.js';
 import type { AlpacaBrokerClient } from './alpaca/alpaca-client.js';
-import { ALPACA_ORDER_HISTORY_LIMIT } from './alpaca/alpaca-http-client.js';
+import { ALPACA_ORDER_MAX_PAGES, ALPACA_ORDER_PAGE_LIMIT } from './alpaca/alpaca-client.js';
+import { AlpacaHttpBrokerClient } from './alpaca/alpaca-http-client.js';
 import { AlpacaBrokerBooks, NO_BROKER_BOOKS } from './broker-books.js';
 
 function client(overrides: {
@@ -301,28 +302,6 @@ describe('AlpacaBrokerBooks held stop legs (#2086)', () => {
     expect(fake.listOrderHistory).not.toHaveBeenCalled();
   });
 
-  it('fails the read when the history fills its page, since a held stop past it would go unread', async () => {
-    const history = Array.from({ length: ALPACA_ORDER_HISTORY_LIMIT }, () => crlBracket({}, []));
-    await expect(
-      new AlpacaBrokerBooks(client({ positions: HELD_CRL, history })).read('alpaca'),
-    ).rejects.toThrow(
-      `Alpaca order history for CRL filled its ${ALPACA_ORDER_HISTORY_LIMIT}-order page`,
-    );
-  });
-
-  it.each([
-    [Math.floor(ALPACA_ORDER_HISTORY_LIMIT / 3), 'reads'],
-    [Math.ceil(ALPACA_ORDER_HISTORY_LIMIT / 3), 'fails the read'],
-  ])(
-    'counts each bracket leg against the page: %i brackets of three orders %s',
-    async (brackets, outcome) => {
-      const history = Array.from({ length: brackets }, () => crlBracket());
-      const read = new AlpacaBrokerBooks(client({ positions: HELD_CRL, history })).read('alpaca');
-      if (outcome === 'reads') await expect(read).resolves.toBeDefined();
-      else await expect(read).rejects.toThrow('filled its');
-    },
-  );
-
   it.each([
     [
       'no side',
@@ -343,6 +322,62 @@ describe('AlpacaBrokerBooks held stop legs (#2086)', () => {
       'alpaca',
     );
     expect(book.openOrders).toEqual([{ ...CRL_STOP, clientOrderId: 'leg-4df6' }]);
+  });
+});
+
+describe('AlpacaBrokerBooks over the HTTP client past 500 lifetime orders (#2089)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const filledEntries = (count: number, from: number) =>
+    Array.from({ length: count }, (_, index) =>
+      crlBracket({ id: `old-${from + index}`, client_order_id: `old-${from + index}` }, []),
+    );
+
+  function venue(historyPages: unknown[][]) {
+    const historyCursors: (string | null)[] = [];
+    const history = (searchParams: URLSearchParams): unknown => {
+      if (searchParams.get('status') === 'open') return [];
+      historyCursors.push(searchParams.get('before_order_id'));
+      return historyPages[historyCursors.length - 1] ?? [];
+    };
+    const routes: Record<string, (searchParams: URLSearchParams) => unknown> = {
+      '/v2/positions': () => HELD_CRL.map((p) => ({ ...p, avg_entry_price: '1' })),
+      '/v2/account': () => ({ cash: '1000', equity: '1000' }),
+      '/v2/orders': history,
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      const { pathname, searchParams } = new URL(url);
+      const body = routes[pathname]?.(searchParams);
+      return { ok: true, status: 200, json: async () => body } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const books = new AlpacaBrokerBooks(
+      new AlpacaHttpBrokerClient({ apiKey: 'test-fake-key', apiSecret: 'test-fake-secret' }),
+    );
+    return { books, historyCursors };
+  }
+
+  it('finds the held stop of a bracket that sits past the first 500 orders', async () => {
+    const { books, historyCursors } = venue([
+      filledEntries(ALPACA_ORDER_PAGE_LIMIT, 0),
+      [crlBracket()],
+    ]);
+    const book = await books.read('alpaca');
+    expect(book.openOrders).toEqual([CRL_STOP]);
+    expect(historyCursors).toEqual([null, `old-${ALPACA_ORDER_PAGE_LIMIT - 1}`]);
+  });
+
+  it('fails the read, never passes it, when the history runs past the page cap', async () => {
+    const { books } = venue(
+      Array.from({ length: ALPACA_ORDER_MAX_PAGES }, (_, page) =>
+        filledEntries(ALPACA_ORDER_PAGE_LIMIT, page * ALPACA_ORDER_PAGE_LIMIT),
+      ),
+    );
+    await expect(books.read('alpaca')).rejects.toThrow(
+      `Alpaca listOrderHistory ran past ${ALPACA_ORDER_MAX_PAGES} pages`,
+    );
   });
 });
 

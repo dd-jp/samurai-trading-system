@@ -23,6 +23,7 @@ import type {
   AlpacaOrder,
   AlpacaPosition,
 } from './alpaca-client.js';
+import { ALPACA_ORDER_MAX_PAGES, ALPACA_ORDER_PAGE_LIMIT } from './alpaca-client.js';
 
 type AlpacaRequestInit = Omit<RequestInit, 'method'> & { method: AlpacaHttpMethod };
 
@@ -216,8 +217,25 @@ function cashActivitiesValidator(
 }
 
 export const ALPACA_ACTIVITY_PAGE_SIZE = 100;
-// Alpaca's GET /v2/orders reference: limit "defaults to 50 and max is 500"
-export const ALPACA_ORDER_HISTORY_LIMIT = 500;
+
+function pageRowCount(page: readonly AlpacaOrder[]): number {
+  return page.reduce((count, order) => count + 1 + (order.legs?.length ?? 0), 0);
+}
+
+function appendUnseen(
+  orders: AlpacaOrder[],
+  seen: Set<string>,
+  page: readonly AlpacaOrder[],
+  context: string,
+): void {
+  for (const order of page) {
+    if (seen.has(order.id)) {
+      throw new Error(`Alpaca ${context} listed order ${order.id} on two pages`);
+    }
+    seen.add(order.id);
+    orders.push(order);
+  }
+}
 
 export type AlpacaTradingEnvironment = 'paper' | 'live';
 
@@ -473,27 +491,41 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
   }
 
   async listOpenOrders(): Promise<AlpacaOrder[]> {
-    return this.request<AlpacaOrder[]>(
-      '/v2/orders?status=open&nested=false&direction=asc&limit=500',
-      { method: 'GET' },
-      'listOpenOrders',
-      validateAlpacaOrders,
-    );
+    return this.listOrderPages({ status: 'open', nested: 'false' }, 'listOpenOrders');
   }
 
   async listOrderHistory(symbols: readonly string[]): Promise<AlpacaOrder[]> {
-    const query = new URLSearchParams({
-      status: 'all',
-      nested: 'true',
-      symbols: symbols.join(','),
-      direction: 'desc',
-      limit: String(ALPACA_ORDER_HISTORY_LIMIT),
-    });
-    return this.request<AlpacaOrder[]>(
-      `/v2/orders?${query.toString()}`,
-      { method: 'GET' },
+    return this.listOrderPages(
+      { status: 'all', nested: 'true', symbols: symbols.join(',') },
       'listOrderHistory',
-      validateAlpacaOrders,
+    );
+  }
+
+  // Alpaca's GET /v2/orders reference: `before_order_id` "cannot be combined with after/until"
+  private async listOrderPages(
+    filter: Readonly<Record<string, string>>,
+    context: string,
+  ): Promise<AlpacaOrder[]> {
+    const orders: AlpacaOrder[] = [];
+    const seen = new Set<string>();
+    const query = new URLSearchParams({
+      ...filter,
+      direction: 'desc',
+      limit: String(ALPACA_ORDER_PAGE_LIMIT),
+    });
+    for (let page = 0; page < ALPACA_ORDER_MAX_PAGES; page += 1) {
+      const rows = await this.request<AlpacaOrder[]>(
+        `/v2/orders?${query.toString()}`,
+        { method: 'GET' },
+        context,
+        validateAlpacaOrders,
+      );
+      appendUnseen(orders, seen, rows, context);
+      if (pageRowCount(rows) < ALPACA_ORDER_PAGE_LIMIT) return orders;
+      query.set('before_order_id', (rows.at(-1) as AlpacaOrder).id);
+    }
+    throw new Error(
+      `Alpaca ${context} ran past ${ALPACA_ORDER_MAX_PAGES} pages of ${ALPACA_ORDER_PAGE_LIMIT} orders`,
     );
   }
 
