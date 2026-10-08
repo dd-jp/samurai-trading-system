@@ -25,6 +25,7 @@ function logsIn(db: ReturnType<typeof migratedMemoryStore>, ledger: TrialLedger)
   return {
     ledger,
     canaries: new CanaryLog(db, new SimulatedClock(new Date('2026-10-07T00:00:00Z'))),
+    randomCanaryRuns: 2,
   };
 }
 
@@ -141,8 +142,14 @@ describe('runCrossAssetTrendAgainst', () => {
       expect(report.oneBarDelay).toBe(report.baseline.verdict.oneBarDelay);
       expect(report.oneBarDelay?.selectedByFold).toHaveLength(15);
       expect(report.stressed.verdict.oneBarDelay).toBeNull();
+      expect(report.randomEntries).toBe(report.baseline.verdict.randomEntries);
+      expect(report.randomEntries?.runs).toBe(2);
+      expect(report.stressed.verdict.randomEntries).toBeNull();
       expect(db.prepare('SELECT candidate, kind, seed FROM v2_canary_runs').all()).toEqual([
         { candidate: 'cross-asset-trend', kind: 'shift', seed: null },
+        { candidate: 'cross-asset-trend', kind: 'random', seed: 1 },
+        { candidate: 'cross-asset-trend', kind: 'random', seed: 2 },
+        { candidate: 'cross-asset-trend', kind: 'random_band', seed: null },
       ]);
       expect(report.baseline.trials).toHaveLength(2);
       expect(report.stressed.trials).toHaveLength(2);

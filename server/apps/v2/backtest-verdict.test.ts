@@ -4,6 +4,7 @@ import {
   backtestVerdict,
   CAPITAL_CEILING_DRAWDOWN_MULTIPLE,
   capitalCeilingGbp,
+  RANDOM_BAND_QUANTILE,
   type VerdictInput,
 } from './backtest-verdict.js';
 import { annualisedSharpe, foldRanges, sliceByRanges, walkForwardPath } from './evidence/index.js';
@@ -19,6 +20,7 @@ function noisy(length: number, mean: number, amplitude: number, phase: number): 
 }
 
 const LENGTH = 400;
+const RANDOM = Array.from({ length: 5 }, (_, run) => book(noisy(LENGTH, 0.0002, 0.01, 3 + run)));
 const DATES = Array.from({ length: LENGTH }, (_, index) =>
   new Date(Date.UTC(2020, 0, 1) + index * 86_400_000).toISOString().slice(0, 10),
 );
@@ -32,6 +34,7 @@ function input(overrides: Partial<VerdictInput> = {}): VerdictInput {
     dates: DATES,
     trials,
     delayed: trials,
+    random: RANDOM,
     benchmark: book(noisy(LENGTH, 0.0002, 0.01, 2)),
     trialsCounted: 10,
     lossCapGbp: 1_500,
@@ -66,6 +69,7 @@ describe('backtestVerdict', () => {
       beatsBenchmarkAfterHaircut: true,
       beatsBenchmarkWithAnyPeriodRemoved: true,
       survivesOneBarDelay: true,
+      beatsRandomEntries: true,
       deflatedSharpeAtLeast095: true,
       pboAtMost010: true,
     });
@@ -118,6 +122,71 @@ describe('backtestVerdict', () => {
     expect(verdict.checks.survivesOneBarDelay).toBe(false);
     expect(verdict.checks.beatsBenchmarkAfterHaircut).toBe(true);
     expect(verdict.pass).toBe(false);
+  });
+
+  it('sets the walk-forward edge over the benchmark against the random runs above their 95th percentile', () => {
+    const verdict = backtestVerdict(input());
+    const testRanges = foldRanges(LENGTH, 4, 0).slice(1);
+    const edges = RANDOM.map(
+      (series) =>
+        annualisedSharpe(sliceByRanges(series.returns, testRanges)) -
+        verdict.walkForward.benchmarkSharpe,
+    );
+    const sorted = [...edges].sort((a, b) => a - b);
+    expect(RANDOM_BAND_QUANTILE).toBe(0.95);
+    expect(verdict.randomEntries).toEqual({
+      runs: 5,
+      edge: verdict.walkForward.strategySharpe - verdict.walkForward.benchmarkSharpe,
+      band: expect.any(Number),
+      edges,
+      beats: true,
+    });
+    expect(verdict.randomEntries?.band).toBeCloseTo(
+      (sorted[3] as number) + 0.8 * ((sorted[4] as number) - (sorted[3] as number)),
+      12,
+    );
+  });
+
+  it('interpolates the band between order statistics and needs the edge strictly above it', () => {
+    const baseline = backtestVerdict(input());
+    const [first] = input().trials;
+    const copies = Array.from({ length: 21 }, () => first as BookSeries);
+    const verdict = backtestVerdict(input({ random: copies }));
+    expect(verdict.randomEntries?.band).toBeCloseTo(verdict.randomEntries?.edge as number, 12);
+    expect(verdict.randomEntries?.beats).toBe(false);
+    expect(verdict.checks).toEqual({ ...baseline.checks, beatsRandomEntries: false });
+    expect(verdict.pass).toBe(false);
+    expect(verdict.trialsCounted).toBe(baseline.trialsCounted);
+    expect(verdict.deflatedSharpe).toBe(baseline.deflatedSharpe);
+  });
+
+  it('fails when a random run beats the candidate at the band', () => {
+    const strong = book(noisy(LENGTH, 0.01, 0.001, 0));
+    const verdict = backtestVerdict(input({ random: [...RANDOM, strong, strong] }));
+    const band = verdict.randomEntries?.band as number;
+    const sorted = [...(verdict.randomEntries?.edges ?? [])].sort((a, b) => a - b);
+    expect(band).toBeCloseTo(
+      (sorted[5] as number) + 0.7 * ((sorted[6] as number) - (sorted[5] as number)),
+      12,
+    );
+    expect(band).toBeGreaterThan(verdict.randomEntries?.edge as number);
+    expect(verdict.checks.beatsRandomEntries).toBe(false);
+    expect(verdict.pass).toBe(false);
+  });
+
+  it('cannot pass without random runs and refuses an empty or misaligned null', () => {
+    const verdict = backtestVerdict(input({ random: undefined }));
+    expect(verdict.randomEntries).toBeNull();
+    expect(verdict.checks.beatsRandomEntries).toBe(false);
+    expect(verdict.checks.survivesOneBarDelay).toBe(true);
+    expect(verdict.pass).toBe(false);
+    expect(() => backtestVerdict(input({ random: [] }))).toThrow(
+      'backtestVerdict: the random canary has no runs',
+    );
+    const short = book(noisy(LENGTH - 1, 0, 0.01, 0));
+    expect(() => backtestVerdict(input({ random: [short] }))).toThrow(
+      'backtestVerdict: every series must cover the same dates',
+    );
   });
 
   it('refuses a delayed run that misses a trial or a date', () => {

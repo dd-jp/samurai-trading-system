@@ -83,7 +83,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 64;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 96;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 97;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -687,6 +687,63 @@ describe('openSharedStore', () => {
           )
           .run(),
       ).toThrow(/CHECK constraint/);
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0097 rebuilds v2_canary_runs with every row and id, admitting random_band (#1747)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 96;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    const insert = (kind: string, seed: number | null) =>
+      raw
+        .prepare(
+          `INSERT INTO v2_canary_runs (candidate, candidate_hash, kind, seed, result, recorded_at)
+           VALUES ('c', 'h', ?, ?, '{}', 't')`,
+        )
+        .run(kind, seed);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw.exec(
+        `INSERT INTO v2_canary_runs (run_id, candidate, candidate_hash, kind, seed, result, recorded_at)
+           VALUES (3, 'c', 'h', 'shift', NULL, '{"survives":true}', 't'),
+                  (8, 'c', 'h', 'random', 2, '{"edge":0.1}', 't');`,
+      );
+      expect(() => insert('random_band', null)).toThrow(/CHECK constraint/);
+      const rows = () => raw.prepare('SELECT * FROM v2_canary_runs ORDER BY run_id').all();
+      const schema = () =>
+        raw
+          .prepare(
+            "SELECT type, name FROM sqlite_master WHERE tbl_name = 'v2_canary_runs' AND type != 'table' ORDER BY name",
+          )
+          .all();
+      const rowsBefore = rows();
+      const schemaBefore = schema();
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(rows()).toEqual(rowsBefore);
+      expect(schema()).toEqual(schemaBefore);
+      expect(schemaBefore).toHaveLength(3);
+      insert('random_band', null);
+      expect(() => insert('random_band', 1)).toThrow(/CHECK constraint/);
+      expect(() => insert('random', null)).toThrow(/CHECK constraint/);
+      expect(() => insert('shift', 1)).toThrow(/CHECK constraint/);
+      expect(raw.prepare('SELECT run_id, kind FROM v2_canary_runs ORDER BY run_id').all()).toEqual([
+        { run_id: 3, kind: 'shift' },
+        { run_id: 8, kind: 'random' },
+        { run_id: 9, kind: 'random_band' },
+      ]);
+      expect(() => raw.prepare("UPDATE v2_canary_runs SET result = 'x'").run()).toThrow(
+        'v2_canary_runs is append-only',
+      );
+      expect(() => raw.prepare('DELETE FROM v2_canary_runs').run()).toThrow(
+        'v2_canary_runs is append-only',
+      );
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

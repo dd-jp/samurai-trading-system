@@ -2,7 +2,7 @@ import type { Clock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore, toStoredTimestamp } from '../../shared/store/index.js';
 
-export type CanaryKind = 'shift' | 'random';
+export type CanaryKind = 'shift' | 'random' | 'random_band';
 
 export interface CanaryRun {
   readonly candidate: string;
