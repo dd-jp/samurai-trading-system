@@ -147,7 +147,7 @@ export interface V2Root {
   close(): void;
 }
 
-export type SignalProcessorStore = Pick<SignalStore, 'due' | 'appendEvent'>;
+export type SignalProcessorStore = Pick<SignalStore, 'due' | 'appendEvent' | 'vetoVerdicts'>;
 
 export type SignalPass =
   | { readonly ran: true; readonly outcomes: readonly SignalOutcome[] }
@@ -622,6 +622,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
         latestReconcile: (date: string, venue: 'alpaca') =>
           cycle.journal.latestReconcile(date, venue),
         signals,
+        faults: cycle.faults,
         panel,
         constituents,
         calendar: options.sessionCalendar ?? new UsEquityRegularHoursCalendar(),

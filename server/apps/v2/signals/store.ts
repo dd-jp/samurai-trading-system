@@ -9,6 +9,8 @@ import type { SignalWindow } from './window.js';
 
 export const SIGNAL_LIST_MAX = 200;
 
+export type SignalVetoVerdict = 'pass' | 'veto';
+
 interface SignalRow {
   signal_id: string;
   symbol: string;
@@ -86,11 +88,22 @@ export class SignalStore {
         `SELECT ${SIGNAL_COLUMNS} FROM v2_signals s
          WHERE process_after <= ?
            AND (SELECT status FROM v2_signal_events e WHERE e.signal_id = s.signal_id
-                ORDER BY event_id DESC LIMIT 1) = 'queued'
+                ORDER BY event_id DESC LIMIT 1) IN ('queued', 'failed')
          ORDER BY process_after, received_at, signal_id`,
       )
       .all(toStoredTimestamp(now)) as SignalRow[];
     return rows.map((row) => this.#toWire(row));
+  }
+
+  vetoVerdicts(limit: number): readonly SignalVetoVerdict[] {
+    const rows = this.db
+      .prepare(
+        `SELECT substr(detail, 6, 4) AS verdict FROM v2_signal_events
+         WHERE status = 'processed' AND (detail LIKE 'veto pass: %' OR detail LIKE 'veto veto: %')
+         ORDER BY event_id DESC LIMIT ?`,
+      )
+      .all(limit) as { verdict: SignalVetoVerdict }[];
+    return rows.map((row) => row.verdict);
   }
 
   #idForDigest(key: string): string | undefined {

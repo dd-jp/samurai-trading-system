@@ -179,6 +179,37 @@ describe('SignalStore.due', () => {
     expect(due).toEqual([first.signal_id, later.signal_id]);
     expect(due).not.toContain(notYet.signal_id);
   });
+
+  it('keeps a failed signal due so a later pass retries it (David 2026-10-05, #2024)', () => {
+    const failed = store.record(payload({}), RECEIVED, QUEUED).signal;
+    store.appendEvent(failed.signal_id, 'failed', 'disk full');
+    const refused = store.record(payload({ symbol: 'AMD' }), RECEIVED, QUEUED).signal;
+    store.appendEvent(refused.signal_id, 'failed', 'disk full');
+    store.appendEvent(refused.signal_id, 'refused', 'dropped: window ended');
+
+    expect(store.due(OPEN).map((signal) => signal.signal_id)).toEqual([failed.signal_id]);
+  });
+});
+
+describe('SignalStore.vetoVerdicts', () => {
+  it('reads the newest processed verdicts first, skipping unavailable and other details', () => {
+    const details = [
+      'veto pass: fine; entries 1',
+      'veto veto: stop in noise; entries 1',
+      'veto unavailable: llm_spend_cap:monthly; entries 1',
+      'already_submitted: an entry order for this signal exists',
+      'veto pass: fine again; entries 1',
+    ];
+    for (const [index, detail] of details.entries()) {
+      const { signal } = store.record(payload({ symbol: `A${'BCDEF'[index]}` }), RECEIVED, QUEUED);
+      store.appendEvent(signal.signal_id, 'processed', detail);
+    }
+    const refused = store.record(payload({ symbol: 'ZZ' }), RECEIVED, QUEUED).signal;
+    store.appendEvent(refused.signal_id, 'refused', 'veto veto: not a processed event');
+
+    expect(store.vetoVerdicts(20)).toEqual(['pass', 'veto', 'pass']);
+    expect(store.vetoVerdicts(2)).toEqual(['pass', 'veto']);
+  });
 });
 
 describe('v2_signals append-only', () => {
