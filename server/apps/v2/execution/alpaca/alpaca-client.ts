@@ -26,6 +26,7 @@ export interface AlpacaOrder {
   filled_qty: string;
   filled_avg_price: string | null;
   filled_at: string | null;
+  submitted_at?: string | null;
   legs?: AlpacaOrderLeg[];
   limit_price?: string | null;
   stop_price?: string | null;
@@ -70,6 +71,11 @@ export interface AlpacaPosition {
   avg_entry_price: string;
 }
 
+// Alpaca's GET /v2/orders reference: limit "defaults to 50 and max is 500"; measured on paper
+// 2026-10-07 (#2086), `nested=true` counts legs toward it
+export const ALPACA_ORDER_PAGE_LIMIT = 500;
+export const ALPACA_ORDER_MAX_PAGES = 20;
+
 export interface AlpacaBrokerClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
   submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder>;
@@ -78,6 +84,7 @@ export interface AlpacaBrokerClient {
   getPositions(): Promise<AlpacaPosition[]>;
   getOrder(alpacaOrderId: string): Promise<AlpacaOrder>;
   getOrderByClientOrderId(clientOrderId: string): Promise<AlpacaOrder | null>;
+  // Both listings page through every match or throw: a listing cut at the page limit is never complete
   listOpenOrders(): Promise<AlpacaOrder[]>;
   listOrderHistory(symbols: readonly string[]): Promise<AlpacaOrder[]>;
   getAccount(): Promise<AlpacaAccount>;

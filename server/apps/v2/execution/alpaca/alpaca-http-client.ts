@@ -23,6 +23,7 @@ import type {
   AlpacaOrder,
   AlpacaPosition,
 } from './alpaca-client.js';
+import { ALPACA_ORDER_MAX_PAGES, ALPACA_ORDER_PAGE_LIMIT } from './alpaca-client.js';
 
 type AlpacaRequestInit = Omit<RequestInit, 'method'> & { method: AlpacaHttpMethod };
 
@@ -216,8 +217,85 @@ function cashActivitiesValidator(
 }
 
 export const ALPACA_ACTIVITY_PAGE_SIZE = 100;
-// Alpaca's GET /v2/orders reference: limit "defaults to 50 and max is 500"
-export const ALPACA_ORDER_HISTORY_LIMIT = 500;
+
+function pageRowCount(page: readonly AlpacaOrder[]): number {
+  return page.reduce((count, order) => count + 1 + (order.legs?.length ?? 0), 0);
+}
+
+const MULTI_LEG_CLASSES: ReadonlySet<string> = new Set(['bracket', 'oco', 'oto']);
+
+// Measured on Alpaca paper 2026-10-07 (#2086): a `nested=true` page cut through a bracket lists a
+// leg whose parent fell outside it as an order of its own. Whether `before_order_id` is exclusive
+// of a timestamp tie is unmeasured (#2089), so a cut that could hide a row fails the read
+class OrderPageWalk {
+  readonly #orders: AlpacaOrder[] = [];
+  readonly #seen = new Set<string>();
+  readonly #orphans = new Set<string>();
+  readonly #nestedLegs = new Set<string>();
+  #cursor: AlpacaOrder | undefined;
+
+  constructor(
+    private readonly nested: boolean,
+    private readonly context: string,
+  ) {}
+
+  add(page: readonly AlpacaOrder[]): void {
+    this.#checkCut(page);
+    for (const order of page) this.#addRow(order);
+  }
+
+  nextCursor(page: readonly AlpacaOrder[]): string {
+    const parent = page.findLast((order) => !this.#orphanRow(order));
+    if (parent === undefined) {
+      throw new Error(`Alpaca ${this.context} filled a page with orphan legs only`);
+    }
+    this.#cursor = parent;
+    return parent.id;
+  }
+
+  finish(): AlpacaOrder[] {
+    const unresolved = [...this.#orphans].filter((id) => !this.#nestedLegs.has(id));
+    if (unresolved.length > 0) {
+      throw new Error(
+        `Alpaca ${this.context} listed leg ${unresolved.join(',')} without its parent order`,
+      );
+    }
+    return this.#orders;
+  }
+
+  #orphanRow(order: AlpacaOrder): boolean {
+    return this.nested && MULTI_LEG_CLASSES.has(order.order_class) && !order.legs?.length;
+  }
+
+  #addRow(order: AlpacaOrder): void {
+    for (const leg of order.legs ?? []) this.#nestedLegs.add(leg.id);
+    if (this.#orphanRow(order)) {
+      this.#orphans.add(order.id);
+      return;
+    }
+    if (this.#seen.has(order.id)) {
+      throw new Error(`Alpaca ${this.context} listed order ${order.id} on two pages`);
+    }
+    this.#seen.add(order.id);
+    this.#orders.push(order);
+  }
+
+  #checkCut(page: readonly AlpacaOrder[]): void {
+    if (this.#cursor === undefined) return;
+    const next = page.find((order) => !this.#seen.has(order.id) && !this.#orphans.has(order.id));
+    if (next === undefined) return;
+    const cut = this.#cursor.submitted_at;
+    if (
+      typeof cut !== 'string' ||
+      cut === next.submitted_at ||
+      typeof next.submitted_at !== 'string'
+    ) {
+      throw new Error(
+        `Alpaca ${this.context} page cut at ${this.#cursor.id} cannot be told apart from ${next.id} by submitted_at`,
+      );
+    }
+  }
+}
 
 export type AlpacaTradingEnvironment = 'paper' | 'live';
 
@@ -473,27 +551,40 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
   }
 
   async listOpenOrders(): Promise<AlpacaOrder[]> {
-    return this.request<AlpacaOrder[]>(
-      '/v2/orders?status=open&nested=false&direction=asc&limit=500',
-      { method: 'GET' },
-      'listOpenOrders',
-      validateAlpacaOrders,
-    );
+    return this.listOrderPages({ status: 'open', nested: 'false' }, 'listOpenOrders');
   }
 
   async listOrderHistory(symbols: readonly string[]): Promise<AlpacaOrder[]> {
-    const query = new URLSearchParams({
-      status: 'all',
-      nested: 'true',
-      symbols: symbols.join(','),
-      direction: 'desc',
-      limit: String(ALPACA_ORDER_HISTORY_LIMIT),
-    });
-    return this.request<AlpacaOrder[]>(
-      `/v2/orders?${query.toString()}`,
-      { method: 'GET' },
+    return this.listOrderPages(
+      { status: 'all', nested: 'true', symbols: symbols.join(',') },
       'listOrderHistory',
-      validateAlpacaOrders,
+    );
+  }
+
+  // Alpaca's GET /v2/orders reference: `before_order_id` "cannot be combined with after/until"
+  private async listOrderPages(
+    filter: Readonly<Record<string, string>>,
+    context: string,
+  ): Promise<AlpacaOrder[]> {
+    const walk = new OrderPageWalk(filter.nested === 'true', context);
+    const query = new URLSearchParams({
+      ...filter,
+      direction: 'desc',
+      limit: String(ALPACA_ORDER_PAGE_LIMIT),
+    });
+    for (let page = 0; page < ALPACA_ORDER_MAX_PAGES; page += 1) {
+      const rows = await this.request<AlpacaOrder[]>(
+        `/v2/orders?${query.toString()}`,
+        { method: 'GET' },
+        context,
+        validateAlpacaOrders,
+      );
+      walk.add(rows);
+      if (pageRowCount(rows) < ALPACA_ORDER_PAGE_LIMIT) return walk.finish();
+      query.set('before_order_id', walk.nextCursor(rows));
+    }
+    throw new Error(
+      `Alpaca ${context} ran past ${ALPACA_ORDER_MAX_PAGES} pages of ${ALPACA_ORDER_PAGE_LIMIT} orders`,
     );
   }
 
