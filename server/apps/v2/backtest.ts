@@ -81,15 +81,20 @@ export interface BacktestInput {
   // Never part of recordTrials' run info: a cost-sensitivity rerun (doc 67 "2x modelled cost")
   // must resolve to the SAME trial hash as its 1x baseline, not a new permanent ledger entry
   readonly costMultiple?: number | undefined;
+  readonly volTarget?: VolTargetSizing | undefined;
   // The input's trials, in their order, one bar later (doc 66, 2026-10-07 rulings on #1747)
   readonly shiftCanary?: ShiftCanaryInput | undefined;
   readonly randomCanary?: RandomCanaryInput | undefined;
 }
 
-export interface BacktestResult {
+export interface BacktestSimulation {
   readonly dates: readonly string[];
   readonly trials: readonly (BookSeries & { readonly trial: number; readonly sleeve: string })[];
   readonly benchmark: BookSeries;
+  readonly trialsShare: number;
+}
+
+export interface BacktestResult extends Omit<BacktestSimulation, 'trialsShare'> {
   readonly verdict: BacktestVerdict;
 }
 
@@ -221,12 +226,15 @@ function seriesFrom(startEquity: number, marks: readonly number[]): BookSeries {
   };
 }
 
-function primaryEquity(report: CycleReport, sleeve: Sleeve, date: string): number {
+// Arm 2's only book is 'technical-only' (#1773), so a backtest marks the sleeve's first
+// instantiated book rather than assuming 'primary'
+function markedEquity(report: CycleReport, sleeve: Sleeve, date: string): number {
   if (report.submitted_orders > 0) {
     throw new Error(`backtest: ${date} submitted ${report.submitted_orders} orders to a broker`);
   }
-  const book = report.books.find((row) => row.book_id === `${sleeve.id}/primary`);
-  if (book === undefined) throw new Error(`backtest: ${sleeve.id} has no primary book on ${date}`);
+  const variant = sleeve.spec.books.find((book) => book.instantiated)?.variant;
+  const book = report.books.find((row) => row.book_id === `${sleeve.id}/${variant}`);
+  if (book === undefined) throw new Error(`backtest: ${sleeve.id} has no marked book on ${date}`);
   return book.equity_gbp;
 }
 
@@ -260,7 +268,7 @@ async function replay(
     clock.advanceTo(new Date(`${date}T00:00:00.000Z`));
     const report = await runCycle(deps, date);
     sleeves.forEach((sleeve, index) => {
-      (marks[index] as number[]).push(primaryEquity(report, sleeve, date));
+      (marks[index] as number[]).push(markedEquity(report, sleeve, date));
     });
   }
   return marks;
@@ -280,6 +288,10 @@ export function volTargetIdentity(sizing: VolTargetSizing | undefined): {
   return sizing === undefined ? {} : { volTarget: sizing };
 }
 
+function volTargetOf(input: BacktestInput): VolTargetSizing | undefined {
+  return input.volTarget ?? declaredVolTarget();
+}
+
 function trialConfigs(
   input: BacktestInput,
   trials: readonly Sleeve[],
@@ -293,7 +305,7 @@ function trialConfigs(
     startCapitalGbp: input.startCapitalGbp,
     lossCapGbp: input.lossCapGbp,
     ...entryOffsetIdentity(ENTRY_LIMIT_OFFSET),
-    ...volTargetIdentity(declaredVolTarget()),
+    ...volTargetIdentity(volTargetOf(input)),
     benchmark: { id: benchmark.id, spec: benchmark.spec, config: input.benchmark.config },
   };
   return input.trials.map((trial, index) => ({
@@ -346,6 +358,7 @@ async function simulate(
       brokerMode: 'paper',
       halfSpreadBps: input.halfSpreadBps,
       costMultiple: input.costMultiple,
+      volTarget: volTargetOf(input),
     });
     const marks = await replay(cycle, clock, sleeves, dates, today);
     const books = sleeves.map((sleeve) => `${sleeve.id}/primary`);
@@ -517,9 +530,13 @@ function logRandom(
   log.record({ ...row, kind: 'random_band', seed: undefined, result: { ...band } });
 }
 
-export async function runBacktest(input: BacktestInput): Promise<BacktestResult> {
-  assertShiftCoversTrials(input);
-  const canary = input.shiftCanary;
+interface RecordedSimulation extends BacktestSimulation {
+  readonly configs: readonly TrialConfig[];
+  readonly trialSleeves: readonly Sleeve[];
+  readonly trades: readonly (readonly Trade[])[];
+}
+
+async function simulateRecorded(input: BacktestInput): Promise<RecordedSimulation> {
   const view = fenced(input);
   const trialSleeves = input.trials.map((trial) => trial.sleeve(view.market));
   const benchmarkSleeve = input.benchmark.sleeve(view.market);
@@ -542,14 +559,35 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
     ...(books[index] as BookSeries),
   }));
   const benchmark = books[trialSleeves.length] as BookSeries;
+  return {
+    dates,
+    trials,
+    benchmark,
+    trialsShare: share,
+    configs,
+    trialSleeves,
+    trades: simulation.trades.slice(0, trialSleeves.length),
+  };
+}
+
+export async function simulateBacktest(input: BacktestInput): Promise<BacktestSimulation> {
+  const { dates, trials, benchmark, trialsShare } = await simulateRecorded(input);
+  return { dates, trials, benchmark, trialsShare };
+}
+
+export async function runBacktest(input: BacktestInput): Promise<BacktestResult> {
+  assertShiftCoversTrials(input);
+  const canary = input.shiftCanary;
+  const recorded = await simulateRecorded(input);
+  const { dates, trials, benchmark, trialsShare: share, configs } = recorded;
   const random =
     input.randomCanary === undefined
       ? undefined
       : await randomCanaryRuns(input, input.randomCanary, {
           dates,
-          sleeves: trialSleeves,
-          books: books.slice(0, trialSleeves.length),
-          trades: simulation.trades,
+          sleeves: recorded.trialSleeves,
+          books: trials,
+          trades: recorded.trades,
         });
   const verdict = backtestVerdict({
     dates,

@@ -6,12 +6,14 @@ import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { BarSeries, DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
+import { VOL_TARGET_TRIAL_SIZING, VOL_TARGET_TRIAL_SLEEVE_ID } from './arm2-backtest.js';
 import {
   resolveCliOptions,
   runCrossAssetTrendAgainst,
   runCrossAssetTrendCandidate,
   runMeanReversionAgainst,
   runVolTargetIndexAgainst,
+  runVolTargetTrialAgainst,
 } from './backtest-cli.js';
 import { CanaryLog } from './canary-log.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
@@ -388,6 +390,104 @@ describe('runVolTargetIndexAgainst', () => {
   });
 });
 
+const ARM2_DATES = weekdays('2021-01-01', 720);
+const ARM2_SYMBOLS = ['AAA', 'BBB'];
+
+// Each name swings ±1.2% a day on a rising trend, so arm 2 enters long once its 200-session SMA
+// is covered and the 25% target scales every entry well below full risk
+function arm2Series(symbol: string, drift: number): BarSeries {
+  const bars: DailyBar[] = ARM2_DATES.map((date, index) => {
+    const close = 20 * (1 + drift) ** index * (index % 2 === 0 ? 1.012 : 0.988);
+    return {
+      date,
+      open: close,
+      high: close * 1.01,
+      low: close * 0.99,
+      close,
+      volume: 2_000_000,
+      rawClose: close,
+    };
+  });
+  return { symbol, bars };
+}
+
+function arm2BarsSource() {
+  const bySymbol = new Map<string, BarSeries>([
+    ['SPY', arm2Series('SPY', 0.0003)],
+    ...ARM2_SYMBOLS.map((symbol, index): [string, BarSeries] => [
+      symbol,
+      arm2Series(symbol, 0.001 * (index + 1)),
+    ]),
+  ]);
+  return { load: (symbol: string) => bySymbol.get(symbol) };
+}
+
+describe('runVolTargetTrialAgainst', () => {
+  it('#1860: runs one counted vol-target trial on a copy of arm 2 against unscaled arm 2, idempotently', {
+    timeout: 240_000,
+  }, async () => {
+    const barsSource = arm2BarsSource();
+    const market = new BarsMarketData(
+      barsSource,
+      parseBoeGbpUsdCsv('DATE,XUDLUSS\n31 Dec 2020,1.36\n31 Dec 2021,1.35\n30 Dec 2022,1.21\n'),
+    );
+    const db = migratedMemoryStore();
+    try {
+      const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-07T00:00:00.000Z')), {
+        entries: [],
+      });
+      const window = {
+        from: ARM2_DATES[220] as string,
+        to: ARM2_DATES.at(-1) as string,
+        outOfSampleFrom: '2023-01-01',
+      };
+      const run = () =>
+        runVolTargetTrialAgainst(
+          market,
+          barsSource,
+          () => ARM2_SYMBOLS,
+          () => 5,
+          ledger,
+          { log: () => undefined },
+          window,
+        );
+      const report = await run();
+      expect(ledger.count()).toBe(1);
+      const { verdict } = report;
+      expect(verdict.trial).toBe(1);
+      expect(verdict.trialsCounted).toBe(1);
+      expect(verdict.from).toBe(window.from);
+      expect(verdict.outOfSampleFrom).toBe('2023-01-02');
+      const config = JSON.parse(
+        (db.prepare('SELECT config FROM v2_trials').get() as { config: string }).config,
+      );
+      expect(config).toMatchObject({
+        entries: 'arm2',
+        spec: { validation: 'backtest', capitalShare: 0.3 },
+        run: {
+          from: window.from,
+          to: window.to,
+          embargo: 10,
+          startCapitalGbp: 10_000,
+          volTarget: VOL_TARGET_TRIAL_SIZING,
+          benchmark: { id: 'arm2', config: { benchmark: 'arm2' } },
+        },
+      });
+      expect(VOL_TARGET_TRIAL_SIZING.sleeveIds).toEqual([VOL_TARGET_TRIAL_SLEEVE_ID]);
+      const pnl = (summary: { totalReturn: number }) => Math.abs(summary.totalReturn);
+      expect(pnl(verdict.baseline)).toBeGreaterThan(0);
+      expect(pnl(verdict.scaled)).toBeGreaterThan(0);
+      expect(pnl(verdict.scaled)).toBeLessThan(pnl(verdict.baseline));
+      expect(report.dataSanity.seriesChecked).toBe(ARM2_SYMBOLS.length);
+      const rerun = await run();
+      expect(ledger.count()).toBe(1);
+      expect(rerun.verdict).toEqual(verdict);
+    } finally {
+      db.close();
+    }
+  });
+});
+
 class TrialsRecorded extends Error {}
 
 const NEW_TRIAL =
@@ -399,6 +499,7 @@ async function recordedHashes(
     bars: { load: (symbol: string) => BarSeries },
     research: ReturnType<typeof logsIn>,
   ) => Promise<unknown>,
+  trials = 2,
 ): Promise<string[]> {
   const flat: DailyBar[] = weekdays('2000-01-03', 7_000).map((date) => ({
     date,
@@ -419,7 +520,7 @@ async function recordedHashes(
     const record = ledger.record.bind(ledger);
     ledger.record = (candidate, config) => {
       const trial = record(candidate, config);
-      if (trial === 2) throw new TrialsRecorded();
+      if (trial === trials) throw new TrialsRecorded();
       return trial;
     };
     await run(market, bars, logsIn(db, ledger)).catch((error: unknown) => {
@@ -463,5 +564,21 @@ describe('candidate trial hashes', () => {
       runVolTargetIndexAgainst(market, bars, () => 5, research, quiet),
     );
     expect(hashes, NEW_TRIAL).toEqual(['af1c47710daf23f4', 'c3839566e157ce07']);
+  });
+
+  it('#1860 vol-target sizing (25% over 20 days on arm 2 entries) keeps its identity', async () => {
+    const hashes = await recordedHashes(
+      (market, bars, research) =>
+        runVolTargetTrialAgainst(
+          market,
+          bars,
+          () => [],
+          () => 5,
+          research.ledger,
+          quiet,
+        ),
+      1,
+    );
+    expect(hashes, NEW_TRIAL).toEqual(['8a6c1e64731b2058']);
   });
 });
