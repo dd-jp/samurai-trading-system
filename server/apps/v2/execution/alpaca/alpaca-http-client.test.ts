@@ -358,18 +358,34 @@ describe('AlpacaHttpBrokerClient', () => {
   });
 
   it.each([
-    ['no quote object', { symbol: 'UP' }],
-    ['a non-object body', 'quote'],
-    ['an unparseable time', { quote: { t: 'soon', ap: 1, bp: 1 } }],
-    ['a missing time', { quote: { ap: 1, bp: 1 } }],
-    ['a string ask', { quote: { t: '2026-09-30T14:00:01Z', ap: '1', bp: 1 } }],
-    ['a non-finite bid', { quote: { t: '2026-09-30T14:00:01Z', ap: 1, bp: null } }],
-  ])('getLatestQuote rejects a body with %s', async (_label, body) => {
+    ['no quote object', { symbol: 'UP' }, 'quote must be an object'],
+    ['a non-object body', 'quote', 'quote must be an object'],
+    ['an unparseable time', { quote: { t: 'soon', ap: 1, bp: 1 } }, 'quote.t must be a timestamp'],
+    ['a missing time', { quote: { ap: 1, bp: 1 } }, 'quote.t must be a timestamp'],
+    ['a numeric time', { quote: { t: 2026, ap: 1, bp: 1 } }, 'quote.t must be a timestamp'],
+    [
+      'a string ask',
+      { quote: { t: '2026-09-30T14:00:01Z', ap: '1', bp: 1 } },
+      'quote.ap must be a finite number',
+    ],
+    [
+      'a string bid',
+      { quote: { t: '2026-09-30T14:00:01Z', ap: 1, bp: '1' } },
+      'quote.bp must be a finite number',
+    ],
+    [
+      'a non-finite bid',
+      { quote: { t: '2026-09-30T14:00:01Z', ap: 1, bp: null } },
+      'quote.bp must be a finite number',
+    ],
+  ])('getLatestQuote rejects a body with %s', async (_label, body, detail) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(body)));
 
     const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
 
-    await expect(client.getLatestQuote('UP')).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+    const failure = client.getLatestQuote('UP');
+    await expect(failure).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+    await expect(failure).rejects.toThrow(`(getLatestQuote): ${detail} — `);
   });
 
   it('getOrderByClientOrderId GETs the by_client_order_id endpoint and returns the parsed order', async () => {

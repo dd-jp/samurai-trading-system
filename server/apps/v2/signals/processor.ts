@@ -12,7 +12,7 @@ import { type CycleDeps, type EntryPassReport, runEntryPass } from '../cycle.js'
 import { isFresh } from '../data/index.js';
 import type { FaultSink, ReconcileVerdict } from '../journal/index.js';
 import type { LlmPanel } from '../signal/index.js';
-import { SIGNALS_SLEEVE_ID } from '../signal/index.js';
+import { MOVERS_MIN_DOLLAR_VOLUME_USD, SIGNALS_SLEEVE_ID } from '../signal/index.js';
 import { entryRange, planSignalEntry, quoteFill, type SignalEntryPlan } from './entry.js';
 import type { SignalStore } from './store.js';
 import { SIGNAL_VETO_BARS, type SignalVeto, signalVeto } from './veto.js';
@@ -142,6 +142,17 @@ function gateRefusal(
   return undefined;
 }
 
+// David 2026-10-08 (#2024): the debate pool's movers floor, on the last bar's USD dollar volume
+function dollarVolumeRefusal(lastBar: V2Bar): Refusal | undefined {
+  const dollarVolume = lastBar.rawClose * lastBar.volume;
+  if (dollarVolume >= MOVERS_MIN_DOLLAR_VOLUME_USD) return undefined;
+  return {
+    code: 'below_dollar_volume_floor',
+    detail: `last bar ${lastBar.date} dollar volume ${dollarVolume} below ${MOVERS_MIN_DOLLAR_VOLUME_USD}`,
+    ticket: RULINGS_TICKET,
+  };
+}
+
 function admit(
   deps: SignalProcessorDeps,
   signal: SignalWire,
@@ -154,6 +165,8 @@ function admit(
   if (lastBar === undefined || !isFresh(lastBar, tradingDate)) {
     return { code: 'stale_last_close', detail: `last bar ${lastDate} before ${tradingDate}` };
   }
+  const floor = dollarVolumeRefusal(lastBar);
+  if (floor !== undefined) return floor;
   const verdict = planSignalEntry(signal, lastBar.rawClose);
   if (!verdict.ok) return { code: verdict.refusal, detail: verdict.detail };
   const conflicts = conflictingBooks(deps, signal.symbol);

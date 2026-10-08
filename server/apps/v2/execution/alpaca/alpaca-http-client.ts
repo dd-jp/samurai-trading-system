@@ -174,8 +174,8 @@ function validateAlpacaLatestQuote(body: unknown, context: string): AlpacaLatest
   runValidationRules(
     [
       [typeof t !== 'string' || Number.isNaN(Date.parse(t)), 'quote.t must be a timestamp'],
-      [typeof ap !== 'number' || !Number.isFinite(ap), 'quote.ap must be a finite number'],
-      [typeof bp !== 'number' || !Number.isFinite(bp), 'quote.bp must be a finite number'],
+      [!Number.isFinite(ap), 'quote.ap must be a finite number'],
+      [!Number.isFinite(bp), 'quote.bp must be a finite number'],
     ],
     context,
     body,

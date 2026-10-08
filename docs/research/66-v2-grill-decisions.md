@@ -642,15 +642,18 @@ David answered the questions left open under rulings 1 and 4 of 2026-10-05, reco
 
 *Built 2026-10-08 (#2024).* Build notes (not rulings):
 
-- Ruling 1 is the gate the processor already ran: a symbol missing from the trading date's constituent row is refused as `not_in_universe` (scope `signal`) before the veto, the quote read or either book's entry. The screens that apply are the ones the signals path already runs: a fresh last close in the bar store (`stale_last_close`) and the risk gate's volume cap of 1% of the 20-bar average daily volume, which refuses an entry with no covered volume window (`no_adv`). The debate pool's $50M movers floor (`MOVERS_MIN_DOLLAR_VOLUME_USD`) is a selection rule for that pool and is not applied.
+- Ruling 1 is the gate the processor already ran: a symbol missing from the trading date's constituent row is refused as `not_in_universe` (scope `signal`) before the veto, the quote read or either book's entry. The screens that apply are the ones the signals path already runs: a fresh last close in the bar store (`stale_last_close`) and the risk gate's volume cap of 1% of the 20-bar average daily volume, which refuses an entry with no covered volume window (`no_adv`). The build first left the debate pool's $50M movers floor (`MOVERS_MIN_DOLLAR_VOLUME_USD`) off this path; David's follow-up below applies it.
 - Ruling 2: `AlpacaHttpBrokerClient.getLatestQuote` reads `GET /v2/stocks/{symbol}/quotes/latest` on Alpaca's data host with the account's key pair and no `feed` parameter, so Alpaca answers from the account's own feed. The processor reads it after the veto, just before the entry pass. A quote older than the signal's `process_after` (its receipt in session, the next open out of session) is not a quote after the signal: the pass fails and the retry reads again on the next pass, 30 s later, as does a quote with no ask. Both books' entry orders and the decisions carry `entry_quote` (`ask`, `bid`, `quoted_at`, `fill`). `fill` is the ask when it is at or below the limit and, for a buy-stop, at or above the trigger; otherwise it is null. The daily cycle books the shadow at `fill`, with no modelled spread or impact because the ask already crosses the spread (fees still apply), and checks the fill day's bar only for the stop. A null `fill` leaves the shadow resting, so it still holds the symbol against another signal, until the next daily cycle, after the session that is the real leg's window, cancels it as a no-fill. The primary is the Alpaca bracket submitted right after the read; Alpaca fills it. A dry run reads no feed and keeps the daily-bar simulation. No migration.
 
-Build choices awaiting David's confirmation:
+Build choices David ruled on the same day (2026-10-08, #2024):
 
-- Only the first quote decides the shadow. A later quote in the session that reaches the entry does not fill it, though the resting real leg could still fill then.
-- The $50M movers floor is not applied to signals (above).
-- The fill day's bar is checked for the stop over the whole day, including the part before the quote.
-- That Alpaca paper fills the real leg from the same feed the quote is read from is not verified.
+1. **Accepted: only the first quote decides the shadow.** A later quote in the session that reaches the entry does not fill it, though the resting real leg could still fill then.
+2. **Changed: the $50M movers floor applies to signals.** The debate pool's dollar-volume floor (`MOVERS_MIN_DOLLAR_VOLUME_USD`) is applied to the signal's symbol on the last bar before the trading date (raw close times volume, in USD). An off-floor signal is journalled as rejected on the same path as an off-list one, `below_dollar_volume_floor` (scope `signal`, ticket #2024): no quote read, no veto, no order in either book.
+3. **Accepted: the fill day's bar is checked for the stop over the whole day,** including the part before the quote.
+4. **Changed: a paper-week fidelity check compares the real leg's fill prices with the shadow's.** That Alpaca paper fills the real leg from the same feed the quote is read from stays unverified until that check runs. It is recorded in the spec's known limits and not built yet.
+5. **Accepted: a dry run reads no feed and keeps the daily-bar simulation.**
+
+*Built 2026-10-08 (#2024):* ruling 2's floor in `server/apps/v2/signals/processor.ts`, after the stale-close check. The check of ruling 4 is not built.
 
 ## Still open
 

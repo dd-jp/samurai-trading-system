@@ -48,6 +48,7 @@ export {
   G18_SOCIAL_SOURCE,
   isSet,
   LSE_LIQUIDITY_SCREEN,
+  MOVERS_MIN_DOLLAR_VOLUME_USD,
   type Parameter,
   RECONCILE_CASH_TOLERANCE_GBP,
   requireSet,

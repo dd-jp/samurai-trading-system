@@ -37,6 +37,28 @@ describe('alpacaQuotesFor', () => {
     }
   });
 
+  it('reads with the key pair of the environment it was built for', async () => {
+    vi.stubEnv('ALPACA_API_KEY', '');
+    vi.stubEnv('ALPACA_API_SECRET', '');
+    vi.stubEnv('ALPACA_LIVE_API_KEY', 'test-fake-live-key');
+    vi.stubEnv('ALPACA_LIVE_API_SECRET', 'test-fake-live-secret');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ quote: { t: '2026-09-30T14:00:01Z', ap: 25, bp: 24.9 } })),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(alpacaQuotesFor('live').latestQuote('UP')).resolves.toMatchObject({ ask: 25 });
+      expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+        'APCA-API-KEY-ID': 'test-fake-live-key',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('reads the data host with the paper pair and reuses one client', async () => {
     vi.stubEnv('ALPACA_API_KEY', 'test-fake-alpaca-key');
     vi.stubEnv('ALPACA_API_SECRET', 'test-fake-alpaca-secret');

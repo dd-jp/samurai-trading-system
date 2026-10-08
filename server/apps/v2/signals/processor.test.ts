@@ -61,7 +61,7 @@ function flatBars(overrides: Readonly<Record<string, Partial<DailyBar>>> = {}): 
       high: 25.25,
       low: 24.75,
       close: 25,
-      volume: 1_000_000,
+      volume: 3_000_000,
       rawClose: 25,
       ...overrides[date],
     });
@@ -84,10 +84,12 @@ async function writeFixtures(capital: boolean = true): Promise<Fixtures> {
     { symbol: 'DN', bars: flatBars() },
     { symbol: 'SPY', bars: flatBars() },
     { symbol: 'OLD', bars: flatBars().filter((bar) => bar.date <= '2026-09-01') },
+    { symbol: 'THIN', bars: flatBars({ '2026-09-29': { volume: 1_999_999 } }) },
+    { symbol: 'EDGE', bars: flatBars({ '2026-09-29': { volume: 2_000_000 } }) },
   ]);
   bars.close();
   const constituentsPath = join(directory, 'constituents.csv');
-  writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,DN,ZZZ,OLD"\n');
+  writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,DN,ZZZ,OLD,THIN,EDGE"\n');
   const fxPath = join(directory, 'fx.csv');
   writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n');
   const spreadsPath = join(directory, 'spreads.csv');
@@ -1212,5 +1214,43 @@ describe('processSignals, paper with a fake Alpaca', () => {
     const reopened = open(fixtures, clock, paper(alpaca)).root;
     expect(reopened.journal.orderFor(primaryId(id))?.outcome).toBe('cancelled');
     expect(reopened.books.position('signals/primary', 'UP')).toBeUndefined();
+  });
+
+  it('refuses a signal below the $50M dollar-volume floor before any quote, veto or order (#2024)', async () => {
+    const fixtures = await writeFixtures();
+    const quotes = quotesAt(quote(25));
+    const { root, signals, transports } = open(fixtures, new SimulatedClock(IN_SESSION), {
+      quotes,
+    });
+    const id = post(signals, { symbol: 'THIN' });
+
+    const pass = await root.processSignals(signals, IN_SESSION);
+
+    expect(pass).toMatchObject({ outcomes: [{ status: 'refused' }] });
+    expect(signals.get(id)?.events.at(-1)?.detail).toBe(
+      'below_dollar_volume_floor: last bar 2026-09-29 dollar volume 49999975 below 50000000',
+    );
+    expect(refusalsOf(root, 'below_dollar_volume_floor')).toEqual([
+      expect.objectContaining({
+        scope: 'signal',
+        ticket: '#2024',
+        book_id: null,
+        instrument: 'THIN',
+      }),
+    ]);
+    expect(quotes.reads).toEqual([]);
+    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(0);
+    expect(root.db.prepare('SELECT COUNT(*) AS n FROM v2_orders').get()).toEqual({ n: 0 });
+  });
+
+  it('admits a signal whose last bar sits exactly on the dollar-volume floor', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION));
+    const id = post(signals, { symbol: 'EDGE' });
+
+    const pass = await root.processSignals(signals, IN_SESSION);
+
+    expect(pass).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(root.journal.orderFor(shadowId(id, 'EDGE'))).toBeDefined();
   });
 });
