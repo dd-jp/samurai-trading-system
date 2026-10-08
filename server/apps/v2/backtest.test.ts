@@ -14,6 +14,7 @@ import {
   backtestSessions,
   entryOffsetIdentity,
   fencedMarket,
+  randomVolTarget,
   runBacktest,
   type SleeveFactory,
   volTargetIdentity,
@@ -362,6 +363,34 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       expect(row.matchedSessions).toBeGreaterThan(row.matched);
       expect(row.heldSessions).toBe(row.matchedSessions);
     }
+  });
+
+  it('#1860: vol-targets the random runs exactly when the trial they copy is vol-targeted', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const shared = new TrialLedger(db, clock, SESSION_B);
+    const randomCanary = { log: new CanaryLog(db, clock), runs: 2 };
+    const sizing = { annualTargetVol: 0.02, windowBars: 20 };
+    const sharpes = async (sleeveIds: readonly string[]) => {
+      const { verdict } = await runBacktest(
+        input({ ledger: shared, randomCanary, volTarget: { ...sizing, sleeveIds } }),
+      );
+      const benchmark = verdict.walkForward.benchmarkSharpe;
+      return (verdict.randomEntries?.edges ?? []).map((edge) => edge + benchmark);
+    };
+    const randomIds = ['fixture-trend-random-1', 'fixture-trend-random-2'];
+    const unscaled = await sharpes([]);
+    const copied = await sharpes(['trend-5', 'trend-20']);
+    expect(copied).toHaveLength(2);
+    expect(copied).toEqual(await sharpes(['trend-5', 'trend-20', ...randomIds]));
+    expect(copied).not.toEqual(unscaled);
+    const base = { ...sizing, sleeveIds: ['trend-5'] };
+    expect(randomVolTarget(input({ volTarget: base }), 'trend-20', randomIds)).toBe(base);
+    expect(randomVolTarget(input({ volTarget: base }), 'trend-5', randomIds)).toEqual({
+      ...base,
+      sleeveIds: ['trend-5', ...randomIds],
+    });
+    expect(randomVolTarget(input(), 'trend-5', randomIds)).toBeUndefined();
   });
 
   it('refuses a shift canary that does not delay every trial', async () => {

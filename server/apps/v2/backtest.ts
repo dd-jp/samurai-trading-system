@@ -4,7 +4,6 @@ import type {
   Sleeve,
   SleeveContext,
   SleeveDecision,
-  SleeveSpec,
 } from '../../../contracts/index.js';
 import type { Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
@@ -439,11 +438,11 @@ function mostSelected(selectedByFold: readonly number[]): number {
 
 interface RandomPlan {
   readonly schedule: ScheduleInput;
-  readonly spec: SleeveSpec;
+  readonly source: Sleeve;
 }
 
-// Awaiting David (#1747): the random sleeve sizes with the spec of the trial the walk-forward
-// path selects most often, ties to the earliest selected
+// Awaiting David (#1747): the random sleeve sizes with the spec and vol target of the trial the
+// walk-forward path selects most often, ties to the earliest selected
 function randomPlan(input: BacktestInput, run: CandidateRun): RandomPlan {
   const path = walkForwardPath(
     run.books.map((book) => book.returns),
@@ -459,8 +458,18 @@ function randomPlan(input: BacktestInput, run: CandidateRun): RandomPlan {
       market: input.market,
       universe,
     },
-    spec: (run.sleeves[mostSelected(path.selectedByFold)] as Sleeve).spec,
+    source: run.sleeves[mostSelected(path.selectedByFold)] as Sleeve,
   };
+}
+
+export function randomVolTarget(
+  input: BacktestInput,
+  source: string,
+  ids: readonly string[],
+): VolTargetSizing | undefined {
+  const sizing = volTargetOf(input);
+  if (sizing === undefined || !sizing.sleeveIds.includes(source)) return sizing;
+  return { ...sizing, sleeveIds: [...sizing.sleeveIds, ...ids] };
 }
 
 async function randomCanaryRuns(
@@ -468,7 +477,7 @@ async function randomCanaryRuns(
   canary: RandomCanaryInput,
   run: CandidateRun,
 ): Promise<RandomCanaryRuns> {
-  const { schedule, spec } = randomPlan(input, run);
+  const { schedule, source } = randomPlan(input, run);
   const seeds = Array.from(
     { length: canary.runs ?? RANDOM_CANARY_RUNS },
     (_, index) => RANDOM_CANARY_FIRST_SEED + index,
@@ -479,14 +488,24 @@ async function randomCanaryRuns(
     randomEntrySleeve(
       {
         id: `${input.candidate}-random-${seed}`,
-        spec,
+        spec: source.spec,
         schedule: schedules[index] as readonly ScheduledTrade[],
         dates: run.dates,
       },
       view.market,
     ),
   );
-  const simulation = await simulate(input, sleeves, view.today, run.dates);
+  const sizing = randomVolTarget(
+    input,
+    source.id,
+    sleeves.map((sleeve) => sleeve.id),
+  );
+  const simulation = await simulate(
+    { ...input, volTarget: sizing },
+    sleeves,
+    view.today,
+    run.dates,
+  );
   return {
     matched: schedule.matched.length,
     matchedSessions: matchedSessions(schedule.matched),
