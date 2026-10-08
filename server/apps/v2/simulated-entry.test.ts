@@ -18,6 +18,36 @@ function bar(date: string, overrides: Partial<V2Bar> = {}): V2Bar {
 const BUY: LimitEntry = { side: 'buy', limit: 20, stop: 19.2 };
 const SELL: LimitEntry = { side: 'sell', limit: 20, stop: 20.8 };
 
+describe('simulateLimitEntry at a journalled quote fill (David 2026-10-08, #2024)', () => {
+  it('fills at the quote without crossing the spread again, whatever the bar traded', () => {
+    const day = bar('d1', { open: 21, low: 20.6, high: 21.5 });
+    expect(simulateLimitEntry({ ...BUY, quoteFill: 19.9 }, [day, bar('d2')])).toEqual({
+      kind: 'filled',
+      bar: day,
+      price: 19.9,
+      crossesSpread: false,
+      stoppedAt: undefined,
+    });
+  });
+
+  it('is a no-fill when the first quote did not reach the entry, even where the bar would fill', () => {
+    expect(simulateLimitEntry({ ...BUY, quoteFill: null }, [bar('d1', { low: 19 })])).toEqual({
+      kind: 'cancelled',
+    });
+    expect(simulateLimitEntry({ ...BUY, quoteFill: null }, [])).toEqual({ kind: 'cancelled' });
+  });
+
+  it('waits for the fill day bar, then stops out on it when the bar reaches the stop', () => {
+    expect(simulateLimitEntry({ ...BUY, quoteFill: 19.9 }, [])).toEqual({ kind: 'pending' });
+    const stopped = bar('d1', { low: 19 });
+    expect(simulateLimitEntry({ ...BUY, quoteFill: 19.9 }, [stopped])).toMatchObject({
+      kind: 'filled',
+      price: 19.9,
+      stoppedAt: 19.2,
+    });
+  });
+});
+
 describe('simulateLimitEntry', () => {
   it('waits while no bar has come in', () => {
     expect(simulateLimitEntry(BUY, [])).toEqual({ kind: 'pending' });

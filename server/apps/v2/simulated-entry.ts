@@ -7,6 +7,7 @@ export interface LimitEntry {
   readonly limit: number;
   readonly stop: number | undefined;
   readonly trigger?: number | undefined;
+  readonly quoteFill?: number | null | undefined;
 }
 
 export type LimitEntryOutcome =
@@ -70,7 +71,21 @@ function stopOnFillBar(entry: LimitEntry, price: number, bar: QuotedBar): number
   return bar.high >= entry.stop ? Math.max(entry.stop, price) : undefined;
 }
 
+// The quote fill already paid the spread at the ask; the fill day's bar is checked only for the stop
+function quotedEntry(
+  entry: LimitEntry,
+  fill: number | null,
+  bars: readonly V2Bar[],
+): LimitEntryOutcome {
+  if (fill === null) return { kind: 'cancelled' };
+  const [bar] = bars;
+  if (bar === undefined) return { kind: 'pending' };
+  const stoppedAt = stopOnFillBar(entry, fill, quoted(bar));
+  return { kind: 'filled', bar, price: fill, crossesSpread: false, stoppedAt };
+}
+
 export function simulateLimitEntry(entry: LimitEntry, bars: readonly V2Bar[]): LimitEntryOutcome {
+  if (entry.quoteFill !== undefined) return quotedEntry(entry, entry.quoteFill, bars);
   if (bars.length === 0) return { kind: 'pending' };
   for (const bar of bars) {
     const prices = quoted(bar);

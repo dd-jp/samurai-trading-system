@@ -1,5 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
-import type { BrokerMode, CfdCosts, Sleeve, Venue } from '../../../contracts/index.js';
+import type {
+  BrokerMode,
+  CfdCosts,
+  LatestQuoteSource,
+  Sleeve,
+  Venue,
+} from '../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../providers/calendar/index.js';
 import { AlpacaNewsClient } from '../../providers/news/index.js';
@@ -44,7 +50,7 @@ import {
   type VenueSessionGate,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
-import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
+import { alpacaQuotesFor, saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import {
   FlattenLedger,
   type FlattenPass,
@@ -121,6 +127,7 @@ export interface V2RootOptions {
   readonly constituents?: ((tradingDate: string) => readonly string[]) | undefined;
   readonly transportFor?: ((pin: ModelPin) => AnthropicMessagesClient) | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
+  readonly quotes?: LatestQuoteSource | undefined;
   readonly newsSource?: NewsSource | undefined;
   readonly marketauxApiKey?: string | undefined;
   readonly isUkStock?: ((symbol: string) => boolean) | undefined;
@@ -315,6 +322,12 @@ function refuseLiveMode(options: V2RootOptions): void {
 
 function brokerModeFor(options: V2RootOptions): BrokerMode {
   return options.samuraiMode === 'live' ? 'live' : 'paper';
+}
+
+// A dry run reads no broker or market feed, so its signal entries keep the daily-bar simulation
+function quotesFor(options: V2RootOptions): LatestQuoteSource | undefined {
+  if (options.quotes !== undefined || options.dryRun) return options.quotes;
+  return alpacaQuotesFor(brokerModeFor(options));
 }
 
 function storePathFor(options: V2RootOptions): string {
@@ -584,6 +597,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     runStartedAt: options.runStartedAt,
   });
   const lease = new RunLease(db, clock);
+  const quotes = quotesFor(options);
   return {
     registry: cycle.registry,
     books: cycle.books,
@@ -626,6 +640,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
         panel,
         constituents,
         calendar: options.sessionCalendar ?? new UsEquityRegularHoursCalendar(),
+        quotes,
       };
       if (!signalsDue(deps, now)) {
         return { ran: false, reason: 'nothing_due', detail: 'market closed or no signal due' };

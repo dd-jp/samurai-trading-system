@@ -1,4 +1,11 @@
-import type { BookSpec, SignalWire, SleeveDecision, V2Bar } from '../../../../contracts/index.js';
+import type {
+  BookSpec,
+  EntryQuote,
+  LatestQuoteSource,
+  SignalWire,
+  SleeveDecision,
+  V2Bar,
+} from '../../../../contracts/index.js';
 import { civilDateKey, ET_ZONE, toCivilDate } from '../../../providers/calendar/index.js';
 import { describeThrownSafely, digest } from '../../../shared/index.js';
 import { type CycleDeps, type EntryPassReport, runEntryPass } from '../cycle.js';
@@ -6,7 +13,7 @@ import { isFresh } from '../data/index.js';
 import type { FaultSink, ReconcileVerdict } from '../journal/index.js';
 import type { LlmPanel } from '../signal/index.js';
 import { SIGNALS_SLEEVE_ID } from '../signal/index.js';
-import { entryRange, planSignalEntry, type SignalEntryPlan } from './entry.js';
+import { entryRange, planSignalEntry, quoteFill, type SignalEntryPlan } from './entry.js';
 import type { SignalStore } from './store.js';
 import { SIGNAL_VETO_BARS, type SignalVeto, signalVeto } from './veto.js';
 
@@ -35,6 +42,7 @@ export interface SignalProcessorDeps {
   readonly panel: Pick<LlmPanel, 'judge' | 'spendCap'>;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly calendar: { isOpen(instant: Date): boolean };
+  readonly quotes: LatestQuoteSource | undefined;
 }
 
 export type SignalOutcomeStatus = 'processed' | 'refused' | 'failed';
@@ -161,11 +169,30 @@ function entryLabel(plan: SignalEntryPlan): string {
     : `buy-stop ${plan.trigger} limit ${plan.limit}`;
 }
 
+// David 2026-10-08 (#2024): both legs fill at the first quote after the signal is due, so a quote
+// older than process_after (the receipt in session, else the next open) is not that quote
+async function entryQuote(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  plan: SignalEntryPlan,
+): Promise<EntryQuote | undefined> {
+  if (deps.quotes === undefined) return undefined;
+  const quote = await deps.quotes.latestQuote(signal.symbol);
+  if (Date.parse(quote.quoted_at) < Date.parse(signal.process_after)) {
+    throw new Error(
+      `no ${signal.symbol} quote since ${signal.process_after}: latest ${quote.quoted_at}`,
+    );
+  }
+  const { ask, bid, quoted_at } = quote;
+  return { ask, bid, quoted_at, fill: quoteFill(plan, ask) };
+}
+
 function decisionFor(
   signal: SignalWire,
   admitted: Admitted,
   bars: readonly V2Bar[],
   veto: SignalVeto,
+  quote: EntryQuote | undefined,
 ): SleeveDecision {
   const { plan, lastBar } = admitted;
   const { low, high } = entryRange(signal.entry);
@@ -186,6 +213,7 @@ function decisionFor(
     inputs_hash: digest({ signal: signal.signal_id, bars }),
     debate_id: undefined,
     veto: veto.kind === 'pass' ? undefined : `${veto.kind}: ${veto.reason}`,
+    entry_quote: quote,
     payload: {
       signal_id: signal.signal_id,
       entry_low: low,
@@ -199,6 +227,7 @@ function decisionFor(
       r: plan.riskPerShare,
       veto_kind: veto.kind,
       veto_reason: veto.reason,
+      entry_quote: quote,
     },
   };
 }
@@ -268,7 +297,8 @@ async function enter(
     },
     `v2-signal-${signal.signal_id}`,
   );
-  const decision = decisionFor(signal, admitted, bars, veto);
+  const quote = await entryQuote(deps, signal, admitted.plan);
+  const decision = decisionFor(signal, admitted, bars, veto, quote);
   const blocked = reconcileBlocked(deps, tradingDate);
   journalBlocked(deps, signal, tradingDate, blocked);
   const report = await runEntryPass(deps.cycle, {
