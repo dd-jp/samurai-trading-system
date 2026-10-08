@@ -538,6 +538,7 @@ export interface JournalledReconcile {
   readonly detail: string;
   readonly broker_mode: BrokerMode;
   readonly cash_quote: number | null;
+  readonly protecting_stops?: readonly BrokerOpenOrder[] | undefined;
 }
 
 export interface JournalledOrder {
