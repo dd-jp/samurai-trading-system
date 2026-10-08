@@ -14,6 +14,7 @@ import {
   backtestSessions,
   entryOffsetIdentity,
   fencedMarket,
+  randomVolTarget,
   runBacktest,
   type SleeveFactory,
   volTargetIdentity,
@@ -320,6 +321,76 @@ describe('runBacktest', { timeout: 120_000 }, () => {
     ]);
     expect(JSON.parse(rows[0]?.result as string)).toEqual(delay);
     expect(rows[0]?.recorded_at).toBe('2026-10-07T00:00:00.000Z');
+  });
+
+  it('runs seeded random entries matched to the walk-forward trades through the same harness and logs each run and the band', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const shared = new TrialLedger(db, clock, SESSION_B);
+    const log = new CanaryLog(db, clock);
+    const run = input({ ledger: shared, randomCanary: { log, runs: 3 } });
+    const result = await runBacktest(run);
+    const again = await runBacktest(run);
+    const plain = await runBacktest(input({ ledger: shared }));
+    expect(shared.count()).toBe(4);
+    expect(result.trials).toEqual(plain.trials);
+    expect(result.verdict.deflatedSharpe).toBe(plain.verdict.deflatedSharpe);
+    expect(plain.verdict.randomEntries).toBeNull();
+    const random = result.verdict.randomEntries;
+    expect(random?.runs).toBe(3);
+    expect(random?.edges).toEqual(again.verdict.randomEntries?.edges);
+    expect(new Set(random?.edges).size).toBe(3);
+    expect(random?.edge).toBe(
+      result.verdict.walkForward.strategySharpe - result.verdict.walkForward.benchmarkSharpe,
+    );
+    expect(result.verdict.checks.beatsRandomEntries).toBe(random?.beats);
+    const rows = log.list().slice(0, 4);
+    expect(rows.map((row) => [row.kind, row.seed])).toEqual([
+      ['random', 1],
+      ['random', 2],
+      ['random', 3],
+      ['random_band', null],
+    ]);
+    const results = rows.map((row) => JSON.parse(row.result));
+    const { edges: _edges, ...band } = random as NonNullable<typeof random>;
+    expect(results[3]).toEqual(band);
+    for (const [index, row] of results.slice(0, 3).entries()) {
+      expect(row.seed).toBe(index + 1);
+      expect(row.edge).toBe(random?.edges[index]);
+      expect(row.matched).toBeGreaterThan(0);
+      expect(row.scheduled).toBe(row.matched);
+      expect(row.traded).toBe(row.matched);
+      expect(row.matchedSessions).toBeGreaterThan(row.matched);
+      expect(row.heldSessions).toBe(row.matchedSessions);
+    }
+  });
+
+  it('#1860: vol-targets the random runs exactly when the trial they copy is vol-targeted', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const shared = new TrialLedger(db, clock, SESSION_B);
+    const randomCanary = { log: new CanaryLog(db, clock), runs: 2 };
+    const sizing = { annualTargetVol: 0.02, windowBars: 20 };
+    const sharpes = async (sleeveIds: readonly string[]) => {
+      const { verdict } = await runBacktest(
+        input({ ledger: shared, randomCanary, volTarget: { ...sizing, sleeveIds } }),
+      );
+      const benchmark = verdict.walkForward.benchmarkSharpe;
+      return (verdict.randomEntries?.edges ?? []).map((edge) => edge + benchmark);
+    };
+    const randomIds = ['fixture-trend-random-1', 'fixture-trend-random-2'];
+    const unscaled = await sharpes([]);
+    const copied = await sharpes(['trend-5', 'trend-20']);
+    expect(copied).toHaveLength(2);
+    expect(copied).toEqual(await sharpes(['trend-5', 'trend-20', ...randomIds]));
+    expect(copied).not.toEqual(unscaled);
+    const base = { ...sizing, sleeveIds: ['trend-5'] };
+    expect(randomVolTarget(input({ volTarget: base }), 'trend-20', randomIds)).toBe(base);
+    expect(randomVolTarget(input({ volTarget: base }), 'trend-5', randomIds)).toEqual({
+      ...base,
+      sleeveIds: ['trend-5', ...randomIds],
+    });
+    expect(randomVolTarget(input(), 'trend-5', randomIds)).toBeUndefined();
   });
 
   it('refuses a shift canary that does not delay every trial', async () => {

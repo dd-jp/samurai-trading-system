@@ -52,20 +52,25 @@ describe('CanaryLog', () => {
     }
   });
 
-  it('refuses a shift run with a seed, a random run without one, an unknown kind and any rewrite', () => {
+  it('refuses a seed on a shift or band row, a random run without one, an unknown kind and any rewrite', () => {
     const db = migratedMemoryStore();
     try {
       const log = new CanaryLog(db, clock);
       const run = { candidate: 'c', candidateHash: 'h', result: {} };
       expect(() => log.record({ ...run, kind: 'shift', seed: 1 })).toThrow(/CHECK/);
       expect(() => log.record({ ...run, kind: 'random', seed: undefined })).toThrow(/CHECK/);
+      expect(() => log.record({ ...run, kind: 'random_band', seed: 1 })).toThrow(/CHECK/);
       expect(() => log.record({ ...run, kind: 'other' as 'shift', seed: undefined })).toThrow(
         /CHECK/,
       );
       log.record({ ...run, kind: 'shift', seed: undefined });
+      log.record({ ...run, kind: 'random_band', seed: undefined });
       expect(() => db.exec("UPDATE v2_canary_runs SET result = '{}'")).toThrow(/append-only/);
       expect(() => db.exec('DELETE FROM v2_canary_runs')).toThrow(/append-only/);
-      expect(log.list()).toHaveLength(1);
+      expect(log.list().map((row) => [row.kind, row.seed])).toEqual([
+        ['shift', null],
+        ['random_band', null],
+      ]);
     } finally {
       db.close();
     }
