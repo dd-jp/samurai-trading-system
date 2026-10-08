@@ -3,7 +3,7 @@ import { civilDateKey, ET_ZONE, toCivilDate } from '../../../providers/calendar/
 import { describeThrownSafely, digest } from '../../../shared/index.js';
 import { type CycleDeps, type EntryPassReport, runEntryPass } from '../cycle.js';
 import { isFresh } from '../data/index.js';
-import type { ReconcileVerdict } from '../journal/index.js';
+import type { FaultSink, ReconcileVerdict } from '../journal/index.js';
 import type { LlmPanel } from '../signal/index.js';
 import { SIGNALS_SLEEVE_ID } from '../signal/index.js';
 import { entryRange, planSignalEntry, type SignalEntryPlan } from './entry.js';
@@ -11,6 +11,10 @@ import type { SignalStore } from './store.js';
 import { SIGNAL_VETO_BARS, type SignalVeto, signalVeto } from './veto.js';
 
 const TICKET = '#1941';
+const RULINGS_TICKET = '#2024';
+
+const SIGNAL_VETO_RATE_WINDOW = 20;
+const SIGNAL_VETO_RATE_CAP = 0.1;
 
 const CONTROL_REFUSAL = {
   paused: 'manual_control_paused',
@@ -26,7 +30,8 @@ const OUTCOME_LOG = {
 export interface SignalProcessorDeps {
   readonly cycle: CycleDeps;
   readonly latestReconcile: (tradingDate: string, venue: 'alpaca') => ReconcileVerdict;
-  readonly signals: Pick<SignalStore, 'due' | 'appendEvent'>;
+  readonly signals: Pick<SignalStore, 'due' | 'appendEvent' | 'vetoVerdicts'>;
+  readonly faults: FaultSink;
   readonly panel: Pick<LlmPanel, 'judge' | 'spendCap'>;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly calendar: { isOpen(instant: Date): boolean };
@@ -44,6 +49,7 @@ export interface SignalOutcome {
 interface Refusal {
   readonly code: string;
   readonly detail: string;
+  readonly ticket?: string;
 }
 
 interface Admitted {
@@ -94,14 +100,25 @@ function alreadySubmitted(deps: SignalProcessorDeps, signal: SignalWire): boolea
   );
 }
 
+function windowRefusal(signal: SignalWire, tradingDate: string): Refusal | undefined {
+  if (sessionDate(new Date(signal.process_after)) === tradingDate) return undefined;
+  const due = `due in the ${signal.process_after} session`;
+  const failure = signal.events.filter((event) => event.status === 'failed').at(-1);
+  if (failure === undefined) return { code: 'session_missed', detail: due };
+  return {
+    code: 'dropped',
+    detail: `validity window ended (${due}), last error: ${failure.detail}`,
+    ticket: RULINGS_TICKET,
+  };
+}
+
 function gateRefusal(
   deps: SignalProcessorDeps,
   signal: SignalWire,
   tradingDate: string,
 ): Refusal | undefined {
-  if (sessionDate(new Date(signal.process_after)) !== tradingDate) {
-    return { code: 'session_missed', detail: `due in the ${signal.process_after} session` };
-  }
+  const window = windowRefusal(signal, tradingDate);
+  if (window !== undefined) return window;
   const control = deps.cycle.controls.current();
   if (control.state !== 'running') {
     return { code: CONTROL_REFUSAL[control.state], detail: control.reason };
@@ -274,7 +291,7 @@ function refuse(
     trading_date: tradingDate,
     scope: 'signal',
     parameter: refusal.code,
-    ticket: TICKET,
+    ticket: refusal.ticket ?? TICKET,
     message: `signal ${signal.signal_id} ${signal.symbol}: ${refusal.detail}`,
     instrument: signal.symbol,
   });
@@ -315,6 +332,28 @@ async function processOne(
   return settle(deps, signal, 'processed', await enter(deps, signal, tradingDate, admitted));
 }
 
+// David 2026-10-05 (#2024): an alert, not a block; vetoes keep working above the cap
+function checkVetoRate(deps: SignalProcessorDeps, tradingDate: string): void {
+  const verdicts = deps.signals.vetoVerdicts(SIGNAL_VETO_RATE_WINDOW);
+  if (verdicts.length < SIGNAL_VETO_RATE_WINDOW) return;
+  const vetoes = verdicts.filter((verdict) => verdict === 'veto').length;
+  if (vetoes / verdicts.length <= SIGNAL_VETO_RATE_CAP) return;
+  const detail = `${vetoes} of the last ${verdicts.length} signals vetoed, above the ${SIGNAL_VETO_RATE_CAP * 100}% cap`;
+  deps.faults.record({
+    kind: 'veto_rate',
+    trading_date: tradingDate,
+    code: 'SIGNAL_VETO_RATE',
+    detail,
+  });
+  deps.cycle.logger?.log({
+    trace_id: 'v2-signals',
+    stage: 'v2',
+    level: 'error',
+    event: 'v2_signal_veto_rate',
+    message: detail,
+  });
+}
+
 export function signalsDue(
   deps: Pick<SignalProcessorDeps, 'signals' | 'calendar'>,
   now: Date,
@@ -330,11 +369,14 @@ export async function processDueSignals(
   const tradingDate = sessionDate(now);
   const outcomes: SignalOutcome[] = [];
   for (const signal of deps.signals.due(now)) {
+    let outcome: SignalOutcome;
     try {
-      outcomes.push(await processOne(deps, signal, tradingDate));
+      outcome = await processOne(deps, signal, tradingDate);
     } catch (error) {
-      outcomes.push(settle(deps, signal, 'failed', describeThrownSafely(error)));
+      outcome = settle(deps, signal, 'failed', describeThrownSafely(error));
     }
+    outcomes.push(outcome);
+    if (outcome.status === 'processed') checkVetoRate(deps, tradingDate);
   }
   return outcomes;
 }

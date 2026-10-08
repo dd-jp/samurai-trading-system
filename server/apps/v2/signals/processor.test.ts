@@ -613,6 +613,142 @@ describe('processSignals, dry run', () => {
   });
 });
 
+describe('failed signals retry inside their window (David 2026-10-05, #2024)', () => {
+  it('retries a failed signal on a later pass of its session and enters it', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals, transports } = open(fixtures, new SimulatedClock(IN_SESSION));
+    const id = post(signals, {});
+    const recordDecision = root.journal.recordDecision.bind(root.journal);
+    let calls = 0;
+    vi.spyOn(root.journal, 'recordDecision').mockImplementation((...args) => {
+      calls += 1;
+      if (calls === 1) throw new Error('disk full');
+      return recordDecision(...args);
+    });
+
+    const failed = await root.processSignals(signals, IN_SESSION);
+    const retried = await root.processSignals(signals, new Date(IN_SESSION.getTime() + 30_000));
+
+    expect(failed).toMatchObject({ outcomes: [{ status: 'failed', detail: 'disk full' }] });
+    expect(retried).toMatchObject({ outcomes: [{ signal_id: id, status: 'processed' }] });
+    expect(signals.get(id)?.events.map((event) => event.status)).toEqual([
+      'queued',
+      'failed',
+      'processed',
+    ]);
+    expect(root.journal.orderFor(primaryId(id))).toBeDefined();
+    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
+    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(2);
+    expect(
+      await root.processSignals(signals, new Date(IN_SESSION.getTime() + 60_000)),
+    ).toMatchObject({ ran: false, reason: 'nothing_due' });
+  });
+
+  it('drops a failed signal once its session has passed, journalling the last error', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals, transports } = open(fixtures, new SimulatedClock(IN_SESSION));
+    const id = post(signals, {}, new Date('2026-09-29T14:00:00.000Z'));
+    signals.appendEvent(id, 'failed', 'disk full');
+    signals.appendEvent(id, 'failed', 'broker timeout');
+
+    const pass = await root.processSignals(signals, IN_SESSION);
+
+    expect(pass).toMatchObject({ ran: true, outcomes: [{ signal_id: id, status: 'refused' }] });
+    expect(signals.get(id)?.events.at(-1)?.detail).toBe(
+      'dropped: validity window ended (due in the 2026-09-29T14:00:00.000Z session), last error: broker timeout',
+    );
+    expect(refusalsOf(root, 'dropped')).toEqual([
+      expect.objectContaining({
+        scope: 'signal',
+        ticket: '#2024',
+        instrument: 'UP',
+        message: expect.stringContaining('last error: broker timeout'),
+      }),
+    ]);
+    expect(refusalsOf(root, 'session_missed')).toEqual([]);
+    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(0);
+    expect(root.db.prepare('SELECT COUNT(*) AS n FROM v2_orders').get()).toEqual({ n: 0 });
+  });
+});
+
+describe('the veto-rate cap over a rolling 20 signals (David 2026-10-05, #2024)', () => {
+  const VETO_SCRIPT: Script = () => '{"veto": true, "reason": "stop sits inside daily noise"}';
+  const passes = (count: number): ('pass' | 'veto')[] => Array<'pass'>(count).fill('pass');
+
+  function seedVerdicts(signals: SignalStore, verdicts: readonly ('pass' | 'veto')[]): void {
+    for (const [index, verdict] of verdicts.entries()) {
+      const id = post(signals, { entry: 25 + (index + 1) / 100 });
+      signals.appendEvent(id, 'processed', `veto ${verdict}: seeded; entries 0`);
+    }
+  }
+
+  function faultsOf(root: V2Root) {
+    return root.db.prepare('SELECT kind, trading_date, code, detail FROM v2_faults').all();
+  }
+
+  it('raises a veto_rate fault at 3 of the last 20, while the veto still skips the primary', async () => {
+    const fixtures = await writeFixtures();
+    const logs: LogEntry[] = [];
+    const { root, signals } = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      { logger: { log: (entry) => logs.push(entry) } },
+      VETO_SCRIPT,
+    );
+    seedVerdicts(signals, ['veto', 'pass', 'veto', ...passes(16)]);
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+
+    const detail = '3 of the last 20 signals vetoed, above the 10% cap';
+    expect(faultsOf(root)).toEqual([
+      { kind: 'veto_rate', trading_date: D, code: 'SIGNAL_VETO_RATE', detail },
+    ]);
+    expect(logs).toContainEqual(
+      expect.objectContaining({ level: 'error', event: 'v2_signal_veto_rate', message: detail }),
+    );
+    expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
+    expect(root.faults.faultFreeWeeks(D).last_fault).toBe(D);
+  });
+
+  it('raises nothing at 2 of the last 20', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION));
+    seedVerdicts(signals, ['veto', 'veto', ...passes(17)]);
+    post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+
+    expect(faultsOf(root)).toEqual([]);
+  });
+
+  it('raises nothing before 20 verdicts exist, however many are vetoes', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION), {}, VETO_SCRIPT);
+    seedVerdicts(signals, ['veto', 'veto', ...passes(16)]);
+    post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+
+    expect(faultsOf(root)).toEqual([]);
+  });
+
+  it('skips a veto that could not run: it is not a verdict', async () => {
+    const fixtures = await writeFixtures();
+    const failing = (_request: AnthropicMessageRequest): string => {
+      throw new Error('upstream 503');
+    };
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION), {}, failing);
+    seedVerdicts(signals, ['veto', 'veto', 'veto', ...passes(16)]);
+    post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+
+    expect(faultsOf(root)).toEqual([]);
+  });
+});
+
 describe('the run lease between the processor and the cycle', () => {
   it('skips a signals pass while the cycle holds the lease, leaving the signal queued', async () => {
     const fixtures = await writeFixtures();
@@ -872,6 +1008,41 @@ describe('processSignals, paper with a fake Alpaca', () => {
       }),
     );
     expect(day.root.journal.orderFor(primaryId(id))).toMatchObject({ outcome: 'submitted' });
+  });
+
+  it('retries a signal that failed after its primary reached Alpaca without sending it again (#2024)', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const alpaca = fakeAlpaca(clock, false);
+    const day = open(fixtures, clock, paper(alpaca));
+    day.root.journal.recordReconcile({
+      trading_date: D,
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'clean',
+      book_ids: ['signals/primary'],
+      diffs: [],
+      detail: '',
+      broker_mode: 'paper',
+      cash_quote: null,
+    });
+    const id = post(day.signals, {});
+    vi.spyOn(day.root.journal, 'settleOrder').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    const failed = await day.root.processSignals(day.signals, IN_SESSION);
+    const retried = await day.root.processSignals(
+      day.signals,
+      new Date(IN_SESSION.getTime() + 30_000),
+    );
+
+    expect(failed).toMatchObject({ outcomes: [{ status: 'failed', detail: 'disk full' }] });
+    expect(retried).toMatchObject({
+      outcomes: [{ status: 'processed', detail: expect.stringMatching(/^already_submitted/) }],
+    });
+    expect(alpaca.submitOrder).toHaveBeenCalledTimes(1);
+    expect(day.root.journal.orderFor(primaryId(id))).toMatchObject({ outcome: 'pending' });
   });
 
   it('cancels an unfilled signal entry at the next daily cycle', async () => {
