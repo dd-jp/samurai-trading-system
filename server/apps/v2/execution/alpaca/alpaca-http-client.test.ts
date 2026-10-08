@@ -1024,7 +1024,9 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
   });
 
   it('listOrderHistory reads every status of the named symbols, legs nested, newest first, a page at a time (#2086)', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([ORDER_RESPONSE]));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([{ ...ORDER_RESPONSE, order_class: 'simple' }]));
     vi.stubGlobal('fetch', fetchMock);
 
     const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
@@ -1043,10 +1045,14 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
   });
 
   describe('order listings page past the 500-order limit (#2089)', () => {
+    const submittedAt = (index: number) =>
+      new Date(Date.UTC(2026, 9, 1) - index * 1000).toISOString();
     const orders = (count: number, from = 0, legs = 0) =>
       Array.from({ length: count }, (_, index) => ({
         ...ORDER_RESPONSE,
         id: `o-${from + index}`,
+        order_class: legs > 0 ? 'bracket' : 'simple',
+        submitted_at: submittedAt(from + index),
         legs: Array.from({ length: legs }, (_unused, leg) => ({
           id: `o-${from + index}-leg-${leg}`,
           type: 'stop',
@@ -1116,6 +1122,78 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
       await expect(client().listOpenOrders()).rejects.toThrow(
         'Alpaca listOpenOrders listed order o-499 on two pages',
       );
+    });
+
+    const orphanLeg = (id: string, at: number) => ({
+      ...ORDER_RESPONSE,
+      id,
+      order_class: 'bracket',
+      type: 'stop',
+      status: 'held',
+      submitted_at: submittedAt(at),
+    });
+
+    const bracketWith = (id: string, at: number, legIds: readonly string[]) => ({
+      ...ORDER_RESPONSE,
+      id,
+      submitted_at: submittedAt(at),
+      legs: legIds.map((legId) => ({
+        id: legId,
+        type: 'stop',
+        status: 'held',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+      })),
+    });
+
+    it('pages from the last parent past a cut-off leg and keeps the leg nested under its parent', async () => {
+      const fetchMock = pages(
+        [...orders(499), orphanLeg('cut-leg', 499)],
+        [orphanLeg('cut-leg', 499), bracketWith('cut-parent', 499, ['cut-leg', 'cut-tp'])],
+      );
+      const read = await client().listOrderHistory(['AAPL']);
+      expect(read.map((order) => order.id)).toEqual([
+        ...orders(499).map((order) => order.id),
+        'cut-parent',
+      ]);
+      expect(cursors(fetchMock)).toEqual([null, 'o-498']);
+    });
+
+    it('fails the listing when a cut-off leg never turns up under a parent it read', async () => {
+      pages([...orders(499), orphanLeg('lost-leg', 499)], orders(3, 500));
+      await expect(client().listOrderHistory(['AAPL'])).rejects.toThrow(
+        'Alpaca listOrderHistory listed leg lost-leg without its parent order',
+      );
+    });
+
+    it('fails a page made only of cut-off legs, with no parent to page from', async () => {
+      pages(Array.from({ length: 500 }, (_, index) => orphanLeg(`leg-${index}`, index)));
+      await expect(client().listOrderHistory(['AAPL'])).rejects.toThrow(
+        'Alpaca listOrderHistory filled a page with orphan legs only',
+      );
+    });
+
+    it('lists a legless bracket row as an order of its own when legs are not nested', async () => {
+      pages([orphanLeg('open-leg', 0)]);
+      await expect(client().listOpenOrders()).resolves.toEqual([orphanLeg('open-leg', 0)]);
+    });
+
+    it.each([
+      ['shares the cut row submitted_at', { submitted_at: submittedAt(499) }],
+      ['has no submitted_at', { submitted_at: undefined }],
+    ])('fails the listing when the next page opens on a row that %s', async (_what, next) => {
+      pages(orders(500), [{ ...orders(1, 500)[0], ...next }]);
+      await expect(client().listOpenOrders()).rejects.toThrow(
+        'Alpaca listOpenOrders page cut at o-499 cannot be told apart from o-500 by submitted_at',
+      );
+    });
+
+    it('fails the listing when the cut row has no submitted_at', async () => {
+      const first = orders(500);
+      first[499] = { ...first[499], submitted_at: undefined as unknown as string };
+      pages(first, orders(1, 500));
+      await expect(client().listOpenOrders()).rejects.toThrow('page cut at o-499');
     });
 
     it('fails rather than return a listing cut at the page cap', async () => {

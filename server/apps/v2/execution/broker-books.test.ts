@@ -332,7 +332,15 @@ describe('AlpacaBrokerBooks over the HTTP client past 500 lifetime orders (#2089
 
   const filledEntries = (count: number, from: number) =>
     Array.from({ length: count }, (_, index) =>
-      crlBracket({ id: `old-${from + index}`, client_order_id: `old-${from + index}` }, []),
+      crlBracket(
+        {
+          id: `old-${from + index}`,
+          client_order_id: `old-${from + index}`,
+          order_class: 'simple',
+          submitted_at: new Date(Date.UTC(2026, 9, 6) - (from + index) * 1000).toISOString(),
+        },
+        [],
+      ),
     );
 
   function venue(historyPages: unknown[][]) {
@@ -362,7 +370,7 @@ describe('AlpacaBrokerBooks over the HTTP client past 500 lifetime orders (#2089
   it('finds the held stop of a bracket that sits past the first 500 orders', async () => {
     const { books, historyCursors } = venue([
       filledEntries(ALPACA_ORDER_PAGE_LIMIT, 0),
-      [crlBracket()],
+      [crlBracket({ submitted_at: '2026-10-01T00:00:00.000Z' })],
     ]);
     const book = await books.read('alpaca');
     expect(book.openOrders).toEqual([CRL_STOP]);

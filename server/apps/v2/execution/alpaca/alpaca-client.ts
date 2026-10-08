@@ -26,6 +26,7 @@ export interface AlpacaOrder {
   filled_qty: string;
   filled_avg_price: string | null;
   filled_at: string | null;
+  submitted_at?: string | null;
   legs?: AlpacaOrderLeg[];
   limit_price?: string | null;
   stop_price?: string | null;
