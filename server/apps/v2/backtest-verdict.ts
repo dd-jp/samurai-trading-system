@@ -46,6 +46,7 @@ export interface VerdictInput {
   readonly embargo?: number | undefined;
   readonly delayed?: readonly BookSeries[] | undefined;
   readonly random?: readonly BookSeries[] | undefined;
+  readonly randomUnmatched?: number | undefined;
 }
 
 interface WalkForward {
@@ -75,6 +76,7 @@ export interface RandomEntries {
   readonly edge: number;
   readonly band: number;
   readonly edges: readonly number[];
+  readonly unmatchedRuns: number;
   readonly beats: boolean;
 }
 
@@ -209,7 +211,8 @@ function quantile(values: readonly number[], q: number): number {
 }
 
 // David, 2026-10-08 on #1747 (rulings 1 and 2): the edge is walk-forward Sharpe minus the
-// benchmark's over the same days, and the candidate must sit above the random runs' band
+// benchmark's over the same days, and the candidate must sit above the random runs' band;
+// awaiting David (#1747): any run that could not match the path's trades fails the check
 function randomEntries(input: VerdictInput, forward: WalkForward): RandomEntries | null {
   if (input.random === undefined) return null;
   const edges = input.random.map(
@@ -219,7 +222,15 @@ function randomEntries(input: VerdictInput, forward: WalkForward): RandomEntries
   );
   const band = quantile(edges, RANDOM_BAND_QUANTILE);
   const edge = forward.strategySharpe - forward.benchmarkSharpe;
-  return { runs: edges.length, edge, band, edges, beats: edge > band };
+  const unmatchedRuns = input.randomUnmatched ?? 0;
+  return {
+    runs: edges.length,
+    edge,
+    band,
+    edges,
+    unmatchedRuns,
+    beats: unmatchedRuns === 0 && edge > band,
+  };
 }
 
 export function walkForwardRanges(

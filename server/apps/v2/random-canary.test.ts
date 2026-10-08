@@ -6,13 +6,18 @@ import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import type { WalkForwardPath } from './evidence/index.js';
 import {
   bookTrades,
+  type EntryOutcome,
   entryRead,
+  fillLedger,
   type MatchedTrade,
   matchedSessions,
   matchedTrades,
   RANDOM_CANARY_FIRST_SEED,
   RANDOM_CANARY_RUNS,
   RANDOM_ENTRY_ATR_WINDOW,
+  RANDOM_REENTRY_MAX_DRAWS_PER_FOLD,
+  type RandomBook,
+  type RandomDraws,
   randomEntrySleeve,
   randomScheduler,
   type ScheduledTrade,
@@ -91,7 +96,8 @@ function schedule(trades: readonly MatchedTrade[], universe = ['A', 'B', 'LATE']
 }
 
 describe('constants', () => {
-  it('declares 200 seeded runs from seed 1 and a 20-bar entry ATR', () => {
+  it('declares 200 seeded runs from seed 1, a 20-bar entry ATR and 1,000 redraws a fold', () => {
+    expect(RANDOM_REENTRY_MAX_DRAWS_PER_FOLD).toBe(1_000);
     expect(RANDOM_CANARY_RUNS).toBe(200);
     expect(RANDOM_CANARY_FIRST_SEED).toBe(1);
     expect(RANDOM_ENTRY_ATR_WINDOW).toBe(20);
@@ -201,13 +207,15 @@ describe('randomScheduler', () => {
       matched({ range: { fold: 2, start: 50, end: 70 }, hold: 8 }),
       ...Array.from({ length: 3 }, () => matched({ hold: 2 })),
     ];
-    const rows = randomScheduler(schedule(trades))(3);
+    const rows = randomScheduler(schedule(trades))(3).schedule;
     expect(rows).toHaveLength(trades.length);
     rows.forEach((row, index) => {
       const trade = trades[index] as MatchedTrade;
       expect(row.side).toBe(trade.side);
       expect(row.venue).toBe(trade.venue);
       expect(row.exit).toBe(row.entry + (trade.hold as number));
+      expect(row.unit).toBe(index);
+      expect(row.hold).toBe(trade.hold);
       expect(row.entry).toBeGreaterThanOrEqual(trade.range.start);
       expect(row.entry).toBeLessThan(trade.range.end);
       expect(entryRead(market, row.instrument, DATES[row.entry] as string)).toBeDefined();
@@ -219,8 +227,8 @@ describe('randomScheduler', () => {
   it('repeats a seed and moves with another', () => {
     const trades = Array.from({ length: 6 }, () => matched({ hold: 2 }));
     const scheduler = randomScheduler(schedule(trades));
-    expect(scheduler(1)).toEqual(scheduler(1));
-    expect(scheduler(1)).not.toEqual(scheduler(2));
+    expect(scheduler(1).schedule).toEqual(scheduler(1).schedule);
+    expect(scheduler(1).schedule).not.toEqual(scheduler(2).schedule);
   });
 
   it('holds an open trade, or one whose exit falls past the window, to the end and drops a trade with no free slot', () => {
@@ -230,8 +238,10 @@ describe('randomScheduler', () => {
       matched({ range: late, hold: 30 }),
       matched({ range: late, hold: 1 }),
     ];
-    const rows = randomScheduler(schedule(trades, ['A', 'B']))(5);
+    const draws = randomScheduler(schedule(trades, ['A', 'B']))(5);
+    const rows = draws.schedule;
     expect(rows).toHaveLength(2);
+    expect(draws.dropped).toBe(1);
     expect(rows.map((row) => row.exit)).toEqual([undefined, undefined]);
     expect(new Set(rows.map((row) => row.instrument))).toEqual(new Set(['A', 'B']));
   });
@@ -247,38 +257,151 @@ describe('randomScheduler', () => {
         return trial === 1 ? ['B'] : ['A'];
       },
     };
-    expect(randomScheduler(input)(9).map((row) => row.instrument)).toEqual(['B']);
+    expect(randomScheduler(input)(9).schedule.map((row) => row.instrument)).toEqual(['B']);
     expect(new Set(seen.map(([trial]) => trial))).toEqual(new Set([1]));
   });
 });
 
-describe('randomEntrySleeve', () => {
-  const rows: ScheduledTrade[] = [
-    { instrument: 'A', venue: 'saxo', side: 'buy', entry: 30, exit: 33 },
-    { instrument: 'B', venue: 'alpaca', side: 'sell', entry: 33, exit: undefined },
-  ];
-  const sleeve = randomEntrySleeve(
-    { id: 'c-random-1', spec: SPEC, schedule: rows, dates: DATES },
-    market,
-  );
-  const decide = (at: number) =>
-    sleeve.decide({ tradingDate: DATES[at] as string, macroDay: false, dryRun: true }, []);
+describe('randomScheduler redraws', () => {
+  const fold = { fold: 1, start: 30, end: 50 };
 
-  it('carries its spec and lists the names it schedules', () => {
-    expect(sleeve.id).toBe('c-random-1');
-    expect(sleeve.spec).toBe(SPEC);
-    expect(
-      sleeve.universe({ tradingDate: DATES[0] as string, macroDay: false, dryRun: true }),
-    ).toEqual({
-      instruments: ['A', 'B'],
-      refusals: [],
-    });
+  it('redraws a unit inside its fold from the given session, on a slot left free', () => {
+    const draws = randomScheduler(schedule([matched({ range: fold, hold: 5 })], ['A', 'B']))(4);
+    const next = draws.redraw(0, 3, 45) as ScheduledTrade;
+    expect(next).toMatchObject({ unit: 0, hold: 3, venue: 'saxo', side: 'buy' });
+    expect(next.entry).toBeGreaterThanOrEqual(45);
+    expect(next.entry).toBeLessThan(50);
+    expect(next.exit).toBe(next.entry + 3);
+    expect(noOverlap([...draws.schedule, next])).toBe(true);
   });
 
-  it('enters at the quoted close with the spec stop and exits when the hold has run', async () => {
-    const entry = await decide(30);
+  it('frees a released slot and finds none in a full fold', () => {
+    const tight = { fold: 2, start: 40, end: 41 };
+    const draws = randomScheduler(schedule([matched({ range: tight, hold: 2 })], ['A']))(2);
+    const first = draws.schedule[0] as ScheduledTrade;
+    expect(draws.redraw(0, 2, 40)).toBeUndefined();
+    draws.release(first);
+    expect(draws.redraw(0, 2, 40)).toMatchObject({ instrument: 'A', entry: 40, exit: 42 });
+    expect(draws.redraw(0, 2, 41)).toBeUndefined();
+  });
+
+  it(`stops a fold at ${RANDOM_REENTRY_MAX_DRAWS_PER_FOLD} redraws and leaves the other folds drawing`, () => {
+    const other = { fold: 2, start: 50, end: 70 };
+    const draws = randomScheduler(
+      schedule([matched({ range: fold, hold: 1 }), matched({ range: other, hold: 1 })], ['A', 'B']),
+    )(6);
+    const placed = Array.from({ length: RANDOM_REENTRY_MAX_DRAWS_PER_FOLD }, () => {
+      const row = draws.redraw(0, 1, 30);
+      if (row !== undefined) draws.release(row);
+      return row;
+    });
+    expect(placed.every((row) => row !== undefined)).toBe(true);
+    expect(draws.redraw(0, 1, 30)).toBeUndefined();
+    expect(draws.redraw(1, 1, 50)).toBeDefined();
+  });
+});
+
+interface Calls {
+  readonly redraws: [number, number | undefined, number][];
+  readonly released: ScheduledTrade[];
+}
+
+function fakeDraws(
+  rows: readonly ScheduledTrade[],
+  next: (unit: number, hold: number | undefined, from: number) => ScheduledTrade | undefined,
+  dropped = 0,
+): RandomDraws & Calls {
+  const redraws: [number, number | undefined, number][] = [];
+  const released: ScheduledTrade[] = [];
+  return {
+    schedule: rows,
+    dropped,
+    redraws,
+    released,
+    redraw: (unit, hold, from) => {
+      redraws.push([unit, hold, from]);
+      return next(unit, hold, from);
+    },
+    release: (trade) => {
+      released.push(trade);
+    },
+  };
+}
+
+function scheduled(overrides: Partial<ScheduledTrade> = {}): ScheduledTrade {
+  return {
+    instrument: 'A',
+    venue: 'saxo',
+    side: 'buy',
+    entry: 30,
+    exit: 33,
+    unit: 0,
+    hold: 3,
+    ...overrides,
+  };
+}
+
+function fakeBook(outcomes: Map<string, EntryOutcome>): RandomBook {
+  return { outcome: (instrument, decided) => outcomes.get(`${instrument}@${decided}`) ?? WORKING };
+}
+
+const WORKING: EntryOutcome = { kind: 'working' };
+const OPEN: EntryOutcome = { kind: 'open' };
+const REFUSED: EntryOutcome = { kind: 'refused' };
+
+function harness(
+  rows: readonly ScheduledTrade[],
+  next: (unit: number, hold: number | undefined, from: number) => ScheduledTrade | undefined = () =>
+    undefined,
+  dropped = 0,
+) {
+  const outcomes = new Map<string, EntryOutcome>();
+  const draws = fakeDraws(rows, next, dropped);
+  const sleeve = randomEntrySleeve(
+    { id: 'c-random-1', spec: SPEC, draws, dates: DATES, book: fakeBook(outcomes) },
+    market,
+  );
+  const decide = async (at: number) =>
+    (await sleeve.decide({ tradingDate: DATES[at] as string, macroDay: false, dryRun: true }, []))
+      .decisions;
+  const actions = async (at: number) =>
+    (await decide(at)).map((row) => [row.instrument, row.action, row.inputs_hash]);
+  const set = (instrument: string, decided: number, outcome: EntryOutcome) =>
+    outcomes.set(`${instrument}@${decided}`, outcome);
+  return { sleeve, draws, decide, actions, set };
+}
+
+describe('randomEntrySleeve', () => {
+  it('carries its spec and lists the names it has scheduled or holds', async () => {
+    const { sleeve, decide } = harness([
+      scheduled(),
+      scheduled({ instrument: 'B', entry: 33, exit: undefined, unit: 1, hold: undefined }),
+    ]);
+    const universe = () =>
+      sleeve.universe({ tradingDate: DATES[0] as string, macroDay: false, dryRun: true });
+    expect(sleeve.id).toBe('c-random-1');
+    expect(sleeve.spec).toBe(SPEC);
+    expect(universe()).toEqual({ instruments: ['A', 'B'], refusals: [] });
+    await decide(30);
+    expect(universe().instruments).toEqual(['B', 'A']);
+  });
+
+  it('enters at the quoted close with the spec stop and exits an open trade once its hold has run', async () => {
+    const run = harness([
+      scheduled(),
+      scheduled({
+        instrument: 'B',
+        venue: 'alpaca',
+        side: 'sell',
+        entry: 33,
+        exit: undefined,
+        unit: 1,
+        hold: undefined,
+      }),
+    ]);
+    const entry = await run.decide(30);
     const read = entryRead(market, 'A', DATES[30] as string);
-    expect(entry.decisions).toEqual([
+    expect(entry).toEqual([
       expect.objectContaining({
         sleeve_id: 'c-random-1',
         instrument: 'A',
@@ -291,38 +414,94 @@ describe('randomEntrySleeve', () => {
         inputs_hash: 'c-random-1-A-30',
       }),
     ]);
-    const swap = await decide(33);
+    expect(await run.decide(31)).toEqual([]);
+    run.set('A', 30, OPEN);
+    expect(await run.decide(32)).toEqual([]);
+    const swap = await run.decide(33);
     const short = entryRead(market, 'B', DATES[33] as string);
-    expect(swap.decisions.map((row) => [row.instrument, row.action])).toEqual([
-      ['A', 'exit'],
-      ['B', 'enter_short'],
+    expect(swap.map((row) => [row.instrument, row.action, row.inputs_hash])).toEqual([
+      ['A', 'exit', 'c-random-1-A-33'],
+      ['B', 'enter_short', 'c-random-1-B-33'],
     ]);
-    expect(swap.decisions[1]?.direction).toBe('bearish');
-    expect(swap.decisions[1]?.stop_price).toBe(
-      (short?.price as number) + 3 * (short?.atr as number),
-    );
-    expect((await decide(31)).decisions).toEqual([]);
-    expect(
-      (await sleeve.decide({ tradingDate: '2030-01-01', macroDay: false, dryRun: true }, []))
-        .decisions,
-    ).toEqual([]);
+    expect(swap[0]).toMatchObject({ venue: 'saxo', direction: 'neutral', price: 0 });
+    expect(swap[1]?.direction).toBe('bearish');
+    expect(swap[1]?.stop_price).toBe((short?.price as number) + 3 * (short?.atr as number));
+    expect(await run.actions(34)).toEqual([]);
+    run.set('A', 30, { kind: 'closed', held: 3 });
+    expect(await run.actions(35)).toEqual([]);
+    expect(run.draws.redraws).toEqual([]);
+    expect(run.draws.released).toEqual([scheduled()]);
+    expect(run.sleeve.report()).toEqual({ scheduled: 2, redraws: 0, unmatched: 0 });
   });
 
-  it('skips an entry it cannot quote', async () => {
-    const early = randomEntrySleeve(
-      {
-        id: 'c-random-2',
-        spec: SPEC,
-        schedule: [{ instrument: 'LATE', venue: 'saxo', side: 'buy', entry: 30, exit: 31 }],
-        dates: DATES,
-      },
-      market,
-    );
-    const output = await early.decide(
-      { tradingDate: DATES[30] as string, macroDay: false, dryRun: true },
+  it('exits a trade still open past its hold, once', async () => {
+    const run = harness([scheduled()]);
+    await run.decide(30);
+    expect(await run.actions(33)).toEqual([]);
+    run.set('A', 30, OPEN);
+    expect(await run.actions(34)).toEqual([['A', 'exit', 'c-random-1-A-34']]);
+    expect(await run.actions(35)).toEqual([]);
+  });
+
+  it('sends no exit for a trade its stop has already closed, and redraws the unserved hold', async () => {
+    const again = scheduled({ instrument: 'B', entry: 32, exit: 34, hold: 2 });
+    const run = harness([scheduled()], () => again);
+    await run.decide(30);
+    run.set('A', 30, { kind: 'closed', held: 1 });
+    expect(await run.actions(32)).toEqual([['B', 'enter_long', 'c-random-1-B-32']]);
+    expect(run.draws.redraws).toEqual([[0, 2, 32]]);
+    expect(run.draws.released).toEqual([scheduled()]);
+    expect(await run.actions(33)).toEqual([]);
+    run.set('B', 32, OPEN);
+    expect(await run.actions(34)).toEqual([['B', 'exit', 'c-random-1-B-34']]);
+    expect(run.sleeve.report()).toEqual({ scheduled: 1, redraws: 1, unmatched: 0 });
+  });
+
+  it('redraws a refused entry for its whole hold and an open-ended trade for the rest of the window', async () => {
+    const run = harness([
+      scheduled(),
+      scheduled({ instrument: 'B', exit: undefined, unit: 1, hold: undefined }),
+    ]);
+    await run.decide(30);
+    run.set('A', 30, REFUSED);
+    run.set('B', 30, { kind: 'closed', held: 4 });
+    await run.decide(36);
+    expect(run.draws.redraws).toEqual([
+      [0, 3, 36],
+      [1, undefined, 36],
+    ]);
+    expect(run.sleeve.report()).toEqual({ scheduled: 2, redraws: 2, unmatched: 2 });
+  });
+
+  it('counts a trade served in full as matched without a redraw', async () => {
+    const run = harness([scheduled({ exit: undefined, hold: 3 })]);
+    await run.decide(30);
+    run.set('A', 30, { kind: 'closed', held: 3 });
+    await run.decide(34);
+    expect(run.draws.redraws).toEqual([]);
+    expect(run.draws.released).toHaveLength(1);
+  });
+
+  it('redraws an entry it cannot quote from the next session and counts drops as unmatched', async () => {
+    const late = scheduled({ instrument: 'LATE', entry: 30, exit: 31, hold: 1 });
+    const run = harness([late], () => undefined, 2);
+    expect(await run.decide(30)).toEqual([]);
+    expect(run.draws.redraws).toEqual([[0, 1, 31]]);
+    expect(run.draws.released).toEqual([late]);
+    expect(run.sleeve.report()).toEqual({ scheduled: 1, redraws: 1, unmatched: 3 });
+  });
+
+  it('keeps a working entry and decides nothing on a date outside the run', async () => {
+    const run = harness([scheduled()]);
+    await run.decide(30);
+    expect(await run.decide(40)).toEqual([]);
+    const outside = await run.sleeve.decide(
+      { tradingDate: '2030-01-01', macroDay: false, dryRun: true },
       [],
     );
-    expect(output).toEqual({ decisions: [], refusals: [] });
+    expect(outside).toEqual({ decisions: [], refusals: [] });
+    expect(run.draws.redraws).toEqual([]);
+    expect(run.draws.released).toEqual([]);
   });
 });
 
@@ -370,6 +549,58 @@ describe('bookTrades', () => {
       expect(() => bookTrades(db, ['x/primary'], DATES.slice(3))).toThrow(
         `random canary: fill on ${DATES[2]} is not a session`,
       );
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('fillLedger', () => {
+  const order = (id: string, at: number, instrument: string, outcome: string, leg = 'entry') =>
+    `INSERT INTO v2_orders (client_order_id, book_id, trading_date, instrument, venue, leg, side,
+       dry_run, outcome, payload, recorded_at)
+     VALUES ('${id}', 'r/primary', '${DATES[at]}', '${instrument}', 'saxo', '${leg}', 'buy', 1,
+       '${outcome}', '{}', 't');`;
+  const fill = (seq: number, id: string, book: string, at: number, side: string) =>
+    `INSERT INTO v2_fills (fill_seq, fill_id, client_order_id, book_id, trading_date, instrument,
+       venue, leg, side, qty, price_gbp, fee_gbp, recorded_at, broker_mode)
+     VALUES (${seq}, 'f-${seq}', '${id}', '${book}', '${DATES[at]}', 'A', 'saxo',
+       '${side === 'buy' ? 'entry' : 'stop'}', '${side}', 2, 100, 0, 't', 'paper');`;
+
+  it('reads each entry as working, refused, open or closed from the journal and the fills', () => {
+    const db = migratedMemoryStore();
+    try {
+      const ledger = fillLedger(DATES);
+      const book = ledger.book('r/primary');
+      expect(() => book.outcome('A', 10)).toThrow('random canary: the fill ledger has no store');
+      ledger.attach(db);
+      db.exec(
+        [
+          order('o-a', 10, 'A', 'simulated'),
+          order('o-b', 10, 'B', 'cancelled'),
+          order('o-c', 12, 'C', 'refused_dry_run'),
+          order('o-x', 10, 'X', 'simulated', 'exit'),
+        ].join('\n'),
+      );
+      expect(book.outcome('A', 10)).toEqual({ kind: 'working' });
+      expect(book.outcome('B', 10)).toEqual({ kind: 'refused' });
+      expect(book.outcome('C', 12)).toEqual({ kind: 'refused' });
+      expect(book.outcome('X', 10)).toEqual({ kind: 'refused' });
+      expect(book.outcome('D', 10)).toEqual({ kind: 'refused' });
+      db.exec(fill(1, 'o-a', 'r/primary', 11, 'buy'));
+      expect(book.outcome('A', 10)).toEqual({ kind: 'open' });
+      expect(book.outcome('A', 12)).toEqual({ kind: 'refused' });
+      db.exec(
+        [fill(2, 'o-a', 'other/primary', 12, 'buy'), fill(3, 'o-a', 'r/primary', 14, 'sell')].join(
+          '\n',
+        ),
+      );
+      expect(book.outcome('A', 10)).toEqual({ kind: 'closed', held: 3 });
+      expect(ledger.book('other/primary').outcome('A', 12)).toEqual({ kind: 'open' });
+      expect(ledger.book('other/primary').outcome('A', 13)).toEqual({ kind: 'refused' });
+      expect(book.outcome('A', 12)).toEqual({ kind: 'refused' });
+      ledger.attach(migratedMemoryStore());
+      expect(book.outcome('A', 10)).toEqual({ kind: 'refused' });
     } finally {
       db.close();
     }

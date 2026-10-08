@@ -16,7 +16,9 @@ import {
   fencedMarket,
   randomVolTarget,
   runBacktest,
+  type SimulationInput,
   type SleeveFactory,
+  simulateBacktest,
   volTargetIdentity,
 } from './backtest.js';
 import { capitalCeilingGbp } from './backtest-verdict.js';
@@ -66,6 +68,7 @@ const BARS = new Map<string, BarSeries>([
   ['FLAT', series('FLAT', 0, 0.03)],
   ['DOWN', series('DOWN', -0.004, 0.005)],
   ['GONE', { symbol: 'GONE', bars: series('GONE', 0, 0).bars.slice(0, 71) }],
+  ['CRASH', series('CRASH', -0.03, 0)],
 ]);
 
 const market = new BarsMarketData(
@@ -359,10 +362,43 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       expect(row.edge).toBe(random?.edges[index]);
       expect(row.matched).toBeGreaterThan(0);
       expect(row.scheduled).toBe(row.matched);
+      expect(row.redraws).toBe(0);
+      expect(row.unmatched).toBe(0);
       expect(row.traded).toBe(row.matched);
       expect(row.matchedSessions).toBeGreaterThan(row.matched);
       expect(row.heldSessions).toBe(row.matchedSessions);
     }
+  });
+
+  it('re-enters a random run after an early stop until it serves the walk-forward holds', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const log = new CanaryLog(db, clock);
+    const wide =
+      (lookback: number): SleeveFactory =>
+      (market) => ({
+        ...trendSleeve(`trend-${lookback}`, 'UP', lookback)(market),
+        universe: () => ({ instruments: ['UP', 'CRASH'], refusals: [] }),
+      });
+    const trials = [3, 5].map((lookback) => ({ config: { lookback }, sleeve: wide(lookback) }));
+    const { verdict } = await runBacktest(input({ trials, randomCanary: { log, runs: 3 } }));
+    const rows = log
+      .list()
+      .filter((row) => row.kind === 'random')
+      .map((row) => JSON.parse(row.result));
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => [row.seed, row.redraws, row.unmatched])).toEqual([
+      [1, 8, 2],
+      [2, 9, 0],
+      [3, 11, 0],
+    ]);
+    for (const row of rows.slice(1)) {
+      expect(row.traded).toBe(row.matched + row.redraws);
+      expect(row.heldSessions).toBe(row.matchedSessions);
+    }
+    expect(rows[0].heldSessions).toBeLessThan(rows[0].matchedSessions);
+    expect(verdict.randomEntries?.unmatchedRuns).toBe(1);
+    expect(verdict.checks.beatsRandomEntries).toBe(false);
   });
 
   it('#1860: vol-targets the random runs exactly when the trial they copy is vol-targeted', async () => {
@@ -391,6 +427,21 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       sleeveIds: ['trend-5', ...randomIds],
     });
     expect(randomVolTarget(input(), 'trend-5', randomIds)).toBeUndefined();
+  });
+
+  it('#1860: a simulation refuses either canary, which binds candidates only', async () => {
+    const db = migratedMemoryStore();
+    const log = new CanaryLog(db, new SimulatedClock(new Date('2026-10-08T00:00:00Z')));
+    const { shiftCanary: _shift, randomCanary: _random, ...plain } = input();
+    const candidate: BacktestInput = { ...plain, randomCanary: { log } };
+    // @ts-expect-error a candidate's input, canaries and all, is not a simulation's
+    const typed: SimulationInput = candidate;
+    const shifted = { ...plain, shiftCanary: { trials: [], log } } as unknown as SimulationInput;
+    const random = typed;
+    const refusal = 'backtest: a simulation takes no canary; the canaries bind candidates only';
+    await expect(simulateBacktest(shifted)).rejects.toThrow(refusal);
+    await expect(simulateBacktest(random)).rejects.toThrow(refusal);
+    expect((await simulateBacktest(plain)).trials).toHaveLength(2);
   });
 
   it('refuses a shift canary that does not delay every trial', async () => {

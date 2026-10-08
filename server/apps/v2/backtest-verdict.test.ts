@@ -139,6 +139,7 @@ describe('backtestVerdict', () => {
       edge: verdict.walkForward.strategySharpe - verdict.walkForward.benchmarkSharpe,
       band: expect.any(Number),
       edges,
+      unmatchedRuns: 0,
       beats: true,
     });
     expect(verdict.randomEntries?.band).toBeCloseTo(
@@ -158,6 +159,17 @@ describe('backtestVerdict', () => {
     expect(verdict.pass).toBe(false);
     expect(verdict.trialsCounted).toBe(baseline.trialsCounted);
     expect(verdict.deflatedSharpe).toBe(baseline.deflatedSharpe);
+  });
+
+  it('fails the candidate when any random run could not match the walk-forward trades', () => {
+    const baseline = backtestVerdict(input());
+    const verdict = backtestVerdict(input({ randomUnmatched: 1 }));
+    expect(verdict.randomEntries?.edge).toBeGreaterThan(verdict.randomEntries?.band as number);
+    expect(verdict.randomEntries?.unmatchedRuns).toBe(1);
+    expect(verdict.randomEntries?.beats).toBe(false);
+    expect(verdict.checks).toEqual({ ...baseline.checks, beatsRandomEntries: false });
+    expect(verdict.pass).toBe(false);
+    expect(backtestVerdict(input({ randomUnmatched: 0 })).checks).toEqual(baseline.checks);
   });
 
   it('fails when a random run beats the candidate at the band', () => {
