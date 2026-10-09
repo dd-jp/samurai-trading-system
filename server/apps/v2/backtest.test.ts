@@ -394,10 +394,12 @@ describe('runBacktest', { timeout: 120_000 }, () => {
     ]);
     expect(rows.map((row) => row.heldSessions)).toEqual([93, 96, 96]);
     expect(rows.every((row) => row.matchedSessions === 96)).toBe(true);
-    expect(verdict.randomEntries?.unmatchedRuns).toBe(1);
+    expect(rows.map((row) => row.excluded)).toEqual([true, false, false]);
+    expect(verdict.randomEntries?.excludedRuns).toBe(1);
+    expect(verdict.randomEntries?.beats).toBe(false);
   });
 
-  it('fails the random check when a run is still unmatched at the window end', async () => {
+  it('fails the random check when every run is over the unserved tolerance at the window end', async () => {
     const db = migratedMemoryStore();
     const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
     const log = new CanaryLog(db, clock);
@@ -419,8 +421,9 @@ describe('runBacktest', { timeout: 120_000 }, () => {
     ]);
     for (const row of rows) expect(row.heldSessions).toBeLessThan(row.matchedSessions);
     const random = verdict.randomEntries as NonNullable<typeof verdict.randomEntries>;
-    expect(random.unmatchedRuns).toBe(2);
-    expect(random.edge).toBeGreaterThan(random.band);
+    expect(rows.map((row) => row.excluded)).toEqual([true, true]);
+    expect(random.excludedRuns).toBe(2);
+    expect(random.band).toBeNull();
     expect(random.beats).toBe(false);
     expect(verdict.checks.beatsRandomEntries).toBe(false);
   });
@@ -443,7 +446,7 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       [13, 12 * 6, 0],
       [12, 12 * 6, 1],
     ]);
-    expect(verdict.randomEntries?.unmatchedRuns).toBe(1);
+    expect(verdict.randomEntries?.excludedRuns).toBe(1);
   });
 
   it('#1860: vol-targets the random runs exactly when the trial they copy is vol-targeted', async () => {

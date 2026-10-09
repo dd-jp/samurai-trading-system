@@ -433,7 +433,7 @@ interface RandomRun {
 interface RandomCanaryRuns {
   readonly matched: number;
   readonly matchedSessions: number;
-  readonly unmatchedRuns: number;
+  readonly excluded: readonly boolean[];
   readonly runs: readonly RandomRun[];
   readonly series: readonly BookSeries[];
 }
@@ -532,7 +532,7 @@ async function randomCanaryRuns(
   return {
     matched,
     matchedSessions: matchedSessions(schedule.matched),
-    unmatchedRuns: runs.filter((row) => !servedWithinTolerance(row.unmatched, matched)).length,
+    excluded: runs.map((row) => !servedWithinTolerance(row.unmatched, matched)),
     runs,
     series: seriesOf(simulation, sleeves),
   };
@@ -557,6 +557,7 @@ function logRandom(
         ...run,
         matched: random.matched,
         matchedSessions: random.matchedSessions,
+        excluded: random.excluded[index],
         edge: entries.edges[index],
       },
     });
@@ -643,7 +644,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
     embargo: input.embargo,
     delayed: canary === undefined ? undefined : await delayedSeries(input, canary, dates),
     random: random?.series,
-    randomUnmatched: random?.unmatchedRuns,
+    randomExcluded: random?.excluded,
   });
   const hash = candidateHash(input, configs);
   logShift(input, hash, verdict);

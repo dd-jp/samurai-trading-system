@@ -20,7 +20,7 @@ export const RANDOM_ENTRY_ATR_WINDOW = 20;
 // matched trade's own test fold even when the redraw spills into a later one
 export const RANDOM_REENTRY_MAX_DRAWS_PER_FOLD = 1_000;
 // David, 2026-10-09 on #1747: a run with at most this share of the path's trades unserved at the
-// window's end still counts as matched
+// window's end still counts as matched; a run above it leaves the random band
 export const RANDOM_UNSERVED_TOLERANCE = 0.02;
 
 export interface Trade {
@@ -493,8 +493,8 @@ function unservedHold(attempt: Attempt, held: number | undefined, last: number):
 
 // David, 2026-10-08 and 2026-10-09 on #1747: after an early exit or a refused or zero-size entry
 // the run draws a new slot for the hold still unserved, in the same fold or spilling into later
-// ones, until the walk-forward path's trades and held sessions are matched; a run still
-// unmatched at the window's end fails the candidate's random canary
+// ones, until the walk-forward path's trades and held sessions are matched; a run over the
+// unserved tolerance at the window's end leaves the random band
 class RandomRunState {
   readonly #input: RandomSleeveInput;
   readonly #pending = new Map<number, ScheduledTrade[]>();

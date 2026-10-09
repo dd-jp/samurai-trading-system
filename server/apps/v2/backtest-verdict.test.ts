@@ -5,6 +5,7 @@ import {
   CAPITAL_CEILING_DRAWDOWN_MULTIPLE,
   capitalCeilingGbp,
   RANDOM_BAND_QUANTILE,
+  RANDOM_EXCLUDED_RUNS_MAX_SHARE,
   type VerdictInput,
 } from './backtest-verdict.js';
 import { annualisedSharpe, foldRanges, sliceByRanges, walkForwardPath } from './evidence/index.js';
@@ -139,7 +140,7 @@ describe('backtestVerdict', () => {
       edge: verdict.walkForward.strategySharpe - verdict.walkForward.benchmarkSharpe,
       band: expect.any(Number),
       edges,
-      unmatchedRuns: 0,
+      excludedRuns: 0,
       beats: true,
     });
     expect(verdict.randomEntries?.band).toBeCloseTo(
@@ -161,15 +162,58 @@ describe('backtestVerdict', () => {
     expect(verdict.deflatedSharpe).toBe(baseline.deflatedSharpe);
   });
 
-  it('fails the candidate when any random run could not match the walk-forward trades', () => {
+  it(`passes with at most ${RANDOM_EXCLUDED_RUNS_MAX_SHARE * 100}% of the random runs excluded and fails just over it`, () => {
+    expect(RANDOM_EXCLUDED_RUNS_MAX_SHARE).toBe(0.05);
     const baseline = backtestVerdict(input());
-    const verdict = backtestVerdict(input({ randomUnmatched: 1 }));
-    expect(verdict.randomEntries?.edge).toBeGreaterThan(verdict.randomEntries?.band as number);
-    expect(verdict.randomEntries?.unmatchedRuns).toBe(1);
+    const random = Array.from({ length: 200 }, (_, run) => RANDOM[run % 5] as BookSeries);
+    const excluding = (count: number) =>
+      backtestVerdict(input({ random, randomExcluded: random.map((_, index) => index < count) }));
+    const atShare = excluding(10);
+    expect(atShare.randomEntries?.excludedRuns).toBe(10);
+    expect(atShare.randomEntries?.runs).toBe(200);
+    expect(atShare.randomEntries?.beats).toBe(true);
+    expect(atShare.checks).toEqual(baseline.checks);
+    const overShare = excluding(11);
+    expect(overShare.randomEntries?.excludedRuns).toBe(11);
+    expect(overShare.randomEntries?.edge).toBeGreaterThan(overShare.randomEntries?.band as number);
+    expect(overShare.randomEntries?.beats).toBe(false);
+    expect(overShare.checks).toEqual({ ...baseline.checks, beatsRandomEntries: false });
+    expect(overShare.pass).toBe(false);
+    expect(excluding(0).randomEntries?.excludedRuns).toBe(0);
+    expect(excluding(0).checks).toEqual(baseline.checks);
+  });
+
+  it('computes the band from the kept runs only', () => {
+    const strong = book(noisy(LENGTH, 0.01, 0.001, 0));
+    const random = [
+      ...RANDOM,
+      ...Array.from({ length: 15 }, () => RANDOM[0] as BookSeries),
+      strong,
+    ];
+    const kept = backtestVerdict(input({ random: random.slice(0, 20) })).randomEntries;
+    const verdict = backtestVerdict(
+      input({ random, randomExcluded: random.map((series) => series === strong) }),
+    );
+    const all = backtestVerdict(input({ random, randomExcluded: random.map(() => false) }));
+    expect(verdict.randomEntries?.runs).toBe(21);
+    expect(verdict.randomEntries?.excludedRuns).toBe(1);
+    expect(verdict.randomEntries?.edges).toHaveLength(21);
+    expect(verdict.randomEntries?.band).toBe(kept?.band);
+    expect(all.randomEntries?.band).toBeGreaterThan(kept?.band as number);
+    expect(verdict.randomEntries?.beats).toBe(true);
+  });
+
+  it('fails when every random run is excluded and refuses misaligned exclusions', () => {
+    const baseline = backtestVerdict(input());
+    const verdict = backtestVerdict(input({ randomExcluded: RANDOM.map(() => true) }));
+    expect(verdict.randomEntries?.excludedRuns).toBe(5);
+    expect(verdict.randomEntries?.band).toBeNull();
     expect(verdict.randomEntries?.beats).toBe(false);
     expect(verdict.checks).toEqual({ ...baseline.checks, beatsRandomEntries: false });
     expect(verdict.pass).toBe(false);
-    expect(backtestVerdict(input({ randomUnmatched: 0 })).checks).toEqual(baseline.checks);
+    expect(() => backtestVerdict(input({ randomExcluded: [false] }))).toThrow(
+      'backtestVerdict: the random exclusions must carry every run',
+    );
   });
 
   it('fails when a random run beats the candidate at the band', () => {
