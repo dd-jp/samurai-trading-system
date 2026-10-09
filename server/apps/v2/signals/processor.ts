@@ -14,7 +14,7 @@ import type { FaultSink, ReconcileVerdict } from '../journal/index.js';
 import type { LlmPanel } from '../signal/index.js';
 import { MOVERS_MIN_DOLLAR_VOLUME_USD, SIGNALS_SLEEVE_ID } from '../signal/index.js';
 import { entryRange, planSignalEntry, quoteFill, type SignalEntryPlan } from './entry.js';
-import type { SignalStore } from './store.js';
+import type { SignalStore, SignalVetoAttempt } from './store.js';
 import { callFailed, SIGNAL_VETO_BARS, type SignalVeto, signalVeto } from './veto.js';
 
 const TICKET = '#1941';
@@ -22,8 +22,10 @@ const RULINGS_TICKET = '#2024';
 
 const SIGNAL_VETO_RATE_WINDOW = 20;
 const SIGNAL_VETO_RATE_CAP = 0.1;
-const RETRY_INTERRUPTED =
-  'llm_call_failed: the retry was interrupted before its verdict was journalled';
+const INTERRUPTED: SignalVeto = {
+  kind: 'unavailable',
+  reason: 'llm_call_failed: the call was interrupted before its verdict was journalled',
+};
 
 const CONTROL_REFUSAL = {
   paused: 'manual_control_paused',
@@ -46,9 +48,10 @@ export interface SignalProcessorDeps {
     | 'vetoVerdicts'
     | 'recordVeto'
     | 'vetoFor'
-    | 'claimVetoRetry'
+    | 'claimVeto'
+    | 'vetoClaimed'
     | 'recordRetryVeto'
-    | 'vetoRetry'
+    | 'retryVetoFor'
   >;
   readonly faults: FaultSink;
   readonly panel: Pick<LlmPanel, 'judge' | 'spendCap'>;
@@ -323,27 +326,35 @@ function askVeto(
   );
 }
 
-// The claim is journalled before the call, so a crash during it makes the retry unavailable
-// instead of earning a third call
+function claimedVeto(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  admitted: Admitted,
+  bars: readonly V2Bar[],
+  attempt: SignalVetoAttempt,
+): Promise<SignalVeto> {
+  if (deps.signals.vetoClaimed(signal.signal_id, attempt)) return Promise.resolve(INTERRUPTED);
+  deps.signals.claimVeto(signal.signal_id, attempt);
+  return askVeto(deps, signal, admitted, bars);
+}
+
 async function retriedVeto(
   deps: SignalProcessorDeps,
   signal: SignalWire,
   admitted: Admitted,
   bars: readonly V2Bar[],
 ): Promise<SignalVeto> {
-  const retry = deps.signals.vetoRetry(signal.signal_id);
-  if (retry.veto !== undefined) return retry.veto;
-  let veto: SignalVeto = { kind: 'unavailable', reason: RETRY_INTERRUPTED };
-  if (!retry.claimed) {
-    deps.signals.claimVetoRetry(signal.signal_id);
-    veto = await askVeto(deps, signal, admitted, bars);
-  }
+  const journalled = deps.signals.retryVetoFor(signal.signal_id);
+  if (journalled !== undefined) return journalled;
+  const veto = await claimedVeto(deps, signal, admitted, bars, 2);
   deps.signals.recordRetryVeto(signal.signal_id, veto);
   return veto;
 }
 
 // David 2026-10-09 (#2024): the veto runs once per signal and a retry reuses its journalled
-// verdict, except that a failed call gets one more attempt on a later pass; both legs wait for it
+// verdict, except that a failed call gets one more attempt on a later pass, which both legs wait
+// for. A claim precedes every call, so a restart counts a claimed call without a verdict as failed
+// and no crash path reaches a third call
 async function onceVeto(
   deps: SignalProcessorDeps,
   signal: SignalWire,
@@ -354,8 +365,9 @@ async function onceVeto(
   if (journalled !== undefined) {
     return callFailed(journalled) ? retriedVeto(deps, signal, admitted, bars) : journalled;
   }
-  const veto = await askVeto(deps, signal, admitted, bars);
+  const veto = await claimedVeto(deps, signal, admitted, bars, 1);
   deps.signals.recordVeto(signal.signal_id, veto);
+  if (veto === INTERRUPTED) return retriedVeto(deps, signal, admitted, bars);
   if (callFailed(veto)) throw new Error(`veto ${veto.reason}; one retry left on a later pass`);
   return veto;
 }

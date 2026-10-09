@@ -12,10 +12,7 @@ export const SIGNAL_LIST_MAX = 200;
 
 export type SignalVetoVerdict = 'pass' | 'veto';
 
-export interface SignalVetoRetry {
-  readonly claimed: boolean;
-  readonly veto: SignalVeto | undefined;
-}
+export type SignalVetoAttempt = 1 | 2;
 
 interface SignalRow {
   signal_id: string;
@@ -122,27 +119,30 @@ export class SignalStore {
       .get(signalId) as SignalVeto | undefined;
   }
 
-  claimVetoRetry(signalId: string): void {
+  claimVeto(signalId: string, attempt: SignalVetoAttempt): void {
     this.db
-      .prepare('INSERT INTO v2_signal_veto_retries (signal_id, claimed_at) VALUES (?, ?)')
-      .run(signalId, toStoredTimestamp(this.clock.now()));
+      .prepare(
+        'INSERT INTO v2_signal_veto_claims (signal_id, attempt, claimed_at) VALUES (?, ?, ?)',
+      )
+      .run(signalId, attempt, toStoredTimestamp(this.clock.now()));
+  }
+
+  vetoClaimed(signalId: string, attempt: SignalVetoAttempt): boolean {
+    return (
+      this.db
+        .prepare('SELECT 1 FROM v2_signal_veto_claims WHERE signal_id = ? AND attempt = ?')
+        .get(signalId, attempt) !== undefined
+    );
   }
 
   recordRetryVeto(signalId: string, veto: SignalVeto): void {
     this.#insertVeto('v2_signal_veto_retry_verdicts', signalId, veto);
   }
 
-  vetoRetry(signalId: string): SignalVetoRetry {
-    const row = this.db
-      .prepare(
-        `SELECT v.kind, v.reason FROM v2_signal_veto_retries r
-         LEFT JOIN v2_signal_veto_retry_verdicts v ON v.signal_id = r.signal_id
-         WHERE r.signal_id = ?`,
-      )
-      .get(signalId) as { kind: SignalVeto['kind'] | null; reason: string | null } | undefined;
-    if (row === undefined) return { claimed: false, veto: undefined };
-    if (row.kind === null) return { claimed: true, veto: undefined };
-    return { claimed: true, veto: { kind: row.kind, reason: row.reason as string } };
+  retryVetoFor(signalId: string): SignalVeto | undefined {
+    return this.db
+      .prepare('SELECT kind, reason FROM v2_signal_veto_retry_verdicts WHERE signal_id = ?')
+      .get(signalId) as SignalVeto | undefined;
   }
 
   #insertVeto(

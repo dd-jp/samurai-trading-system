@@ -1477,6 +1477,27 @@ describe('a failed veto call gets one more attempt (David 2026-10-09, #2024)', (
     return rows.map((row) => JSON.stringify(row).replaceAll(signalId, '<signal>'));
   }
 
+  const INTERRUPTED = {
+    kind: 'unavailable',
+    reason: 'llm_call_failed: the call was interrupted before its verdict was journalled',
+  };
+
+  function crashBeforeVerdict(storePath: string, table: string): () => void {
+    const db = openSharedStore(storePath);
+    db.exec(`CREATE TRIGGER crash_before_verdict BEFORE INSERT ON ${table}
+      BEGIN SELECT RAISE(ABORT, 'crash before the verdict was journalled'); END`);
+    return () => {
+      db.exec('DROP TRIGGER crash_before_verdict');
+      db.close();
+    };
+  }
+
+  function restart(fixtures: Fixtures, before: Opened, script: Script): Opened {
+    roots.splice(roots.indexOf(before.root), 1);
+    before.root.close();
+    return open(fixtures, new SimulatedClock(IN_SESSION), {}, script);
+  }
+
   function spendTheCap(storePath: string): void {
     const db = openSharedStore(storePath);
     try {
@@ -1510,9 +1531,10 @@ describe('a failed veto call gets one more attempt (David 2026-10-09, #2024)', (
       kind: 'unavailable',
       reason: 'llm_call_failed: upstream 503',
     });
-    expect(signals.vetoRetry(id)).toEqual({
-      claimed: true,
-      veto: { kind: 'pass', reason: 'trend is flat, stop outside noise' },
+    expect(signals.vetoClaimed(id, 2)).toBe(true);
+    expect(signals.retryVetoFor(id)).toEqual({
+      kind: 'pass',
+      reason: 'trend is flat, stop outside noise',
     });
     expect(signals.get(id)?.events.map((event) => event.status)).toEqual([
       'queued',
@@ -1556,7 +1578,9 @@ describe('a failed veto call gets one more attempt (David 2026-10-09, #2024)', (
 
     expect(pass).toMatchObject({ outcomes: [{ status: 'processed' }] });
     expect(callsOf(transports)).toBe(0);
-    expect(signals.vetoRetry(id)).toEqual({ claimed: false, veto: undefined });
+    expect(signals.vetoClaimed(id, 1)).toBe(true);
+    expect(signals.vetoClaimed(id, 2)).toBe(false);
+    expect(signals.retryVetoFor(id)).toBeUndefined();
     expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
     expect(root.journal.orderFor(shadowId(id))).toBeDefined();
   });
@@ -1577,7 +1601,7 @@ describe('a failed veto call gets one more attempt (David 2026-10-09, #2024)', (
 
     expect(capped).toMatchObject({ outcomes: [{ status: 'processed' }] });
     expect(callsOf(transports)).toBe(1);
-    expect(signals.vetoRetry(id).veto).toEqual({
+    expect(signals.retryVetoFor(id)).toEqual({
       kind: 'unavailable',
       reason: 'llm_spend_cap:budget',
     });
@@ -1613,25 +1637,70 @@ describe('a failed veto call gets one more attempt (David 2026-10-09, #2024)', (
     expect(after.root.journal.orderFor(primaryId(id))).toBeDefined();
   });
 
-  it('a restart during the retry call makes no third call: the retry is unavailable and final', async () => {
+  it('a crash during the first call, then a failed retry, is final after exactly 2 calls', async () => {
     const fixtures = await writeFixtures();
-    const before = open(fixtures, new SimulatedClock(IN_SESSION), {}, failingThen(FAIL));
+    const before = open(fixtures, new SimulatedClock(IN_SESSION), {}, failingThen(PASS));
     const id = post(before.signals, {});
+    const recover = crashBeforeVerdict(fixtures.storePath, 'v2_signal_vetoes');
     await before.root.processSignals(before.signals, IN_SESSION);
-    before.signals.claimVetoRetry(id);
-    roots.splice(roots.indexOf(before.root), 1);
-    before.root.close();
+    recover();
+    const after = restart(fixtures, before, failingThen(FAIL, PASS));
 
-    const after = open(fixtures, new SimulatedClock(IN_SESSION));
     const pass = await after.root.processSignals(after.signals, LATER);
 
     expect(pass).toMatchObject({ outcomes: [{ status: 'processed' }] });
     expect(callsOf(before.transports)).toBe(1);
-    expect(callsOf(after.transports)).toBe(0);
-    expect(after.signals.vetoRetry(id).veto).toEqual({
+    expect(callsOf(after.transports)).toBe(1);
+    expect(after.signals.vetoFor(id)).toEqual(INTERRUPTED);
+    expect(after.signals.retryVetoFor(id)).toEqual({
       kind: 'unavailable',
-      reason: 'llm_call_failed: the retry was interrupted before its verdict was journalled',
+      reason: 'llm_call_failed: upstream 503',
     });
+    expect(after.root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(after.root.journal.orderFor(shadowId(id))).toBeDefined();
+    expect(await after.root.processSignals(after.signals, LATEST)).toMatchObject({ ran: false });
+    expect(callsOf(after.transports)).toBe(1);
+  });
+
+  it('a crash during the first call, then a passing retry, enters the primary', async () => {
+    const fixtures = await writeFixtures();
+    const before = open(fixtures, new SimulatedClock(IN_SESSION), {}, failingThen(PASS));
+    const id = post(before.signals, {});
+    const recover = crashBeforeVerdict(fixtures.storePath, 'v2_signal_vetoes');
+    await before.root.processSignals(before.signals, IN_SESSION);
+    recover();
+    const after = restart(fixtures, before, failingThen(PASS));
+
+    const pass = await after.root.processSignals(after.signals, LATER);
+
+    expect(pass).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(callsOf(before.transports)).toBe(1);
+    expect(callsOf(after.transports)).toBe(1);
+    expect(after.signals.vetoClaimed(id, 2)).toBe(true);
+    expect(after.signals.retryVetoFor(id)).toEqual({
+      kind: 'pass',
+      reason: 'trend is flat, stop outside noise',
+    });
+    expect(after.root.journal.orderFor(primaryId(id))).toBeDefined();
+    expect(after.root.journal.orderFor(shadowId(id))).toBeDefined();
+  });
+
+  it('a crash during the second call is final with no third call', async () => {
+    const fixtures = await writeFixtures();
+    const before = open(fixtures, new SimulatedClock(IN_SESSION), {}, failingThen(FAIL, PASS));
+    const id = post(before.signals, {});
+    await before.root.processSignals(before.signals, IN_SESSION);
+    const recover = crashBeforeVerdict(fixtures.storePath, 'v2_signal_veto_retry_verdicts');
+    await before.root.processSignals(before.signals, LATER);
+    recover();
+    const after = restart(fixtures, before, failingThen(PASS));
+
+    const pass = await after.root.processSignals(after.signals, LATEST);
+
+    expect(pass).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(callsOf(before.transports)).toBe(2);
+    expect(callsOf(after.transports)).toBe(0);
+    expect(after.signals.retryVetoFor(id)).toEqual(INTERRUPTED);
     expect(after.root.journal.orderFor(primaryId(id))).toBeUndefined();
     expect(after.root.journal.orderFor(shadowId(id))).toBeDefined();
   });
@@ -1668,7 +1737,7 @@ describe('a failed veto call gets one more attempt (David 2026-10-09, #2024)', (
     const entered = await root.processSignals(signals, LATEST);
 
     expect(entered).toMatchObject({ outcomes: [{ status: 'processed' }] });
-    expect(signals.vetoRetry(id).veto).toEqual({
+    expect(signals.retryVetoFor(id)).toEqual({
       kind: 'unavailable',
       reason: 'llm_call_failed: upstream 503',
     });

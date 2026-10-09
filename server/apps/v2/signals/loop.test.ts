@@ -11,9 +11,10 @@ const IDLE_SIGNALS: SignalProcessorStore = {
   vetoVerdicts: () => [],
   recordVeto: () => {},
   vetoFor: () => undefined,
-  claimVetoRetry: () => {},
+  claimVeto: () => {},
+  vetoClaimed: () => false,
   recordRetryVeto: () => {},
-  vetoRetry: () => ({ claimed: false, veto: undefined }),
+  retryVetoFor: () => undefined,
 };
 
 function harness(overrides: Partial<SignalLoopDeps> = {}, pass?: () => Promise<SignalPass>) {

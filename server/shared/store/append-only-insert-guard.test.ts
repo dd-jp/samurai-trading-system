@@ -223,19 +223,17 @@ const CASES: readonly Case[] = [
     ],
   },
   {
-    table: 'v2_signal_veto_retries',
+    table: 'v2_signal_veto_claims',
     seed: `INSERT INTO v2_signals (${SIGNAL_COLUMNS})
         VALUES ('s1', 'digest-1', 'AAPL', 100, 101, 0, '[]', 95, '2026-10-01T07:00:00.000Z', 'in_session', '2026-10-01T07:00:00.000Z', 'p');
-      INSERT INTO v2_signal_vetoes (signal_id, kind, reason, recorded_at)
-        VALUES ('s1', 'unavailable', 'llm_call_failed: 503', '2026-10-01T07:00:00.000Z');
-      INSERT INTO v2_signal_veto_retries (signal_id, claimed_at)
-        VALUES ('s1', '2026-10-01T07:00:30.000Z')`,
+      INSERT INTO v2_signal_veto_claims (signal_id, attempt, claimed_at)
+        VALUES ('s1', 1, '2026-10-01T07:00:00.000Z')`,
     attacks: [
       {
-        name: 'same signal_id',
+        name: 'same signal_id and attempt',
         outcome: 'refused',
-        sql: `INSERT OR REPLACE INTO v2_signal_veto_retries (signal_id, claimed_at)
-          VALUES ('s1', '2026-10-01T08:00:00.000Z')`,
+        sql: `INSERT OR REPLACE INTO v2_signal_veto_claims (signal_id, attempt, claimed_at)
+          VALUES ('s1', 1, '2026-10-01T08:00:00.000Z')`,
       },
     ],
   },
@@ -245,8 +243,8 @@ const CASES: readonly Case[] = [
         VALUES ('s1', 'digest-1', 'AAPL', 100, 101, 0, '[]', 95, '2026-10-01T07:00:00.000Z', 'in_session', '2026-10-01T07:00:00.000Z', 'p');
       INSERT INTO v2_signal_vetoes (signal_id, kind, reason, recorded_at)
         VALUES ('s1', 'unavailable', 'llm_call_failed: 503', '2026-10-01T07:00:00.000Z');
-      INSERT INTO v2_signal_veto_retries (signal_id, claimed_at)
-        VALUES ('s1', '2026-10-01T07:00:30.000Z');
+      INSERT INTO v2_signal_veto_claims (signal_id, attempt, claimed_at)
+        VALUES ('s1', 2, '2026-10-01T07:00:30.000Z');
       INSERT INTO v2_signal_veto_retry_verdicts (signal_id, kind, reason, recorded_at)
         VALUES ('s1', 'veto', 'original', '2026-10-01T07:00:31.000Z')`,
     attacks: [

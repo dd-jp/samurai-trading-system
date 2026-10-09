@@ -161,9 +161,10 @@ export type SignalProcessorStore = Pick<
   | 'vetoVerdicts'
   | 'recordVeto'
   | 'vetoFor'
-  | 'claimVetoRetry'
+  | 'claimVeto'
+  | 'vetoClaimed'
   | 'recordRetryVeto'
-  | 'vetoRetry'
+  | 'retryVetoFor'
 >;
 
 export type SignalPass =
