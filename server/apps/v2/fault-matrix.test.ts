@@ -26,6 +26,7 @@ import type {
 import type { FaultKind } from './journal/faults.js';
 import { CapitalConfigStore } from './risk/index.js';
 import { type LeaseWait, RunLease, withRunLease } from './run-lease.js';
+import { declaredCfdCosts } from './signal/index.js';
 
 const FX = 1.25;
 const OPEN = new Set(['new', 'accepted', 'held', 'partially_filled']);
@@ -436,6 +437,7 @@ function drill(options: { sessions?: boolean } = {}): Drill {
       dryRun: false,
       brokerMode: 'paper',
       halfSpreadBps: () => 5,
+      cfdCosts: declaredCfdCosts(),
       alpacaClient: broker,
       venueSessions: options.sessions === true ? TABLE_VENUE_SESSIONS : undefined,
     });
