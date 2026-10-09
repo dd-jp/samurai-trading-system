@@ -217,6 +217,44 @@ function crlBracket(
   };
 }
 
+// Unmeasured (#2090 item 1): the OCO re-arm as Alpaca's order reference draws it, the take-profit
+// limit as parent and the stop as its one leg, the leg assumed `held` like a filled bracket's
+function crlOco(status = 'new', stop: Record<string, unknown> = {}) {
+  return {
+    id: 'oco-7a21',
+    client_order_id: 'v2-debate-primary-2026-10-06-CRL:rearm',
+    symbol: 'CRL',
+    side: 'sell',
+    type: 'limit',
+    order_class: 'oco',
+    qty: '1',
+    filled_qty: '0',
+    filled_avg_price: null,
+    filled_at: null,
+    status,
+    limit_price: '340.96',
+    stop_price: null,
+    legs: [
+      {
+        id: 'leg-7a22',
+        client_order_id: 'stop-4df6',
+        symbol: 'CRL',
+        side: 'sell',
+        type: 'stop',
+        order_class: 'oco',
+        qty: '1',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+        status: 'held',
+        stop_price: '290.65',
+        limit_price: null,
+        ...stop,
+      },
+    ],
+  };
+}
+
 const HELD_CRL = [{ symbol: 'CRL', qty: '1', side: 'long' }];
 const CRL_TP_OPEN = { ...crlLeg('limit'), legs: [] };
 const CRL_STOP = {
@@ -239,22 +277,35 @@ describe('AlpacaBrokerBooks held stop legs (#2086)', () => {
   });
 
   it('reads the held stop leg of a resting OCO re-arm', async () => {
-    const oco = crlBracket(
-      { side: 'sell', type: 'limit', order_class: 'oco', status: 'new', filled_qty: '0' },
-      [crlLeg('stop')],
-    );
-    const book = await new AlpacaBrokerBooks(client({ positions: HELD_CRL, history: [oco] })).read(
-      'alpaca',
-    );
-    expect(book.openOrders).toEqual([CRL_STOP]);
+    const { legs: _legs, ...parent } = crlOco();
+    const book = await new AlpacaBrokerBooks(
+      client({ positions: HELD_CRL, orders: [parent], history: [crlOco()] }),
+    ).read('alpaca');
+    expect(book.openOrders).toEqual([
+      {
+        clientOrderId: 'v2-debate-primary-2026-10-06-CRL:rearm',
+        instrument: 'CRL',
+        protects: null,
+        qty: null,
+        stopPrice: null,
+      },
+      CRL_STOP,
+    ]);
+  });
+
+  it('counts an OCO stop leg the open listing returns once, should it rest live rather than held', async () => {
+    const live = crlOco('new', { status: 'new' });
+    const { legs, ...parent } = live;
+    const book = await new AlpacaBrokerBooks(
+      client({ positions: HELD_CRL, orders: [parent, ...legs], history: [live] }),
+    ).read('alpaca');
+    expect(book.openOrders.filter((order) => order.protects !== null)).toEqual([CRL_STOP]);
   });
 
   it.each(['canceled', 'filled', 'expired', 'replaced', 'rejected', 'done_for_day'])(
     'a held stop leg under an OCO parent %s guards nothing, so the name reconciles unprotected',
     async (status) => {
-      const oco = crlBracket({ side: 'sell', type: 'limit', order_class: 'oco', status }, [
-        crlLeg('stop'),
-      ]);
+      const oco = crlOco(status);
       const book = await new AlpacaBrokerBooks(
         client({ positions: HELD_CRL, history: [oco] }),
       ).read('alpaca');
