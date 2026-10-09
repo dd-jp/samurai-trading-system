@@ -370,7 +370,7 @@ describe('runBacktest', { timeout: 120_000 }, () => {
     }
   });
 
-  it('re-enters a random run after an early stop until it serves the walk-forward holds', async () => {
+  it('re-enters a random run after an early stop and counts the run whose last redraw has no session left to hold', async () => {
     const db = migratedMemoryStore();
     const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
     const log = new CanaryLog(db, clock);
@@ -388,13 +388,13 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       .map((row) => JSON.parse(row.result));
     expect(rows).toHaveLength(3);
     expect(rows.map((row) => [row.seed, row.redraws, row.unmatched])).toEqual([
-      [1, 13, 0],
+      [1, 14, 1],
       [2, 9, 0],
       [3, 11, 0],
     ]);
     expect(rows.map((row) => row.heldSessions)).toEqual([93, 96, 96]);
     expect(rows.every((row) => row.matchedSessions === 96)).toBe(true);
-    expect(verdict.randomEntries?.unmatchedRuns).toBe(0);
+    expect(verdict.randomEntries?.unmatchedRuns).toBe(1);
   });
 
   it('fails the random check when a run is still unmatched at the window end', async () => {
@@ -414,8 +414,8 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       .filter((row) => row.kind === 'random')
       .map((row) => JSON.parse(row.result));
     expect(rows.map((row) => [row.seed, row.unmatched])).toEqual([
-      [1, 6],
-      [2, 9],
+      [1, 7],
+      [2, 10],
     ]);
     for (const row of rows) expect(row.heldSessions).toBeLessThan(row.matchedSessions);
     const random = verdict.randomEntries as NonNullable<typeof verdict.randomEntries>;
@@ -440,10 +440,10 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       [13, 12 * 6 + 5],
     ]);
     expect(rows.map((row) => [row.traded, row.heldSessions, row.unmatched])).toEqual([
-      [11, 11 * 6, 1],
-      [12, 11 * 6 + 4, 1],
+      [13, 12 * 6, 0],
+      [12, 12 * 6, 1],
     ]);
-    expect(verdict.randomEntries?.unmatchedRuns).toBe(2);
+    expect(verdict.randomEntries?.unmatchedRuns).toBe(1);
   });
 
   it('#1860: vol-targets the random runs exactly when the trial they copy is vol-targeted', async () => {

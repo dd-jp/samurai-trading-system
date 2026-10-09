@@ -461,7 +461,7 @@ function randomPlan(input: BacktestInput, run: CandidateRun): RandomPlan {
       .instruments;
   return {
     schedule: {
-      matched: matchedTrades(path, run.trades),
+      matched: matchedTrades(path, run.trades, run.dates.length - 1),
       folds: path.testRanges,
       dates: run.dates,
       market: input.market,
@@ -531,7 +531,7 @@ async function randomCanaryRuns(
   const matched = schedule.matched.length;
   return {
     matched,
-    matchedSessions: matchedSessions(schedule.matched, run.dates.length - 1),
+    matchedSessions: matchedSessions(schedule.matched),
     unmatchedRuns: runs.filter((row) => !servedWithinTolerance(row.unmatched, matched)).length,
     runs,
     series: seriesOf(simulation, sleeves),

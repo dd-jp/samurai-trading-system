@@ -196,7 +196,7 @@ describe('matchedTrades', () => {
         { instrument: 'B', venue: 'alpaca' as const, side: 'buy' as const, entry: 20, exit: 21 },
       ],
     ];
-    const rows = matchedTrades(path, trades);
+    const rows = matchedTrades(path, trades, 30);
     expect(rows).toEqual([
       { trial: 1, range: path.testRanges[0], entry: 19, venue: 'alpaca', side: 'buy', hold: 4 },
       { trial: 0, range: path.testRanges[1], entry: 25, venue: 'saxo', side: 'sell', hold: 4 },
@@ -206,9 +206,10 @@ describe('matchedTrades', () => {
         entry: 28,
         venue: 'saxo',
         side: 'buy',
-        hold: undefined,
+        hold: 2,
       },
     ]);
+    expect(matchedTrades(path, trades, 33).map((row) => row.hold)).toEqual([4, 4, 5]);
   });
 
   it('marks a trade still open at the window end at its last session', () => {
@@ -219,9 +220,7 @@ describe('matchedTrades', () => {
     ];
     expect(sessionsHeld(trades, 30)).toBe(8);
     expect(sessionsHeld(trades, 31)).toBe(9);
-    const rows = [matched({ entry: 19, hold: 4 }), matched({ entry: 28, hold: undefined })];
-    expect(matchedSessions(rows, 30)).toBe(6);
-    expect(matchedSessions(rows, 31)).toBe(7);
+    expect(matchedSessions([matched({ hold: 4 }), matched({ hold: 2 })])).toBe(6);
   });
 });
 
@@ -269,10 +268,10 @@ describe('randomScheduler', () => {
     expect(scheduler(1).schedule).not.toEqual(scheduler(2).schedule);
   });
 
-  it('holds an open trade, or one whose exit falls past the window, to the end and drops a trade with no free slot', () => {
+  it('holds a trade whose exit falls past the window to the end and drops a trade with no free slot', () => {
     const late = { fold: 3, start: 75, end: 76 };
     const trades = [
-      matched({ range: late, hold: undefined }),
+      matched({ range: late, hold: 5 }),
       matched({ range: late, hold: 30 }),
       matched({ range: late, hold: 1 }),
     ];
@@ -337,6 +336,25 @@ describe('randomScheduler redraws', () => {
     expect(placed.every((row) => row !== undefined)).toBe(true);
     expect(draws.redraw(0, 1, 30)).toBeUndefined();
     expect(draws.redraw(1, 1, 50)).toBeDefined();
+  });
+});
+
+describe('randomScheduler at the window end', () => {
+  it('takes no slot decided on either of the last two sessions and leaves the draw unserved', () => {
+    const tail = { fold: 3, start: 76, end: 80 };
+    const trades = Array.from({ length: 5 }, () => matched({ range: tail, hold: 1 }));
+    const draws = randomScheduler(schedule(trades, ['A', 'B']))(4);
+    expect(draws.schedule).toHaveLength(2);
+    expect(draws.dropped).toBe(3);
+    expect(draws.schedule.every((row) => row.entry <= 77)).toBe(true);
+    draws.release(draws.schedule[0] as ScheduledTrade);
+    expect(draws.redraw(0, 1, 77)).toBeDefined();
+    expect(draws.redraw(1, 1, 78)).toBeUndefined();
+    const last = randomScheduler(
+      schedule([matched({ range: { fold: 3, start: 78, end: 80 } })], ['A']),
+    )(2);
+    expect(last.schedule).toEqual([]);
+    expect(last.dropped).toBe(1);
   });
 });
 
@@ -474,7 +492,7 @@ describe('randomEntrySleeve', () => {
   it('carries its spec and lists the names it has scheduled or holds', async () => {
     const { sleeve, decide } = harness([
       scheduled(),
-      scheduled({ instrument: 'B', entry: 33, exit: undefined, unit: 1, hold: undefined }),
+      scheduled({ instrument: 'B', entry: 33, exit: undefined, unit: 1, hold: 50 }),
     ]);
     const universe = () =>
       sleeve.universe({ tradingDate: DATES[0] as string, macroDay: false, dryRun: true });
@@ -495,7 +513,7 @@ describe('randomEntrySleeve', () => {
         entry: 33,
         exit: undefined,
         unit: 1,
-        hold: undefined,
+        hold: 50,
       }),
     ]);
     const entry = await run.decide(30);
@@ -556,10 +574,10 @@ describe('randomEntrySleeve', () => {
     expect(run.sleeve.report()).toEqual({ scheduled: 1, redraws: 1, unmatched: 0 });
   });
 
-  it('redraws a refused entry for its whole hold and an open-ended trade for the rest of the window', async () => {
+  it('redraws a refused entry for its whole hold and a stopped cut one for the hold left', async () => {
     const run = harness([
       scheduled(),
-      scheduled({ instrument: 'B', exit: undefined, unit: 1, hold: undefined }),
+      scheduled({ instrument: 'B', exit: undefined, unit: 1, hold: 60 }),
     ]);
     await run.decide(30);
     run.set('A', 30, REFUSED);
@@ -567,7 +585,7 @@ describe('randomEntrySleeve', () => {
     await run.decide(36);
     expect(run.draws.redraws).toEqual([
       [0, 3, 36],
-      [1, undefined, 36],
+      [1, 56, 36],
     ]);
     expect(run.sleeve.report()).toEqual({ scheduled: 2, redraws: 2, unmatched: 2 });
   });
@@ -579,10 +597,10 @@ describe('randomEntrySleeve', () => {
       scheduled({ instrument: 'B', entry: 75, exit: undefined, unit: 1, hold: 10 }),
     ]);
     await run.decide(75);
-    run.set('A', 75, { kind: 'closed', held: 4 });
-    run.set('B', 75, { kind: 'closed', held: 3 });
+    run.set('A', 75, { kind: 'closed', held: 3 });
+    run.set('B', 75, { kind: 'closed', held: 2 });
     await run.decide(79);
-    expect(run.draws.redraws).toEqual([[1, 7, 79]]);
+    expect(run.draws.redraws).toEqual([[1, 8, 79]]);
   });
 
   it('counts a trade served in full as matched without a redraw', async () => {

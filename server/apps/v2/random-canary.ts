@@ -37,12 +37,12 @@ export interface MatchedTrade {
   readonly entry: number;
   readonly venue: Venue;
   readonly side: OrderSide;
-  readonly hold: number | undefined;
+  readonly hold: number;
 }
 
 export interface ScheduledTrade extends Trade {
   readonly unit: number;
-  readonly hold: number | undefined;
+  readonly hold: number;
 }
 
 interface FillRow {
@@ -202,9 +202,12 @@ function inRange(trade: Trade, range: FoldRange): boolean {
   return trade.entry >= range.start && trade.entry < range.end;
 }
 
+// David, 2026-10-09 on #1747: a path trade still open at the window's end is held to its last
+// session, and its random copy holds exactly that many sessions
 export function matchedTrades(
   path: WalkForwardPath,
   trades: readonly (readonly Trade[])[],
+  last: number,
 ): MatchedTrade[] {
   return path.testRanges.flatMap((range, fold) => {
     const trial = path.selectedByFold[fold] as number;
@@ -216,7 +219,7 @@ export function matchedTrades(
         entry: trade.entry,
         venue: trade.venue,
         side: trade.side,
-        hold: trade.exit === undefined ? undefined : trade.exit - trade.entry,
+        hold: (trade.exit ?? last) - trade.entry,
       }));
   });
 }
@@ -284,8 +287,7 @@ function occupy(occupied: Occupied, slot: Slot): void {
   occupied.set(slot.instrument, [...(occupied.get(slot.instrument) ?? []), slot]);
 }
 
-function exitOf(entry: number, hold: number | undefined, sessions: number): number | undefined {
-  if (hold === undefined) return undefined;
+function exitOf(entry: number, hold: number, sessions: number): number | undefined {
   const exit = entry + hold;
   return exit < sessions ? exit : undefined;
 }
@@ -317,6 +319,11 @@ function readableBy(input: ScheduleInput): Readable {
   };
 }
 
+// David, 2026-10-09 on #1747: a draw may not take a slot that leaves no session to hold. An entry
+// decided on a session fills at the next one and is marked at the window's last, so it needs two
+// sessions after its decision
+const FILL_TO_HELD_SESSION = 2;
+
 function slotsFor(
   input: ScheduleInput,
   readable: Readable,
@@ -325,7 +332,8 @@ function slotsFor(
   from: number,
 ): Slot[] {
   const slots: Slot[] = [];
-  for (let entry = Math.max(from, trade.range.start); entry < trade.range.end; entry += 1) {
+  const end = Math.min(trade.range.end, input.dates.length - FILL_TO_HELD_SESSION);
+  for (let entry = Math.max(from, trade.range.start); entry < end; entry += 1) {
     const exit = exitOf(entry, trade.hold, input.dates.length);
     for (const instrument of readable(trade.trial, entry)) {
       const slot = { instrument, entry, exit };
@@ -346,7 +354,7 @@ function release(occupied: Occupied, trade: ScheduledTrade): void {
 export interface RandomDraws {
   readonly schedule: readonly ScheduledTrade[];
   readonly dropped: number;
-  redraw(unit: number, hold: number | undefined, from: number): ScheduledTrade | undefined;
+  redraw(unit: number, hold: number, from: number): ScheduledTrade | undefined;
   release(trade: ScheduledTrade): void;
 }
 
@@ -364,7 +372,7 @@ interface DrawState {
 function placeDraw(
   { input, readable, random, occupied }: DrawState,
   unit: number,
-  hold: number | undefined,
+  hold: number,
   from: number,
 ): ScheduledTrade | undefined {
   const home = input.matched[unit] as MatchedTrade;
@@ -388,7 +396,7 @@ export function randomScheduler(input: ScheduleInput): (seed: number) => RandomD
     const random = seededRandom(seed);
     const occupied: Occupied = new Map();
     const draws = new Map<number, number>();
-    const place = (unit: number, hold: number | undefined, from: number) =>
+    const place = (unit: number, hold: number, from: number) =>
       placeDraw({ input, readable, random, occupied }, unit, hold, from);
     const schedule = input.matched.flatMap(
       (trade, unit) => place(unit, trade.hold, trade.range.start) ?? [],
@@ -476,14 +484,10 @@ interface Attempt {
 
 type Quote = (instrument: string) => EntryRead | undefined;
 
-function unservedHold(
-  attempt: Attempt,
-  held: number | undefined,
-  last: number,
-): number | undefined | null {
+function unservedHold(attempt: Attempt, held: number | undefined, last: number): number | null {
   const { hold, entry } = attempt.trade;
-  if (held === undefined || hold === undefined) return hold;
-  if (attempt.exitSent || held >= Math.min(hold, last - entry)) return null;
+  if (held === undefined) return hold;
+  if (attempt.exitSent || held >= Math.min(hold, last - entry - 1)) return null;
   return hold - held;
 }
 
@@ -525,7 +529,7 @@ class RandomRunState {
     this.#pending.set(trade.entry, [...(this.#pending.get(trade.entry) ?? []), trade]);
   }
 
-  #redraw(trade: ScheduledTrade, hold: number | undefined, from: number): void {
+  #redraw(trade: ScheduledTrade, hold: number, from: number): void {
     this.#redraws += 1;
     const next = this.#input.draws.redraw(trade.unit, hold, from);
     if (next === undefined) this.#unmatched += 1;
@@ -596,8 +600,8 @@ export function sessionsHeld(
   return trades.reduce((total, trade) => total + (trade.exit ?? last) - trade.entry, 0);
 }
 
-export function matchedSessions(matched: readonly MatchedTrade[], last: number): number {
-  return matched.reduce((total, trade) => total + (trade.hold ?? last - trade.entry), 0);
+export function matchedSessions(matched: readonly MatchedTrade[]): number {
+  return matched.reduce((total, trade) => total + trade.hold, 0);
 }
 
 export function servedWithinTolerance(unmatched: number, matched: number): boolean {

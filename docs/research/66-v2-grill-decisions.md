@@ -677,11 +677,13 @@ Build choices David ruled on the same day (2026-10-08, #2024):
 
 ## Rulings of 2026-10-09 — random canary spill (#1747)
 
-David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/1747) on 2026-10-09: spill into the next fold. Later the same day he answered the two points the spill run left open (rulings 2 and 3).
+David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/1747) on 2026-10-09: spill into the next fold. Later the same day he answered the two points the spill run left open (rulings 2 and 3), then two points from the PR review (rulings 4 and 5).
 
 1. **A draw spills into the next fold.** A random draw, first or redraw, that finds no free slot left in its own test fold moves to the next test fold, and on to later ones, so the run's exposure matches the walk-forward path's in full. A run still unmatched at the window's end, after the last test fold, fails the candidate's random check (`randomEntries.unmatchedRuns` must be 0 for `beatsRandomEntries`). This replaces the 2026-10-08 default that a draw with no free slot in its own fold left the run unmatched.
 2. **A draw cut at the window's end counts as matched.** A draw whose hold runs past the window's last session counts as matched. Its hold is cut at the window's end, the same way the candidate's own trades still open at the end are marked there, and its held sessions count up to that last session, not as 0.
 3. **A 2% unserved tolerance.** A run that leaves at most 2% of the walk-forward path's trade count unserved at the window's end still counts as matched (`RANDOM_UNSERVED_TOLERANCE` = 0.02). Above 2% the run is unmatched and the candidate fails its random check. This amends ruling 1: `randomEntries.unmatchedRuns` counts only runs above the tolerance.
+4. **A draw needs a session left to hold.** A draw may not take a slot that leaves no session to hold, such as a draw decided on the window's last session. Such a draw spills to a later fold, and if no slot is left it counts toward the run's unserved trades for the 2% tolerance. This amends ruling 2: a draw cut at the end must still hold at least one session.
+5. **An open path trade's copy holds the same length.** A walk-forward path trade still open at the window's end has a held length of the last session minus its entry. Its random copy holds exactly that many sessions, cut at the end the same way, and no longer runs open-ended to the end.
 
 *Built 2026-10-09* (`server/apps/v2/random-canary.ts`). Build notes (not rulings):
 
@@ -697,7 +699,9 @@ David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/17
   - 8 open-ended trades, the path's own trades still open at the end: 402 sessions. Each one's random position was stopped and redrawn, and the redraw re-enters at a random later session, so the sessions between the stop and the re-entry are lost.
   - 12 sessions spread over the other 528 trades.
 
-  These sum to 1,979 against the gap of 1,974. The breakdown pairs each position with its matched trade by instrument and entry session, and that pairing is approximate; the 5-session difference is within it.
+  These sum to 1,979 against the gap of 1,974. The breakdown pairs each position with its matched trade by instrument and entry session, and that pairing is approximate; the 5-session difference is within it. *The open-ended trades and the draws decided on the last session are answered by rulings 4 and 5.*
+- **How rulings 4 and 5 are built.** A fill lands on the session after its decision, so a draw's slot must be decided at least two sessions before the window's last one; later slots are never offered, in any fold. `matchedTrades` gives every path trade a finite hold, the last session minus the entry for one still open at the end, and a random copy exits after exactly that hold, so nothing in the canary is open-ended any more. A cut redraw is still redrawn only while sessions before the end remain unserved.
+- **Candidate 1, seeds 1–3, under rulings 1 to 5.** The runs made 738, 713 and 821 redraws, opened 672, 691 and 702 positions and held 10,224, 9,636 and 10,538 sessions against the path's 12,147 (unchanged, since its open trades were already marked at the end). They left 7, 12 and 9 of 548 trades unserved (1.3%, 2.2% and 1.6%). Seed 2 is over the 2% tolerance, which allows 10, so one run is unmatched and candidate 1 fails the random check, though its edge of −0.883 sits above the 3-run band of −0.907. More trades go unserved than under rulings 1 to 3 because draws decided too late now count as unserved instead of matched. Candidate 1 still fails every other check, as before. Across 200 seeds some runs are likely to land just over 2%, so the tolerance may decide the random check for any candidate whose trades crowd the window's end; that is for David.
 
 ## Rulings of 2026-10-09 — a missing quote fails closed, the veto runs once (#2024)
 
