@@ -16,6 +16,7 @@ import {
   RANDOM_CANARY_RUNS,
   RANDOM_ENTRY_ATR_WINDOW,
   RANDOM_REENTRY_MAX_DRAWS_PER_FOLD,
+  RANDOM_UNSERVED_TOLERANCE,
   type RandomBook,
   type RandomDraws,
   randomEntrySleeve,
@@ -23,6 +24,7 @@ import {
   type ScheduledTrade,
   type ScheduleInput,
   seededRandom,
+  servedWithinTolerance,
   sessionsHeld,
 } from './random-canary.js';
 
@@ -84,6 +86,7 @@ function matched(overrides: Partial<MatchedTrade> = {}): MatchedTrade {
   return {
     trial: 0,
     range: { fold: 1, start: 30, end: 50 },
+    entry: 30,
     venue: 'saxo',
     side: 'buy',
     hold: 5,
@@ -105,6 +108,19 @@ describe('constants', () => {
     expect(RANDOM_CANARY_RUNS).toBe(200);
     expect(RANDOM_CANARY_FIRST_SEED).toBe(1);
     expect(RANDOM_ENTRY_ATR_WINDOW).toBe(20);
+  });
+});
+
+describe('servedWithinTolerance', () => {
+  it(`counts a run as matched with at most ${RANDOM_UNSERVED_TOLERANCE * 100}% of the path's trades unserved`, () => {
+    expect(RANDOM_UNSERVED_TOLERANCE).toBe(0.02);
+    expect(servedWithinTolerance(0, 0)).toBe(true);
+    expect(servedWithinTolerance(1, 50)).toBe(true);
+    expect(servedWithinTolerance(1, 49)).toBe(false);
+    expect(servedWithinTolerance(2, 100)).toBe(true);
+    expect(servedWithinTolerance(3, 100)).toBe(false);
+    expect(servedWithinTolerance(10, 548)).toBe(true);
+    expect(servedWithinTolerance(11, 548)).toBe(false);
   });
 });
 
@@ -182,12 +198,30 @@ describe('matchedTrades', () => {
     ];
     const rows = matchedTrades(path, trades);
     expect(rows).toEqual([
-      { trial: 1, range: path.testRanges[0], venue: 'alpaca', side: 'buy', hold: 4 },
-      { trial: 0, range: path.testRanges[1], venue: 'saxo', side: 'sell', hold: 4 },
-      { trial: 0, range: path.testRanges[1], venue: 'saxo', side: 'buy', hold: undefined },
+      { trial: 1, range: path.testRanges[0], entry: 19, venue: 'alpaca', side: 'buy', hold: 4 },
+      { trial: 0, range: path.testRanges[1], entry: 25, venue: 'saxo', side: 'sell', hold: 4 },
+      {
+        trial: 0,
+        range: path.testRanges[1],
+        entry: 28,
+        venue: 'saxo',
+        side: 'buy',
+        hold: undefined,
+      },
     ]);
-    expect(matchedSessions(rows)).toBe(8);
-    expect(sessionsHeld(trades[0] ?? [])).toBe(6);
+  });
+
+  it('marks a trade still open at the window end at its last session', () => {
+    const trades = [
+      { entry: 12, exit: 14 },
+      { entry: 25, exit: 29 },
+      { entry: 28, exit: undefined },
+    ];
+    expect(sessionsHeld(trades, 30)).toBe(8);
+    expect(sessionsHeld(trades, 31)).toBe(9);
+    const rows = [matched({ entry: 19, hold: 4 }), matched({ entry: 28, hold: undefined })];
+    expect(matchedSessions(rows, 30)).toBe(6);
+    expect(matchedSessions(rows, 31)).toBe(7);
   });
 });
 
@@ -536,6 +570,19 @@ describe('randomEntrySleeve', () => {
       [1, undefined, 36],
     ]);
     expect(run.sleeve.report()).toEqual({ scheduled: 2, redraws: 2, unmatched: 2 });
+  });
+
+  it('redraws a hold cut at the window end only while sessions before the end are unserved', async () => {
+    const cut = scheduled({ entry: 75, exit: undefined, hold: 10 });
+    const run = harness([
+      cut,
+      scheduled({ instrument: 'B', entry: 75, exit: undefined, unit: 1, hold: 10 }),
+    ]);
+    await run.decide(75);
+    run.set('A', 75, { kind: 'closed', held: 4 });
+    run.set('B', 75, { kind: 'closed', held: 3 });
+    await run.decide(79);
+    expect(run.draws.redraws).toEqual([[1, 7, 79]]);
   });
 
   it('counts a trade served in full as matched without a redraw', async () => {

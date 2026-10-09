@@ -19,6 +19,9 @@ export const RANDOM_ENTRY_ATR_WINDOW = 20;
 // Awaiting David (#1747): the redraw bound for the 2026-10-08 re-entry ruling, charged to each
 // matched trade's own test fold even when the redraw spills into a later one
 export const RANDOM_REENTRY_MAX_DRAWS_PER_FOLD = 1_000;
+// David, 2026-10-09 on #1747: a run with at most this share of the path's trades unserved at the
+// window's end still counts as matched
+export const RANDOM_UNSERVED_TOLERANCE = 0.02;
 
 export interface Trade {
   readonly instrument: string;
@@ -31,6 +34,7 @@ export interface Trade {
 export interface MatchedTrade {
   readonly trial: number;
   readonly range: FoldRange;
+  readonly entry: number;
   readonly venue: Venue;
   readonly side: OrderSide;
   readonly hold: number | undefined;
@@ -209,6 +213,7 @@ export function matchedTrades(
       .map((trade) => ({
         trial,
         range,
+        entry: trade.entry,
         venue: trade.venue,
         side: trade.side,
         hold: trade.exit === undefined ? undefined : trade.exit - trade.entry,
@@ -471,10 +476,14 @@ interface Attempt {
 
 type Quote = (instrument: string) => EntryRead | undefined;
 
-function unservedHold(attempt: Attempt, held: number | undefined): number | undefined | null {
-  const { hold } = attempt.trade;
+function unservedHold(
+  attempt: Attempt,
+  held: number | undefined,
+  last: number,
+): number | undefined | null {
+  const { hold, entry } = attempt.trade;
   if (held === undefined || hold === undefined) return hold;
-  if (attempt.exitSent || held >= hold) return null;
+  if (attempt.exitSent || held >= Math.min(hold, last - entry)) return null;
   return hold - held;
 }
 
@@ -530,7 +539,8 @@ class RandomRunState {
     if (outcome.kind === 'open') return this.#exitDue(attempt, at);
     this.#live = this.#live.filter((row) => row !== attempt);
     this.#input.draws.release(trade);
-    const hold = unservedHold(attempt, outcome.kind === 'closed' ? outcome.held : undefined);
+    const held = outcome.kind === 'closed' ? outcome.held : undefined;
+    const hold = unservedHold(attempt, held, this.#input.dates.length - 1);
     if (hold !== null) this.#redraw(trade, hold, at);
     return [];
   }
@@ -577,15 +587,19 @@ export function randomEntrySleeve(input: RandomSleeveInput, market: MarketData):
   };
 }
 
+// David, 2026-10-09 on #1747: a position still open at the window's end, random or the path's own,
+// is marked at its last session, so its hold is cut there and still counts
 export function sessionsHeld(
   trades: readonly { readonly entry: number; readonly exit: number | undefined }[],
+  last: number,
 ): number {
-  return trades.reduce(
-    (total, trade) => total + (trade.exit === undefined ? 0 : trade.exit - trade.entry),
-    0,
-  );
+  return trades.reduce((total, trade) => total + (trade.exit ?? last) - trade.entry, 0);
 }
 
-export function matchedSessions(matched: readonly MatchedTrade[]): number {
-  return matched.reduce((total, trade) => total + (trade.hold ?? 0), 0);
+export function matchedSessions(matched: readonly MatchedTrade[], last: number): number {
+  return matched.reduce((total, trade) => total + (trade.hold ?? last - trade.entry), 0);
+}
+
+export function servedWithinTolerance(unmatched: number, matched: number): boolean {
+  return unmatched <= RANDOM_UNSERVED_TOLERANCE * matched;
 }

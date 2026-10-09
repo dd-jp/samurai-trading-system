@@ -31,6 +31,7 @@ import {
   randomEntrySleeve,
   randomScheduler,
   type ScheduleInput,
+  servedWithinTolerance,
   sessionsHeld,
   type Trade,
 } from './random-canary.js';
@@ -524,13 +525,14 @@ async function randomCanaryRuns(
       seed,
       ...(sleeves[index] as RandomSleeve).report(),
       traded: traded.length,
-      heldSessions: sessionsHeld(traded),
+      heldSessions: sessionsHeld(traded, run.dates.length - 1),
     };
   });
+  const matched = schedule.matched.length;
   return {
-    matched: schedule.matched.length,
-    matchedSessions: matchedSessions(schedule.matched),
-    unmatchedRuns: runs.filter((row) => row.unmatched > 0).length,
+    matched,
+    matchedSessions: matchedSessions(schedule.matched, run.dates.length - 1),
+    unmatchedRuns: runs.filter((row) => !servedWithinTolerance(row.unmatched, matched)).length,
     runs,
     series: seriesOf(simulation, sleeves),
   };
