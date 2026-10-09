@@ -208,6 +208,21 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    table: 'v2_signal_vetoes',
+    seed: `INSERT INTO v2_signals (${SIGNAL_COLUMNS})
+        VALUES ('s1', 'digest-1', 'AAPL', 100, 101, 0, '[]', 95, '2026-10-01T07:00:00.000Z', 'in_session', '2026-10-01T07:00:00.000Z', 'p');
+      INSERT INTO v2_signal_vetoes (signal_id, kind, reason, recorded_at)
+        VALUES ('s1', 'veto', 'original', '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same signal_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_signal_vetoes (signal_id, kind, reason, recorded_at)
+          VALUES ('s1', 'pass', 'rewritten', '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
     table: 'v2_trials',
     seed: `INSERT INTO v2_trials (trial, candidate, config_hash, config, source, recorded_at)
       VALUES (1, 'trend', 'hash-1', '{}', 'original', '2026-10-01T07:00:00.000Z')`,

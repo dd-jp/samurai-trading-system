@@ -9,6 +9,7 @@ import type {
   ControlReader,
   DecisionJournal,
   EntryApproval,
+  EntryQuote,
   EntryRoom,
   ExecutionRoute,
   JournalledOrder,
@@ -223,6 +224,11 @@ function journalledLimit(order: JournalledOrder): number | undefined {
 
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
+}
+
+function journalledQuoteFill(payload: Record<string, unknown>): number | null | undefined {
+  const quote = payload.entry_quote as EntryQuote | undefined;
+  return quote?.fill;
 }
 
 function nativeRearmPrices(journal: DecisionJournal, held: Position): RearmPrices | undefined {
@@ -796,6 +802,7 @@ class Cycle {
         limit,
         stop: numberOrUndefined(order.payload.stop),
         trigger: numberOrUndefined(order.payload.trigger),
+        quoteFill: journalledQuoteFill(order.payload),
       },
       bars.map((bar, index) => ({ ...bar, rawClose: bar.rawClose * (ratios[index] as number) })),
     );
@@ -1607,6 +1614,7 @@ class Cycle {
           )
         : undefined,
       trigger: decision.entry_trigger,
+      entry_quote: decision.entry_quote,
       stop: decision.stop_price,
       target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
       approval: approval.order?.approvalId,

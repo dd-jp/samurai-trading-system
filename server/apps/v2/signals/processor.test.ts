@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { LatestQuote, LatestQuoteSource } from '../../../../contracts/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../../providers/calendar/index.js';
 import type {
@@ -60,7 +61,7 @@ function flatBars(overrides: Readonly<Record<string, Partial<DailyBar>>> = {}): 
       high: 25.25,
       low: 24.75,
       close: 25,
-      volume: 1_000_000,
+      volume: 3_000_000,
       rawClose: 25,
       ...overrides[date],
     });
@@ -83,10 +84,12 @@ async function writeFixtures(capital: boolean = true): Promise<Fixtures> {
     { symbol: 'DN', bars: flatBars() },
     { symbol: 'SPY', bars: flatBars() },
     { symbol: 'OLD', bars: flatBars().filter((bar) => bar.date <= '2026-09-01') },
+    { symbol: 'THIN', bars: flatBars({ '2026-09-29': { volume: 1_999_999 } }) },
+    { symbol: 'EDGE', bars: flatBars({ '2026-09-29': { volume: 2_000_000 } }) },
   ]);
   bars.close();
   const constituentsPath = join(directory, 'constituents.csv');
-  writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,DN,ZZZ,OLD"\n');
+  writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,"UP,DN,ZZZ,OLD,THIN,EDGE"\n');
   const fxPath = join(directory, 'fx.csv');
   writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n');
   const spreadsPath = join(directory, 'spreads.csv');
@@ -170,6 +173,22 @@ function post(
   if (!parsed.ok) throw new Error(parsed.reason);
   return signals.record(parsed.payload, receivedAt, classifySignalWindow(receivedAt, CALENDAR))
     .signal.signal_id;
+}
+
+function quotesAt(...quotes: LatestQuote[]): LatestQuoteSource & { reads: string[] } {
+  const reads: string[] = [];
+  return {
+    reads,
+    latestQuote: (symbol) => {
+      reads.push(symbol);
+      const quote = quotes.length > 1 ? quotes.shift() : quotes[0];
+      return quote === undefined ? Promise.reject(new Error('no quote')) : Promise.resolve(quote);
+    },
+  };
+}
+
+function quote(ask: number, at: Date = new Date(IN_SESSION.getTime() + 1_000)): LatestQuote {
+  return { ask, bid: ask - 0.02, quoted_at: at.toISOString() };
 }
 
 function hold(root: V2Root, bookId: string, instrument: string): void {
@@ -638,7 +657,7 @@ describe('failed signals retry inside their window (David 2026-10-05, #2024)', (
     ]);
     expect(root.journal.orderFor(primaryId(id))).toBeDefined();
     expect(root.journal.orderFor(shadowId(id))).toBeDefined();
-    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(2);
+    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(1);
     expect(
       await root.processSignals(signals, new Date(IN_SESSION.getTime() + 60_000)),
     ).toMatchObject({ ran: false, reason: 'nothing_due' });
@@ -666,6 +685,129 @@ describe('failed signals retry inside their window (David 2026-10-05, #2024)', (
       }),
     ]);
     expect(refusalsOf(root, 'session_missed')).toEqual([]);
+    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(0);
+    expect(root.db.prepare('SELECT COUNT(*) AS n FROM v2_orders').get()).toEqual({ n: 0 });
+  });
+});
+
+describe('both legs fill at the first quote after the signal (David 2026-10-08, #2024)', () => {
+  function shadowEntryFill(root: V2Root): { price_gbp: number } | undefined {
+    return root.db
+      .prepare("SELECT price_gbp FROM v2_fills WHERE book_id = 'signals/no-veto' AND leg = 'entry'")
+      .get() as { price_gbp: number } | undefined;
+  }
+
+  it('journals the first quote on both entries and fills the shadow at its ask, not the bar', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const quotes = quotesAt(quote(24.96));
+    const { root, signals } = open(fixtures, clock, { quotes });
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+
+    const entryQuote = {
+      ask: 24.96,
+      bid: 24.94,
+      quoted_at: '2026-09-30T14:00:01.000Z',
+      fill: 24.96,
+    };
+    expect(quotes.reads).toEqual(['UP']);
+    for (const orderId of [primaryId(id), shadowId(id)]) {
+      expect(root.journal.orderFor(orderId)?.payload).toMatchObject({ entry_quote: entryQuote });
+    }
+    const decision = root.db
+      .prepare("SELECT payload FROM v2_decisions WHERE book_id = 'signals/no-veto'")
+      .get() as { payload: string };
+    expect(JSON.parse(decision.payload)).toMatchObject({ entry_quote: entryQuote });
+
+    clock.advanceTo(new Date('2026-10-01T06:30:00.000Z'));
+    const next = open(fixtures, clock);
+    await next.root.run();
+    expect(shadowEntryFill(next.root)?.price_gbp).toBeCloseTo(24.96 / 1.25, 9);
+  });
+
+  it('keeps the shadow pending through its session when the first quote misses, then a no-fill', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const { root, signals } = open(fixtures, clock, { quotes: quotesAt(quote(25.3)) });
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+    expect(root.journal.orderFor(shadowId(id))?.payload).toMatchObject({
+      entry_quote: { ask: 25.3, fill: null },
+    });
+    post(signals, { source: 'again' }, new Date(IN_SESSION.getTime() + 5_000));
+    await root.processSignals(signals, new Date(IN_SESSION.getTime() + 30_000));
+    expect(refusalsOf(root, 'symbol_held')).toHaveLength(1);
+
+    clock.advanceTo(new Date('2026-10-01T06:30:00.000Z'));
+    const next = open(fixtures, clock);
+    await next.root.run();
+    expect(next.root.journal.orderFor(shadowId(id))?.outcome).toBe('cancelled');
+    expect(shadowEntryFill(next.root)).toBeUndefined();
+    expect(next.root.books.position('signals/no-veto', 'UP')).toBeUndefined();
+  });
+
+  it('fails a signal whose latest quote predates its arrival, and enters it on a later quote', async () => {
+    const fixtures = await writeFixtures();
+    const quotes = quotesAt(
+      quote(25, new Date(IN_SESSION.getTime() - 1)),
+      quote(25, new Date(IN_SESSION.getTime() + 20_000)),
+    );
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION), { quotes });
+    const id = post(signals, {});
+
+    const failed = await root.processSignals(signals, IN_SESSION);
+    expect(failed).toMatchObject({
+      outcomes: [
+        {
+          status: 'failed',
+          detail: `no UP quote since ${IN_SESSION.toISOString()}: latest 2026-09-30T13:59:59.999Z`,
+        },
+      ],
+    });
+    expect(root.db.prepare('SELECT COUNT(*) AS n FROM v2_orders').get()).toEqual({ n: 0 });
+
+    await root.processSignals(signals, new Date(IN_SESSION.getTime() + 30_000));
+    expect(root.journal.orderFor(shadowId(id))?.payload).toMatchObject({
+      entry_quote: { quoted_at: '2026-09-30T14:00:20.000Z', fill: 25 },
+    });
+  });
+
+  it('takes the first quote after the next open for an out-of-session signal', async () => {
+    const fixtures = await writeFixtures();
+    const open930 = new Date(`${D}T13:30:00.000Z`);
+    const quotes = quotesAt(
+      quote(25, new Date(open930.getTime() - 1_000)),
+      quote(24.99, new Date(open930.getTime() + 2_000)),
+    );
+    const { root, signals } = open(fixtures, new SimulatedClock(open930), { quotes });
+    const id = post(signals, {}, new Date(`${D}T02:00:00.000Z`));
+    expect(signals.get(id)?.process_after).toBe(open930.toISOString());
+
+    const early = await root.processSignals(signals, new Date(open930.getTime() + 1_000));
+    const late = await root.processSignals(signals, new Date(open930.getTime() + 30_000));
+
+    expect(early).toMatchObject({ outcomes: [{ status: 'failed' }] });
+    expect(late).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(root.journal.orderFor(shadowId(id))?.payload).toMatchObject({
+      entry_quote: { ask: 24.99, fill: 24.99 },
+    });
+  });
+
+  it('refuses an off-list symbol before any quote, veto or order in either book', async () => {
+    const fixtures = await writeFixtures();
+    const quotes = quotesAt(quote(25));
+    const { root, signals, transports } = open(fixtures, new SimulatedClock(IN_SESSION), {
+      quotes,
+    });
+    post(signals, { symbol: 'NOPE' });
+
+    await root.processSignals(signals, IN_SESSION);
+
+    expect(refusalsOf(root, 'not_in_universe')).toHaveLength(1);
+    expect(quotes.reads).toEqual([]);
     expect(transports.flatMap((transport) => transport.calls)).toHaveLength(0);
     expect(root.db.prepare('SELECT COUNT(*) AS n FROM v2_orders').get()).toEqual({ n: 0 });
   });
@@ -923,6 +1065,7 @@ describe('processSignals, paper with a fake Alpaca', () => {
     nousApiKey: 'present',
     alpacaClient,
     constituents: () => ['UP', 'DN'],
+    quotes: quotesAt(quote(25)),
   });
 
   it('blocks the primary without a clean Alpaca reconcile for the day; the shadow still enters', async () => {
@@ -1119,5 +1262,203 @@ describe('processSignals, paper with a fake Alpaca', () => {
     const reopened = open(fixtures, clock, paper(alpaca)).root;
     expect(reopened.journal.orderFor(primaryId(id))?.outcome).toBe('cancelled');
     expect(reopened.books.position('signals/primary', 'UP')).toBeUndefined();
+  });
+
+  it('refuses a signal below the $50M dollar-volume floor before any quote, veto or order (#2024)', async () => {
+    const fixtures = await writeFixtures();
+    const quotes = quotesAt(quote(25));
+    const { root, signals, transports } = open(fixtures, new SimulatedClock(IN_SESSION), {
+      quotes,
+    });
+    const id = post(signals, { symbol: 'THIN' });
+
+    const pass = await root.processSignals(signals, IN_SESSION);
+
+    expect(pass).toMatchObject({ outcomes: [{ status: 'refused' }] });
+    expect(signals.get(id)?.events.at(-1)?.detail).toBe(
+      'below_dollar_volume_floor: last bar 2026-09-29 dollar volume 49999975 below 50000000',
+    );
+    expect(refusalsOf(root, 'below_dollar_volume_floor')).toEqual([
+      expect.objectContaining({
+        scope: 'signal',
+        ticket: '#2024',
+        book_id: null,
+        instrument: 'THIN',
+      }),
+    ]);
+    expect(quotes.reads).toEqual([]);
+    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(0);
+    expect(root.db.prepare('SELECT COUNT(*) AS n FROM v2_orders').get()).toEqual({ n: 0 });
+  });
+
+  it('admits a signal whose last bar sits exactly on the dollar-volume floor', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION));
+    const id = post(signals, { symbol: 'EDGE' });
+
+    const pass = await root.processSignals(signals, IN_SESSION);
+
+    expect(pass).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(root.journal.orderFor(shadowId(id, 'EDGE'))).toBeDefined();
+  });
+});
+
+describe('the veto runs once per signal (David 2026-10-09, #2024)', () => {
+  const STALE = quote(25, new Date(IN_SESSION.getTime() - 1));
+  const FRESH = quote(25, new Date(IN_SESSION.getTime() + 20_000));
+
+  function decisionRows(root: V2Root, signalId: string): readonly string[] {
+    const rows = root.db
+      .prepare(
+        `SELECT book_id, trading_date, instrument, action, reason, payload
+         FROM v2_decisions ORDER BY book_id`,
+      )
+      .all();
+    return rows.map((row) => JSON.stringify(row).replaceAll(signalId, '<signal>'));
+  }
+
+  it('a retry after a stale quote makes no second LLM call and reuses the journalled verdict', async () => {
+    const fixtures = await writeFixtures();
+    const quotes = quotesAt(STALE, STALE, FRESH);
+    const { root, signals, transports } = open(fixtures, new SimulatedClock(IN_SESSION), {
+      quotes,
+    });
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+    await root.processSignals(signals, new Date(IN_SESSION.getTime() + 30_000));
+    const entered = await root.processSignals(signals, new Date(IN_SESSION.getTime() + 60_000));
+
+    expect(entered).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(quotes.reads).toEqual(['UP', 'UP', 'UP']);
+    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(1);
+    expect(signals.vetoFor(id)).toEqual({
+      kind: 'pass',
+      reason: 'trend is flat, stop outside noise',
+    });
+    expect(signals.get(id)?.events.map((event) => event.status)).toEqual([
+      'queued',
+      'failed',
+      'failed',
+      'processed',
+    ]);
+  });
+
+  it('keeps both legs out while the quote read errors, without calling the LLM again', async () => {
+    const fixtures = await writeFixtures();
+    const quotes = quotesAt();
+    const { root, signals, transports } = open(fixtures, new SimulatedClock(IN_SESSION), {
+      quotes,
+    });
+    post(signals, {});
+
+    for (const offset of [0, 30_000, 60_000]) {
+      const pass = await root.processSignals(signals, new Date(IN_SESSION.getTime() + offset));
+      expect(pass).toMatchObject({ outcomes: [{ status: 'failed', detail: 'no quote' }] });
+    }
+
+    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(1);
+    expect(root.db.prepare('SELECT COUNT(*) AS n FROM v2_orders').get()).toEqual({ n: 0 });
+  });
+
+  it('a veto stays a veto across retries, though the model would now pass it', async () => {
+    const fixtures = await writeFixtures();
+    let replies = 0;
+    const script: Script = () => {
+      replies += 1;
+      return replies === 1
+        ? '{"veto": true, "reason": "stop sits inside daily noise"}'
+        : '{"veto": false, "reason": "fine now"}';
+    };
+    const quotes = quotesAt(STALE, FRESH);
+    const { root, signals, transports } = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      { quotes },
+      script,
+    );
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+    await root.processSignals(signals, new Date(IN_SESSION.getTime() + 30_000));
+
+    expect(transports.flatMap((transport) => transport.calls)).toHaveLength(1);
+    expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(root.journal.orderFor(shadowId(id))).toMatchObject({ outcome: 'simulated' });
+    expect(
+      root.db
+        .prepare("SELECT action, reason FROM v2_decisions WHERE book_id = 'signals/primary'")
+        .get(),
+    ).toEqual({ action: 'skip', reason: 'vetoed: veto: stop sits inside daily noise' });
+    expect(signals.get(id)?.events.at(-1)?.detail).toMatch(
+      /^veto veto: stop sits inside daily noise;/,
+    );
+    expect(signals.vetoVerdicts(20)).toEqual(['veto']);
+  });
+
+  it('a restarted process reuses the verdict journalled before the crash', async () => {
+    const fixtures = await writeFixtures();
+    const before = open(fixtures, new SimulatedClock(IN_SESSION), { quotes: quotesAt(STALE) });
+    const id = post(before.signals, {});
+    await before.root.processSignals(before.signals, IN_SESSION);
+    roots.splice(roots.indexOf(before.root), 1);
+    before.root.close();
+
+    const after = open(fixtures, new SimulatedClock(IN_SESSION), { quotes: quotesAt(FRESH) });
+    const entered = await after.root.processSignals(
+      after.signals,
+      new Date(IN_SESSION.getTime() + 30_000),
+    );
+
+    expect(entered).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(before.transports.flatMap((transport) => transport.calls)).toHaveLength(1);
+    expect(after.transports.flatMap((transport) => transport.calls)).toHaveLength(0);
+    expect(after.root.journal.orderFor(shadowId(id))).toBeDefined();
+  });
+
+  it('an unavailable veto stays unavailable on retry: no second call, the primary stays out', async () => {
+    const fixtures = await writeFixtures();
+    let calls = 0;
+    const script: Script = (request) => {
+      calls += 1;
+      if (calls === 1) throw new Error('upstream 503');
+      return PASS_SCRIPT(request);
+    };
+    const { root, signals } = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      { quotes: quotesAt(STALE, FRESH) },
+      script,
+    );
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+    const firstPassCalls = calls;
+    await root.processSignals(signals, new Date(IN_SESSION.getTime() + 30_000));
+
+    expect(firstPassCalls).toBeGreaterThan(0);
+    expect(calls).toBe(firstPassCalls);
+    expect(signals.vetoFor(id)?.kind).toBe('unavailable');
+    expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
+  });
+
+  it('a signal entered after retries journals the same decisions as one entered at once', async () => {
+    const clean = await writeFixtures();
+    const once = open(clean, new SimulatedClock(IN_SESSION), { quotes: quotesAt(FRESH) });
+    const onceId = post(once.signals, {});
+    await once.root.processSignals(once.signals, new Date(IN_SESSION.getTime() + 30_000));
+
+    const retried = await writeFixtures();
+    const twice = open(retried, new SimulatedClock(IN_SESSION), {
+      quotes: quotesAt(STALE, FRESH),
+    });
+    const twiceId = post(twice.signals, {});
+    await twice.root.processSignals(twice.signals, IN_SESSION);
+    await twice.root.processSignals(twice.signals, new Date(IN_SESSION.getTime() + 30_000));
+
+    const decisions = decisionRows(once.root, onceId);
+    expect(decisions).toHaveLength(2);
+    expect(decisionRows(twice.root, twiceId)).toEqual(decisions);
   });
 });

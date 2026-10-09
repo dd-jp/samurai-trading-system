@@ -5,6 +5,7 @@ import { digest } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
 import type { SignalPayload } from './payload.js';
+import type { SignalVeto } from './veto.js';
 import type { SignalWindow } from './window.js';
 
 export const SIGNAL_LIST_MAX = 200;
@@ -104,6 +105,21 @@ export class SignalStore {
       )
       .all(limit) as { verdict: SignalVetoVerdict }[];
     return rows.map((row) => row.verdict);
+  }
+
+  recordVeto(signalId: string, veto: SignalVeto): void {
+    this.db
+      .prepare(
+        `INSERT INTO v2_signal_vetoes (signal_id, kind, reason, recorded_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(signalId, veto.kind, veto.reason, toStoredTimestamp(this.clock.now()));
+  }
+
+  vetoFor(signalId: string): SignalVeto | undefined {
+    return this.db
+      .prepare('SELECT kind, reason FROM v2_signal_vetoes WHERE signal_id = ?')
+      .get(signalId) as SignalVeto | undefined;
   }
 
   #idForDigest(key: string): string | undefined {

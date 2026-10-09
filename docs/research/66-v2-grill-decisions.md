@@ -552,12 +552,12 @@ David ruled the four points #1941 had recorded but not ruled, recorded on [#2024
 3. **A signal whose processing throws is retried.** It stays pending and is retried on later passes until its validity window ends. It is then journalled as dropped, with the error. Idempotent order ids prevent duplicate orders.
 4. **Shadow fills.** The shadow leg and the real leg both fill at the first quote after the signal arrives, from the same price source, so only the veto differs between them.
 
-*Built 2026-10-07 (#2024): rulings 2 and 3. Rulings 1 and 4 are recorded and not built; each needs a further answer from David (below).* Build notes (not rulings):
+*Built 2026-10-07 (#2024): rulings 2 and 3. Rulings 1 and 4 waited on a further answer from David (below), given on 2026-10-08 ("Rulings of 2026-10-08 — signals universe and shadow fill") and built that day.* Build notes (not rulings):
 
 - Ruling 2: the rate is read from the signals' own `processed` events. Each signal whose veto returned a verdict (pass or veto) counts once. A veto that could not run (`unavailable`) is not a verdict and does not count. The check runs after each processed signal, and only once 20 verdicts exist. Above 10% (3 or more vetoes in 20), it records a `veto_rate` fault (code `SIGNAL_VETO_RATE`) and logs `v2_signal_veto_rate` at error level. The same count is ledgered once per trading date. Migration 0096 rebuilds `v2_faults` to admit the new kind, keeping every row and id. Like every fault kind, `veto_rate` counts against the fault-free weeks (#1878's rule that every kind counts); the daily summary lists it with the other faults recorded.
 - Ruling 3: the validity window is the signal's own session, the window that `session_missed` already enforces. A `failed` event no longer closes a signal: it stays due, and each processor pass in that session (every 30 s) retries it, running the veto again. On the first pass after its session, it closes as `refused` with code `dropped` (scope `signal`, ticket #2024) and the last error. A signal that never failed still closes as `session_missed`. A retry that finds an entry order for the signal still closes it as `already_submitted`. The date-free order ids mean the retry never sends a second order.
 
-Open for David before rulings 1 and 4 can be built:
+Open for David before rulings 1 and 4 could be built (answered 2026-10-08):
 
 - Ruling 1: the tree has no definition of a US large cap apart from S&P 500 membership. There is no market-cap source, and the G18 floors are unset. The only US liquidity screens are the debate pool's $50M movers floor (`MOVERS_MIN_DOLLAR_VOLUME_USD`) and the risk gate's ADV volume cap. The bar store and its refresh also cover only the constituents, so a name outside the list has no last close and is refused as `stale_last_close`. Open: what counts as a large cap, which screens apply, and where an off-list name's bars come from.
 - Ruling 4: v2 has no quote source; it reads daily bars only. The real leg is a resting GTC limit or stop-limit bracket at Alpaca, so Alpaca decides when it fills. Open: whether an Alpaca latest-quote read is added for the shadow; what the shadow does when that first quote does not reach the limit or the buy-stop trigger; and, for a signal queued out of session, whether the first quote is the first one after the next open.
@@ -632,6 +632,42 @@ Awaiting David (defaults picked as the most conservative reading; each is a name
 - **How entries are drawn.** Each matched trade is redrawn uniformly over the free (session, instrument) slots in its own test fold: sessions in the fold, instruments in the universe of the trial that made the trade on that session, readable on that session, and not already held by the same run over the matched hold. A trade with no free slot is dropped, and its row logs `scheduled` below `matched`. The side and venue are the matched trade's.
 - **Random stops and sizing.** A random entry is quoted at the session's last raw close, as every backtest entry must be. Its stop is the spec's `stopAtrMultiple` times a 20-bar ATR (`RANDOM_ENTRY_ATR_WINDOW`, the window every candidate uses), and its target is left to the risk gate's ATR target. It sizes with the spec of the trial the walk-forward path selects most often, ties to the one selected first, and is vol-targeted exactly when that trial is (#1860's `sleeveIds`), through the same `volTargetOf(input)` sizing every simulation uses.
 - **Realized trades fall short of the matched ones on real data.** On cross-asset trend's real bars (candidate 1), every run of a 20-seed sample scheduled all 548 matched trades, but seeds 1 to 3 made only 348 to 369 of them and held 4,033 to 4,609 sessions against the path's 11,096. A random entry's ATR stop fires sooner than the candidate's exits, some lines size to zero, and the cash and gross caps refuse others. The band is therefore built from fewer, shorter trades than the ruling's "matched" may intend. Whether to resize, re-enter or accept the shortfall is David's call.
+
+## Rulings of 2026-10-08 — signals universe and shadow fill (#2024)
+
+David answered the questions left open under rulings 1 and 4 of 2026-10-05, recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024). The spec is `docs/specs/signals-sleeve-spec.md`.
+
+1. **Universe: a large cap is a current S&P 500 member.** "Large cap" means current S&P 500 membership only, read from the constituent list the repo already keeps (`data/bars/sp500-constituents.csv`), and the existing liquidity screens apply. This replaces ruling 1 of 2026-10-05's wider reading. A signal for an off-list symbol is journalled as rejected, with no order and no shadow entry. Bars come from the existing source; there is no new data dependency.
+2. **Shadow fill: the Alpaca latest quote, from the account's data feed.** The shadow and the real leg both fill at the first quote after the signal arrives, from that one price source. If the first quote does not reach the entry (the limit, or a buy-stop's trigger), the shadow stays pending until the real leg's validity window ends, and is then a no-fill. An out-of-session signal takes the first quote after the next open.
+
+*Built 2026-10-08 (#2024).* Build notes (not rulings):
+
+- Ruling 1 is the gate the processor already ran: a symbol missing from the trading date's constituent row is refused as `not_in_universe` (scope `signal`) before the veto, the quote read or either book's entry. The screens that apply are the ones the signals path already runs: a fresh last close in the bar store (`stale_last_close`) and the risk gate's volume cap of 1% of the 20-bar average daily volume, which refuses an entry with no covered volume window (`no_adv`). The build first left the debate pool's $50M movers floor (`MOVERS_MIN_DOLLAR_VOLUME_USD`) off this path; David's follow-up below applies it.
+- Ruling 2: `AlpacaHttpBrokerClient.getLatestQuote` reads `GET /v2/stocks/{symbol}/quotes/latest` on Alpaca's data host with the account's key pair and no `feed` parameter, so Alpaca answers from the account's own feed. The processor reads it after the veto, just before the entry pass. A quote older than the signal's `process_after` (its receipt in session, the next open out of session) is not a quote after the signal: the pass fails and the retry reads again on the next pass, 30 s later, as does a quote with no ask. Both books' entry orders and the decisions carry `entry_quote` (`ask`, `bid`, `quoted_at`, `fill`). `fill` is the ask when it is at or below the limit and, for a buy-stop, at or above the trigger; otherwise it is null. The daily cycle books the shadow at `fill`, with no modelled spread or impact because the ask already crosses the spread (fees still apply), and checks the fill day's bar only for the stop. A null `fill` leaves the shadow resting, so it still holds the symbol against another signal, until the next daily cycle, after the session that is the real leg's window, cancels it as a no-fill. The primary is the Alpaca bracket submitted right after the read; Alpaca fills it. A dry run reads no feed and keeps the daily-bar simulation. No migration.
+
+Build choices David ruled on the same day (2026-10-08, #2024):
+
+1. **Accepted: only the first quote decides the shadow.** A later quote in the session that reaches the entry does not fill it, though the resting real leg could still fill then.
+2. **Changed: the $50M movers floor applies to signals.** The debate pool's dollar-volume floor (`MOVERS_MIN_DOLLAR_VOLUME_USD`) is applied to the signal's symbol on the last bar before the trading date (raw close times volume, in USD). An off-floor signal is journalled as rejected on the same path as an off-list one, `below_dollar_volume_floor` (scope `signal`, ticket #2024): no quote read, no veto, no order in either book.
+3. **Accepted: the fill day's bar is checked for the stop over the whole day,** including the part before the quote.
+4. **Changed: a paper-week fidelity check compares the real leg's fill prices with the shadow's.** That Alpaca paper fills the real leg from the same feed the quote is read from stays unverified until that check runs. It is recorded in the spec's known limits and not built yet.
+5. **Accepted: a dry run reads no feed and keeps the daily-bar simulation.**
+
+*Built 2026-10-08 (#2024):* ruling 2's floor in `server/apps/v2/signals/processor.ts`, after the stale-close check. The check of ruling 4 is not built.
+
+## Rulings of 2026-10-09 — a missing quote fails closed, the veto runs once (#2024)
+
+David answered the review of PR #2092 (finding F1), recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024). The spec is `docs/specs/signals-sleeve-spec.md`.
+
+1. **A missing quote blocks both legs.** When the Alpaca latest quote is older than the signal's `process_after`, has no ask, or the read fails, neither leg enters. The 30 s retry continues until the signal's session ends, and the signal is then dropped as before.
+2. **The veto runs once per signal.** Its verdict is journalled, and every retry reuses it, so a retry spends no LLM budget. A replayed day must still produce the same decisions.
+
+*Built 2026-10-09 (#2024).* Build notes (not rulings):
+
+- The verdict is journalled in a new append-only table, `v2_signal_vetoes` (migration 0099), keyed by the signal id. It holds the kind and the reason, and is written right after the veto returns and before the quote read, so a pass that fails on the quote, or a crash after the veto, keeps the verdict. A retry reads it and makes no LLM call; a vetoed signal stays vetoed.
+- The cached verdict includes `unavailable`. A veto that could not run on the first pass (spend cap, call failure) is not retried, so the primary stays skipped for that signal. This is the literal reading of "runs once" and is recorded in the spec's known limits.
+- A signal entered after retries journals the same decisions as one entered on its first pass, apart from its own signal id; a test holds this.
+- `npm run v2:replay` replays the debate and arm 2 decisions only; it does not re-run the signals sleeve. The journalled verdict is what a signals replay would read, but none is built yet.
 
 ## Still open
 

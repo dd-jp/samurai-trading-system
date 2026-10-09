@@ -323,6 +323,71 @@ describe('AlpacaHttpBrokerClient', () => {
     expect(url).toBe('https://paper-api.alpaca.markets/v2/orders/alpaca-order-1');
   });
 
+  it('getLatestQuote GETs the data host with no feed, so the account feed answers (#2024)', async () => {
+    const quote = { t: '2026-09-30T14:00:01.123Z', ax: 'V', ap: 25.01, as: 1, bp: 24.99, bs: 2 };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ symbol: 'BRK.B', quote }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+    const result = await client.getLatestQuote('BRK.B');
+
+    expect(result).toEqual({ t: '2026-09-30T14:00:01.123Z', ap: 25.01, bp: 24.99 });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://data.alpaca.markets/v2/stocks/BRK.B/quotes/latest');
+    expect(init.method).toBe('GET');
+    expect(init.headers).toMatchObject({
+      'APCA-API-KEY-ID': FAKE_KEY,
+      'APCA-API-SECRET-KEY': FAKE_SECRET,
+    });
+  });
+
+  it('getLatestQuote reads a configured data host', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ quote: { t: '2026-09-30T14:00:01Z', ap: 1, bp: 1 } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new AlpacaHttpBrokerClient({
+      apiKey: FAKE_KEY,
+      apiSecret: FAKE_SECRET,
+      dataBaseUrl: 'https://localhost:9998',
+    });
+    await client.getLatestQuote('UP');
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://localhost:9998/v2/stocks/UP/quotes/latest');
+  });
+
+  it.each([
+    ['no quote object', { symbol: 'UP' }, 'quote must be an object'],
+    ['a non-object body', 'quote', 'quote must be an object'],
+    ['an unparseable time', { quote: { t: 'soon', ap: 1, bp: 1 } }, 'quote.t must be a timestamp'],
+    ['a missing time', { quote: { ap: 1, bp: 1 } }, 'quote.t must be a timestamp'],
+    ['a numeric time', { quote: { t: 2026, ap: 1, bp: 1 } }, 'quote.t must be a timestamp'],
+    [
+      'a string ask',
+      { quote: { t: '2026-09-30T14:00:01Z', ap: '1', bp: 1 } },
+      'quote.ap must be a finite number',
+    ],
+    [
+      'a string bid',
+      { quote: { t: '2026-09-30T14:00:01Z', ap: 1, bp: '1' } },
+      'quote.bp must be a finite number',
+    ],
+    [
+      'a non-finite bid',
+      { quote: { t: '2026-09-30T14:00:01Z', ap: 1, bp: null } },
+      'quote.bp must be a finite number',
+    ],
+  ])('getLatestQuote rejects a body with %s', async (_label, body, detail) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(body)));
+
+    const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    const failure = client.getLatestQuote('UP');
+    await expect(failure).rejects.toBeInstanceOf(AlpacaBrokerProviderError);
+    await expect(failure).rejects.toThrow(`(getLatestQuote): ${detail} — `);
+  });
+
   it('getOrderByClientOrderId GETs the by_client_order_id endpoint and returns the parsed order', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(ORDER_RESPONSE));
     vi.stubGlobal('fetch', fetchMock);

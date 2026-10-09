@@ -52,3 +52,12 @@ export function planSignalEntry(signal: SignalLevels, lastClose: number): Signal
     },
   };
 }
+
+export function quoteFill(
+  plan: Pick<SignalEntryPlan, 'limit' | 'trigger'>,
+  ask: number,
+): number | null {
+  if (ask > plan.limit) return null;
+  if (plan.trigger !== undefined && ask < plan.trigger) return null;
+  return ask;
+}

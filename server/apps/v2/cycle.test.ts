@@ -1548,6 +1548,29 @@ describe('runCycle', () => {
     );
   });
 
+  it('fills a simulated entry at its journalled first-quote fill, not the bar (#2024)', async () => {
+    const quote = { ask: 20.05, bid: 20.01, quoted_at: '2026-09-24T14:00:00.000Z', fill: 20.05 };
+    const deps = harness([{ ...longAapl, entry_quote: quote }], true);
+    await runCycle(deps, '2026-09-24');
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-24-AAPL')?.payload.entry_quote).toEqual(
+      quote,
+    );
+    deps.setDecisions([]);
+    deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 20.3, low: 20.11, high: 20.6 }));
+    expect((await runCycle(deps, '2026-09-25')).fills).toBe(2);
+    expect(deps.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20.05 / FX, 9);
+  });
+
+  it('cancels a simulated entry whose first quote missed, though the bar reached the limit (#2024)', async () => {
+    const quote = { ask: 20.4, bid: 20.3, quoted_at: '2026-09-24T14:00:00.000Z', fill: null };
+    const deps = harness([{ ...longAapl, entry_quote: quote }], true);
+    await runCycle(deps, '2026-09-24');
+    deps.setDecisions([]);
+    deps.barsByDate.set('2026-09-25', bar('2026-09-24', { open: 19.6, low: 19.4, high: 20.1 }));
+    expect((await runCycle(deps, '2026-09-25')).fills).toBe(0);
+    expect(deps.journal.orderFor('v2-debate-primary-2026-09-24-AAPL')?.outcome).toBe('cancelled');
+  });
+
   it('fills a bar that dips between the decision close and the offset limit, at the limit (#1815)', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-24');
