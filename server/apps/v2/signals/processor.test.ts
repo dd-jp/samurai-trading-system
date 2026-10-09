@@ -1396,6 +1396,53 @@ describe('the veto runs once per signal (David 2026-10-09, #2024)', () => {
     expect(signals.vetoVerdicts(20)).toEqual(['veto']);
   });
 
+  it('a restarted process reuses the verdict journalled before the crash', async () => {
+    const fixtures = await writeFixtures();
+    const before = open(fixtures, new SimulatedClock(IN_SESSION), { quotes: quotesAt(STALE) });
+    const id = post(before.signals, {});
+    await before.root.processSignals(before.signals, IN_SESSION);
+    roots.splice(roots.indexOf(before.root), 1);
+    before.root.close();
+
+    const after = open(fixtures, new SimulatedClock(IN_SESSION), { quotes: quotesAt(FRESH) });
+    const entered = await after.root.processSignals(
+      after.signals,
+      new Date(IN_SESSION.getTime() + 30_000),
+    );
+
+    expect(entered).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(before.transports.flatMap((transport) => transport.calls)).toHaveLength(1);
+    expect(after.transports.flatMap((transport) => transport.calls)).toHaveLength(0);
+    expect(after.root.journal.orderFor(shadowId(id))).toBeDefined();
+  });
+
+  it('an unavailable veto stays unavailable on retry: no second call, the primary stays out', async () => {
+    const fixtures = await writeFixtures();
+    let calls = 0;
+    const script: Script = (request) => {
+      calls += 1;
+      if (calls === 1) throw new Error('upstream 503');
+      return PASS_SCRIPT(request);
+    };
+    const { root, signals } = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      { quotes: quotesAt(STALE, FRESH) },
+      script,
+    );
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+    const firstPassCalls = calls;
+    await root.processSignals(signals, new Date(IN_SESSION.getTime() + 30_000));
+
+    expect(firstPassCalls).toBeGreaterThan(0);
+    expect(calls).toBe(firstPassCalls);
+    expect(signals.vetoFor(id)?.kind).toBe('unavailable');
+    expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
+  });
+
   it('a signal entered after retries journals the same decisions as one entered at once', async () => {
     const clean = await writeFixtures();
     const once = open(clean, new SimulatedClock(IN_SESSION), { quotes: quotesAt(FRESH) });
