@@ -19,6 +19,7 @@ import type {
   AlpacaBracketOrderRequest,
   AlpacaBrokerClient,
   AlpacaMarketOrderRequest,
+  AlpacaOcoOrderRequest,
   AlpacaOrder,
   AlpacaPosition,
 } from './execution/alpaca/alpaca-client.js';
@@ -74,6 +75,7 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
   readonly cancelled: string[] = [];
   down: Error | undefined;
   rejectNextSubmit: Error | undefined;
+  ocoStopStatus = 'held';
 
   #reachable(): void {
     if (this.down !== undefined) throw this.down;
@@ -84,15 +86,7 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
       const rejection = this.rejectNextSubmit;
       this.rejectNextSubmit = undefined;
       if (rejection !== undefined) throw rejection;
-      if (this.orders.some((order) => order.client_order_id === request.client_order_id)) {
-        throw new AlpacaBrokerProviderError(
-          'Alpaca API error: 422 client_order_id must be unique (submitOrder)',
-          422,
-          '40010001',
-          'client_order_id must be unique',
-          'POST',
-        );
-      }
+      this.#refuseReused(request.client_order_id, 'submitOrder');
       const id = `alp-${this.orders.length + 1}`;
       const leg = (suffix: string, type: 'limit' | 'stop', price: string) => ({
         id: `${id}-${suffix}`,
@@ -149,8 +143,43 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
     });
   }
 
-  submitOcoOrder(): Promise<AlpacaOrder> {
-    return Promise.reject(new Error('unused'));
+  // The OCO wire is unmeasured (#2090 item 1): the parent is the take-profit limit and the stop is
+  // its one leg, as Alpaca's order docs describe it, resting in `ocoStopStatus`
+  submitOcoOrder(request: AlpacaOcoOrderRequest): Promise<AlpacaOrder> {
+    return this.#answer(() => {
+      this.#refuseReused(request.client_order_id, 'submitOcoOrder');
+      const id = `alp-${this.orders.length + 1}`;
+      const order: AlpacaOrder = {
+        id,
+        client_order_id: request.client_order_id,
+        symbol: request.symbol,
+        side: request.side,
+        qty: request.qty,
+        order_class: 'oco',
+        type: 'limit',
+        status: 'new',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+        limit_price: request.take_profit.limit_price,
+        legs: [
+          {
+            id: `${id}-sl`,
+            client_order_id: `${id}-sl-uuid`,
+            side: request.side,
+            qty: request.qty,
+            type: 'stop',
+            status: this.ocoStopStatus,
+            filled_qty: '0',
+            filled_avg_price: null,
+            filled_at: null,
+            stop_price: request.stop_loss.stop_price,
+          },
+        ],
+      };
+      this.orders.push(order);
+      return structuredClone(order);
+    });
   }
 
   cancelOrder(alpacaOrderId: string): Promise<void> {
@@ -165,8 +194,12 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
   getOrder(alpacaOrderId: string): Promise<AlpacaOrder> {
     return this.#answer(() => {
       const order = this.orders.find((candidate) => candidate.id === alpacaOrderId);
-      if (order === undefined) throw new Error(`404 no order ${alpacaOrderId}`);
-      return structuredClone(order);
+      if (order !== undefined) return structuredClone(order);
+      const leg = this.orders
+        .flatMap((parent) => this.#flatLegs(parent))
+        .find((candidate) => candidate.id === alpacaOrderId);
+      if (leg === undefined) throw new Error(`404 no order ${alpacaOrderId}`);
+      return leg;
     });
   }
 
@@ -238,8 +271,37 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
   }
 
   bracketsFor(symbol: string): number {
-    return this.orders.filter((order) => order.symbol === symbol && order.order_class === 'bracket')
-      .length;
+    return this.#ordersOf(symbol, 'bracket');
+  }
+
+  ocosFor(symbol: string): number {
+    return this.#ordersOf(symbol, 'oco');
+  }
+
+  restingStops(symbol: string): (string | null | undefined)[] {
+    return this.orders
+      .filter((order) => order.symbol === symbol)
+      .flatMap((order) => order.legs ?? [])
+      .filter((leg) => leg.type === 'stop' && OPEN.has(leg.status))
+      .map((leg) => leg.stop_price);
+  }
+
+  #ordersOf(symbol: string, orderClass: string): number {
+    return this.orders.filter(
+      (order) => order.symbol === symbol && order.order_class === orderClass,
+    ).length;
+  }
+
+  #refuseReused(clientOrderId: string, call: string): void {
+    if (this.orders.some((order) => order.client_order_id === clientOrderId)) {
+      throw new AlpacaBrokerProviderError(
+        `Alpaca API error: 422 client_order_id must be unique (${call})`,
+        422,
+        '40010001',
+        'client_order_id must be unique',
+        'POST',
+      );
+    }
   }
 
   #byClientId(clientOrderId: string): AlpacaOrder {
@@ -248,22 +310,21 @@ class FakeAlpacaClient implements AlpacaBrokerClient {
     return order;
   }
 
+  #flatLegs(order: AlpacaOrder): AlpacaOrder[] {
+    return (order.legs ?? []).map((leg) => ({
+      ...structuredClone(leg),
+      client_order_id: leg.client_order_id ?? leg.id,
+      symbol: order.symbol,
+      side: leg.side ?? order.side,
+      qty: leg.qty ?? order.qty,
+      order_class: order.order_class,
+    }));
+  }
+
   #openParts(order: AlpacaOrder): AlpacaOrder[] {
-    if (LISTED_OPEN.has(order.status)) {
-      const { legs: _legs, ...parent } = structuredClone(order);
-      return [parent];
-    }
-    if (order.status !== 'filled') return [];
-    return (order.legs ?? [])
-      .filter((leg) => LISTED_OPEN.has(leg.status))
-      .map((leg) => ({
-        ...leg,
-        client_order_id: leg.client_order_id ?? leg.id,
-        symbol: order.symbol,
-        side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
-        qty: order.qty,
-        order_class: 'bracket',
-      }));
+    const { legs: _legs, ...parent } = structuredClone(order);
+    const listedLegs = this.#flatLegs(order).filter((leg) => LISTED_OPEN.has(leg.status));
+    return LISTED_OPEN.has(order.status) ? [parent, ...listedLegs] : listedLegs;
   }
 
   #netQty(): Map<string, number> {
@@ -345,6 +406,7 @@ interface Drill {
   faultKinds(tradingDate: string): [FaultKind, string][];
   refusalParameters(tradingDate: string): string[];
   reconciles(tradingDate: string): string[];
+  protectingStops(tradingDate: string): unknown[];
 }
 
 function drill(options: { sessions?: boolean } = {}): Drill {
@@ -411,6 +473,11 @@ function drill(options: { sessions?: boolean } = {}): Drill {
         "SELECT status FROM v2_reconciles WHERE trading_date = ? AND venue = 'alpaca' ORDER BY reconcile_id",
         date,
       ).map((row) => row.status),
+    protectingStops: (date) =>
+      rows<{ protecting_stops: string }>(
+        "SELECT protecting_stops FROM v2_reconciles WHERE trading_date = ? AND venue = 'alpaca' AND source = 'broker'",
+        date,
+      ).flatMap((row) => JSON.parse(row.protecting_stops) as unknown[]),
   };
   return state;
 }
@@ -431,6 +498,15 @@ describe('Step 4b fault matrix (#1747)', () => {
     expect(subject.broker.restingStop(AAPL_ENTRY)).toBe('19.20');
     expect(subject.reconciles('2026-09-29')).toEqual(['clean']);
     expect(subject.faultKinds('2026-09-29')).toEqual([]);
+    expect(subject.protectingStops('2026-09-29')).toEqual([
+      {
+        clientOrderId: 'alp-1-sl-uuid',
+        instrument: 'AAPL',
+        protects: 'long',
+        qty: 6,
+        stopPrice: 19.2,
+      },
+    ]);
   });
 
   it('a bracket stop cancelled at the venue still reconciles unprotected through the held-leg read (#2086)', async () => {
@@ -446,6 +522,38 @@ describe('Step 4b fault matrix (#1747)', () => {
       'position_unprotected',
     ]);
   });
+
+  it.each(['held', 'new'])(
+    're-arm: a stop cancelled at the venue is re-armed as an OCO whose stop rests %s, and the next run reconciles clean with no second cancel (#2090)',
+    async (ocoStopStatus) => {
+      const subject = drill();
+      subject.broker.ocoStopStatus = ocoStopStatus;
+      await holdAapl(subject);
+      const stop = subject.broker.orders[0]?.legs?.find((leg) => leg.type === 'stop');
+      if (stop === undefined) throw new Error('drill: no stop leg');
+      stop.status = 'canceled';
+      await subject.run('2026-09-30');
+      expect(subject.reconciles('2026-09-30')).toEqual(['mismatch']);
+      expect(subject.broker.ocosFor('AAPL')).toBe(1);
+      expect(subject.broker.restingStops('AAPL')).toEqual(['19.20']);
+      const cancels = [...subject.broker.cancelled];
+      subject.restart();
+      await subject.run('2026-10-01');
+      expect(subject.reconciles('2026-10-01')).toEqual(['clean']);
+      expect(subject.refusalParameters('2026-10-01')).not.toContain('BROKER_RECONCILE');
+      expect(subject.faultKinds('2026-10-01')).toEqual([]);
+      expect(subject.broker.cancelled).toEqual(cancels);
+      expect(subject.broker.ocosFor('AAPL')).toBe(1);
+      expect(subject.broker.restingStops('AAPL')).toEqual(['19.20']);
+      const oco = subject.broker.orders.find((order) => order.order_class === 'oco');
+      expect(subject.protectingStops('2026-10-01')).toEqual([
+        expect.objectContaining({
+          clientOrderId: oco?.legs?.[0]?.client_order_id,
+          stopPrice: 19.2,
+        }),
+      ]);
+    },
+  );
 
   it('a filled bracket whose stop leg Alpaca holds off the open listing reconciles clean and is never re-armed (#2086)', async () => {
     const subject = drill();

@@ -63,14 +63,11 @@ interface Venue {
 }
 
 function legStatus(venue: Venue, leg: Leg): string {
-  return venue.cancelled.has(leg.id) ? 'canceled' : 'new';
+  if (venue.cancelled.has(leg.id)) return 'canceled';
+  return leg.type === 'stop' ? 'held' : 'new';
 }
 
-function listedStop(order: AlpacaOrder, broker: Broker, venue: Venue): Record<string, unknown> {
-  const oco = venue.ocos.find(
-    (placed) => placed.client_order_id === `${order.client_order_id}:rearm`,
-  );
-  if (oco !== undefined) return { qty: oco.qty, stop_price: oco.legs?.[0]?.stop_price ?? null };
+function restingStop(order: AlpacaOrder, broker: Broker, venue: Venue): Partial<Leg> {
   const stop = Number(order.legs?.[1]?.stop_price);
   return venue.staleStop
     ? { qty: order.qty, stop_price: String(stop) }
@@ -78,6 +75,17 @@ function listedStop(order: AlpacaOrder, broker: Broker, venue: Venue): Record<st
         qty: String(Number(order.qty) * broker.positionScale),
         stop_price: String(stop / broker.positionScale),
       };
+}
+
+function flatLeg(order: AlpacaOrder, leg: Leg): AlpacaOrder {
+  return {
+    ...leg,
+    client_order_id: leg.client_order_id ?? leg.id,
+    symbol: order.symbol,
+    side: leg.side ?? order.side,
+    qty: leg.qty ?? order.qty,
+    order_class: order.order_class,
+  };
 }
 
 function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
@@ -111,6 +119,9 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
       const id = `alp-${orders.length + 1}`;
       const leg = (suffix: string, type: Leg['type']): Leg => ({
         id: `${id}-${suffix}`,
+        client_order_id: `${id}-${suffix}-uuid`,
+        side: request.side === 'buy' ? 'sell' : 'buy',
+        qty: request.qty,
         type,
         status: 'held',
         filled_qty: '0',
@@ -175,8 +186,11 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
         legs: [
           {
             id: `oco-${venue.ocos.length + 1}-sl`,
+            client_order_id: `oco-${venue.ocos.length + 1}-sl-uuid`,
+            side: request.side,
+            qty: request.qty,
             type: 'stop',
-            status: 'new',
+            status: 'held',
             filled_qty: '0',
             filled_avg_price: null,
             filled_at: null,
@@ -192,21 +206,45 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
       return Promise.resolve();
     }),
     listOpenOrders: vi.fn(() =>
-      Promise.resolve(
-        held().map((order) => ({
-          ...order,
-          id: `${order.id}-sl`,
-          client_order_id: `${order.client_order_id}-stop`,
-          side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
-          type: 'stop',
-          order_class: 'simple',
-          status: 'new',
-          filled_qty: '0',
-          ...listedStop(order, broker, venue),
-        })),
-      ),
+      Promise.resolve([
+        ...held().flatMap((order) => {
+          const viewed = view(order);
+          if (viewed.status !== 'filled') return [];
+          return (viewed.legs ?? [])
+            .filter((leg) => leg.status === 'new')
+            .map((leg) => flatLeg(order, leg));
+        }),
+        ...venue.ocos
+          .filter((oco) => !venue.cancelled.has(oco.id))
+          .map(({ legs: _legs, ...parent }) => parent),
+      ]),
     ),
-    listOrderHistory: vi.fn().mockResolvedValue([]),
+    listOrderHistory: vi.fn((symbols: readonly string[]) =>
+      Promise.resolve([
+        ...held()
+          .filter((order) => symbols.includes(order.symbol))
+          .map((order) => {
+            const viewed = view(order);
+            return {
+              ...viewed,
+              legs: (viewed.legs ?? []).map((leg) =>
+                leg.type === 'stop' ? { ...leg, ...restingStop(order, broker, venue) } : leg,
+              ),
+            };
+          }),
+        ...venue.ocos
+          .filter((oco) => symbols.includes(oco.symbol))
+          .map((oco) =>
+            venue.cancelled.has(oco.id)
+              ? {
+                  ...oco,
+                  status: 'canceled',
+                  legs: (oco.legs ?? []).map((leg) => ({ ...leg, status: 'canceled' })),
+                }
+              : oco,
+          ),
+      ]),
+    ),
     getPositions: vi.fn(() =>
       Promise.resolve(
         held().map((order) => ({

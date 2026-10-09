@@ -4,6 +4,7 @@ import type {
   BrokerBook,
   BrokerBookReader,
   BrokerMode,
+  BrokerOpenOrder,
   DecisionJournal,
   MarketData,
   OrderExecutor,
@@ -20,6 +21,7 @@ import { type CashAnchorLedger, type CashCheck, liveCashCheck } from './cash-anc
 import {
   compareVenue,
   type HeldProtection,
+  protectingStops,
   rearmable,
   type StoreView,
   type VenueView,
@@ -192,6 +194,7 @@ interface GroupResult {
   readonly detail: string;
   readonly cashQuote?: number;
   readonly staleStops?: readonly StaleStop[];
+  readonly protectingStops?: readonly BrokerOpenOrder[];
 }
 
 // A simulated venue keeps no state outside the ledger: its fills are written straight into the
@@ -255,6 +258,7 @@ async function reconcileGroup(
     detail: [...diffs.map(describeDiff), cash.note].join('; '),
     cashQuote: read.cashQuote,
     staleStops: staleStopsOf(group.venue, bookDiffs, rearmable(store, read.view)),
+    protectingStops: protectingStops(store, read.view),
   };
 }
 
@@ -325,6 +329,7 @@ export async function reconcileBooks(
       detail: result.detail,
       broker_mode: deps.brokerMode,
       cash_quote: result.cashQuote ?? null,
+      protecting_stops: result.protectingStops,
     });
     if (result.status === 'clean') continue;
     refusals.push(...blockGroup(deps, group, tradingDate, { ...result, status: result.status }));

@@ -164,6 +164,8 @@ function scriptedFactory(transports: ScriptedTransport[]) {
   };
 }
 
+// A filled bracket as measured in #2086: the take-profit rests `new` on the open listing and the stop
+// stays `held`, which only the order history returns
 function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders: AlpacaOrder[] } {
   const orders: AlpacaOrder[] = [];
   const filled = (order: AlpacaOrder): AlpacaOrder => ({
@@ -172,12 +174,39 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
     filled_qty: order.qty,
     filled_avg_price: order.limit_price ?? '0',
     filled_at: clock.now().toISOString(),
+    legs: (order.legs ?? []).map((leg) => ({
+      ...leg,
+      status: leg.type === 'stop' ? 'held' : 'new',
+    })),
   });
+  const takeProfits = (order: AlpacaOrder): AlpacaOrder[] =>
+    (filled(order).legs ?? [])
+      .filter((leg) => leg.type === 'limit')
+      .map((leg) => ({
+        ...leg,
+        client_order_id: leg.client_order_id ?? leg.id,
+        symbol: order.symbol,
+        side: leg.side ?? order.side,
+        qty: leg.qty ?? order.qty,
+        order_class: 'bracket',
+      }));
   return {
     orders,
     submitOrder: vi.fn((request) => {
+      const id = `alp-${orders.length + 1}`;
+      const leg = (suffix: string, type: 'limit' | 'stop') => ({
+        id: `${id}-${suffix}`,
+        client_order_id: `${id}-${suffix}-uuid`,
+        side: request.side === 'buy' ? ('sell' as const) : ('buy' as const),
+        qty: request.qty,
+        type,
+        status: 'held',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+      });
       const order: AlpacaOrder = {
-        id: `alp-${orders.length + 1}`,
+        id,
         client_order_id: request.client_order_id,
         symbol: request.symbol,
         side: request.side,
@@ -189,23 +218,8 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
         filled_at: null,
         limit_price: request.limit_price,
         legs: [
-          {
-            id: `${orders.length + 1}-tp`,
-            type: 'limit',
-            status: 'held',
-            filled_qty: '0',
-            filled_avg_price: null,
-            filled_at: null,
-          },
-          {
-            id: `${orders.length + 1}-sl`,
-            type: 'stop',
-            status: 'held',
-            filled_qty: '0',
-            filled_avg_price: null,
-            filled_at: null,
-            stop_price: request.stop_loss.stop_price,
-          },
+          { ...leg('tp', 'limit'), limit_price: request.take_profit.limit_price },
+          { ...leg('sl', 'stop'), stop_price: request.stop_loss.stop_price },
         ],
       };
       orders.push(order);
@@ -224,21 +238,10 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
     submitMarketOrder: vi.fn().mockRejectedValue(new Error('unused')),
     submitOcoOrder: vi.fn().mockRejectedValue(new Error('unused')),
     cancelOrder: vi.fn().mockResolvedValue(undefined),
-    listOpenOrders: vi.fn(() =>
-      Promise.resolve(
-        orders.map((order) => ({
-          ...order,
-          id: `${order.id}-sl`,
-          client_order_id: `${order.client_order_id}-stop`,
-          side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
-          type: 'stop',
-          order_class: 'simple',
-          status: 'new',
-          stop_price: order.legs?.[1]?.stop_price ?? null,
-        })),
-      ),
+    listOpenOrders: vi.fn(() => Promise.resolve(orders.flatMap(takeProfits))),
+    listOrderHistory: vi.fn((symbols: readonly string[]) =>
+      Promise.resolve(orders.filter((order) => symbols.includes(order.symbol)).map(filled)),
     ),
-    listOrderHistory: vi.fn().mockResolvedValue([]),
     getPositions: vi.fn(() =>
       Promise.resolve(
         orders.map((order) => ({
