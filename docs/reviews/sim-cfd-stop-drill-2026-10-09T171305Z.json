@@ -1,9 +1,6 @@
 {
   "drill": "sim-cfd-stop-drill",
-  "refs": [
-    "#1400",
-    "#1916"
-  ],
+  "refs": ["#1400", "#1916"],
   "gateway": "https://gateway.saxobank.com/sim/openapi",
   "startedAt": "2026-10-09T17:13:05.902Z",
   "instruments": [],
