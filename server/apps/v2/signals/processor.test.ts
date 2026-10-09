@@ -1637,6 +1637,27 @@ describe('a failed veto call gets one more attempt (David 2026-10-09, #2024)', (
     expect(after.root.journal.orderFor(primaryId(id))).toBeDefined();
   });
 
+  it('journals the claim for each attempt before its call goes out', async () => {
+    const fixtures = await writeFixtures();
+    const reply = failingThen(FAIL, PASS);
+    const seen: (readonly boolean[])[] = [];
+    let claimed: (attempt: 1 | 2) => boolean = () => false;
+    const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION), {}, (request) => {
+      seen.push([claimed(1), claimed(2)]);
+      return reply(request);
+    });
+    const id = post(signals, {});
+    claimed = (attempt) => signals.vetoClaimed(id, attempt);
+
+    await root.processSignals(signals, IN_SESSION);
+    await root.processSignals(signals, LATER);
+
+    expect(seen).toEqual([
+      [true, false],
+      [true, true],
+    ]);
+  });
+
   it('a crash during the first call, then a failed retry, is final after exactly 2 calls', async () => {
     const fixtures = await writeFixtures();
     const before = open(fixtures, new SimulatedClock(IN_SESSION), {}, failingThen(PASS));
