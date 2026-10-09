@@ -425,6 +425,27 @@ describe('runBacktest', { timeout: 120_000 }, () => {
     expect(verdict.checks.beatsRandomEntries).toBe(false);
   });
 
+  it('marks the path trade and the random position still open at the window end at its last session', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const log = new CanaryLog(db, clock);
+    const run = input({ to: DATES[200] as string, randomCanary: { log, runs: 2 } });
+    const { verdict } = await runBacktest(run);
+    const rows = log
+      .list()
+      .filter((row) => row.kind === 'random')
+      .map((row) => JSON.parse(row.result));
+    expect(rows.map((row) => [row.matched, row.matchedSessions])).toEqual([
+      [13, 12 * 6 + 5],
+      [13, 12 * 6 + 5],
+    ]);
+    expect(rows.map((row) => [row.traded, row.heldSessions, row.unmatched])).toEqual([
+      [11, 11 * 6, 1],
+      [12, 11 * 6 + 4, 1],
+    ]);
+    expect(verdict.randomEntries?.unmatchedRuns).toBe(2);
+  });
+
   it('#1860: vol-targets the random runs exactly when the trial they copy is vol-targeted', async () => {
     const db = migratedMemoryStore();
     const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
