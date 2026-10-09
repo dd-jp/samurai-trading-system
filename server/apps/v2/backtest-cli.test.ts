@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { BarSeries, DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
@@ -16,10 +16,34 @@ import {
   runVolTargetTrialAgainst,
 } from './backtest-cli.js';
 import { CanaryLog } from './canary-log.js';
+import type { CycleCompositionOptions } from './compose.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
 import { CROSS_ASSET_TREND_TIDMS, VOL_TARGET_INDEX_TIDMS } from './signal/index.js';
 import { researchStorePath, TrialLedger } from './trial-ledger.js';
+
+interface Composition {
+  readonly options: CycleCompositionOptions;
+  readonly crossing: { readonly price: number; readonly fee: number };
+  readonly resting: { readonly price: number; readonly fee: number };
+}
+
+const compositions = vi.hoisted((): Composition[] => []);
+const COST_PROBE = { instrument: 'AAA', side: 'sell' as const, qty: 10, price: 100 };
+
+vi.mock('./compose.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./compose.js')>();
+  return {
+    ...actual,
+    composeCycle: (options: CycleCompositionOptions) => {
+      const composed = actual.composeCycle(options);
+      const quote = (crossesSpread: boolean) =>
+        composed.executor.quoteSimulatedFill('alpaca', { ...COST_PROBE, crossesSpread });
+      compositions.push({ options, crossing: quote(true), resting: quote(false) });
+      return composed;
+    },
+  };
+});
 
 function logsIn(db: ReturnType<typeof migratedMemoryStore>, ledger: TrialLedger) {
   return {
@@ -423,7 +447,7 @@ function arm2BarsSource() {
 }
 
 describe('runVolTargetTrialAgainst', () => {
-  it('#1860: runs one counted vol-target trial on a copy of arm 2 against unscaled arm 2, idempotently', {
+  it('#1860: runs one counted vol-target trial on a copy of arm 2 against unscaled arm 2, at 1x and 2x cost, idempotently', {
     timeout: 240_000,
   }, async () => {
     const barsSource = arm2BarsSource();
@@ -451,8 +475,24 @@ describe('runVolTargetTrialAgainst', () => {
           { log: () => undefined },
           window,
         );
+      compositions.length = 0;
       const report = await run();
       expect(ledger.count()).toBe(1);
+      expect(compositions.map((composition) => composition.options.costMultiple)).toEqual([1, 2]);
+      const [base, doubled] = compositions as [Composition, Composition];
+      const { costMultiple: _base, ...baseOptions } = base.options;
+      const { costMultiple: _doubled, ...doubledOptions } = doubled.options;
+      expect(Object.keys(doubledOptions)).toEqual(Object.keys(baseOptions));
+      expect(doubledOptions.volTarget).toEqual(baseOptions.volTarget);
+      expect(doubledOptions.sleeves.map((sleeve) => sleeve.id)).toEqual(
+        baseOptions.sleeves.map((sleeve) => sleeve.id),
+      );
+      const slippage = (quote: { price: number }) => COST_PROBE.price - quote.price;
+      expect(slippage(base.crossing)).toBeGreaterThan(0);
+      expect(slippage(doubled.crossing)).toBeCloseTo(2 * slippage(base.crossing), 10);
+      expect(base.resting.price).toBe(COST_PROBE.price);
+      expect(base.resting.fee).toBeGreaterThan(0);
+      expect(doubled.resting.fee).toBeCloseTo(2 * base.resting.fee, 10);
       const { verdict } = report;
       expect(verdict.trial).toBe(1);
       expect(verdict.trialsCounted).toBe(1);
@@ -479,9 +519,19 @@ describe('runVolTargetTrialAgainst', () => {
       expect(pnl(verdict.scaled)).toBeGreaterThan(0);
       expect(pnl(verdict.scaled)).toBeLessThan(pnl(verdict.baseline));
       expect(report.dataSanity.seriesChecked).toBe(ARM2_SYMBOLS.length);
+      const { stressed } = report;
+      expect(stressed.trial).toBe(1);
+      expect(stressed.trialsCounted).toBe(1);
+      expect([stressed.from, stressed.to]).toEqual([verdict.from, verdict.to]);
+      expect(stressed.scaled.totalReturn).toBeLessThan(verdict.scaled.totalReturn);
+      expect(stressed.baseline.totalReturn).toBeLessThan(verdict.baseline.totalReturn);
+      expect(report.signFlipped).toBe(
+        verdict.checks.beatsBaselineOutOfSampleAfterHaircut !==
+          stressed.checks.beatsBaselineOutOfSampleAfterHaircut,
+      );
       const rerun = await run();
       expect(ledger.count()).toBe(1);
-      expect(rerun.verdict).toEqual(verdict);
+      expect(rerun).toEqual(report);
     } finally {
       db.close();
     }

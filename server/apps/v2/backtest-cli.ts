@@ -14,6 +14,7 @@ import {
   VOL_TARGET_TRIAL_SIZING,
   VOL_TARGET_TRIAL_START_CAPITAL_GBP,
   VOL_TARGET_TRIAL_TO,
+  type VolTargetTrialArms,
   volTargetTrialArms,
 } from './arm2-backtest.js';
 import {
@@ -419,6 +420,8 @@ export function runVolTargetIndexCandidate(
 
 export interface VolTargetTrialReport {
   readonly verdict: VolTargetVerdict;
+  readonly stressed: VolTargetVerdict;
+  readonly signFlipped: boolean;
   readonly dataSanity: DataSanityReport;
 }
 
@@ -432,16 +435,20 @@ const VOL_TARGET_TRIAL_WINDOW: VolTargetTrialWindow = {
   outOfSampleFrom: VOL_TARGET_TRIAL_OUT_OF_SAMPLE_FROM,
 };
 
-export async function runVolTargetTrialAgainst(
-  market: MarketData,
-  bars: BarsSource,
-  constituentsFor: (tradingDate: string) => readonly string[],
-  halfSpreadBps: (instrument: string) => number,
-  ledger: TrialLedger,
-  logger: Logger,
-  window: VolTargetTrialWindow = VOL_TARGET_TRIAL_WINDOW,
-): Promise<VolTargetTrialReport> {
-  const arms = volTargetTrialArms({ bars, constituents: constituentsFor });
+interface VolTargetTrialRun {
+  readonly arms: VolTargetTrialArms;
+  readonly market: MarketData;
+  readonly halfSpreadBps: (instrument: string) => number;
+  readonly ledger: TrialLedger;
+  readonly logger: Logger;
+  readonly window: VolTargetTrialWindow;
+}
+
+async function volTargetTrialPass(
+  run: VolTargetTrialRun,
+  costMultiple: number,
+): Promise<{ dates: readonly string[]; verdict: VolTargetVerdict }> {
+  const { arms, window, ledger } = run;
   const simulation = await simulateBacktest({
     candidate: VOL_TARGET_TRIAL_CANDIDATE_ID,
     trials: [arms.trial],
@@ -450,13 +457,14 @@ export async function runVolTargetTrialAgainst(
     to: window.to,
     startCapitalGbp: VOL_TARGET_TRIAL_START_CAPITAL_GBP,
     lossCapGbp: BACKTEST_LOSS_CAP_GBP,
-    market,
-    halfSpreadBps,
+    market: run.market,
+    halfSpreadBps: run.halfSpreadBps,
     ledger,
-    logger,
+    logger: run.logger,
     folds: VOL_TARGET_TRIAL_FOLDS,
     embargo: VOL_TARGET_TRIAL_EMBARGO,
     calendarReference: CALENDAR_REFERENCE,
+    costMultiple,
     volTarget: VOL_TARGET_TRIAL_SIZING,
   });
   const verdict = volTargetVerdict({
@@ -469,7 +477,32 @@ export async function runVolTargetTrialAgainst(
     folds: VOL_TARGET_TRIAL_FOLDS,
     embargo: VOL_TARGET_TRIAL_EMBARGO,
   });
-  return { verdict, dataSanity: dataSanity(bars, constituentsFor, simulation.dates) };
+  return { dates: simulation.dates, verdict };
+}
+
+// David 2026-10-08 (#1860): doc 67's 2x modelled-cost rerun runs as it does for candidates, on
+// the same trial hash; like theirs, a sign flip is flagged beside the verdict, not gated in it
+export async function runVolTargetTrialAgainst(
+  market: MarketData,
+  bars: BarsSource,
+  constituentsFor: (tradingDate: string) => readonly string[],
+  halfSpreadBps: (instrument: string) => number,
+  ledger: TrialLedger,
+  logger: Logger,
+  window: VolTargetTrialWindow = VOL_TARGET_TRIAL_WINDOW,
+): Promise<VolTargetTrialReport> {
+  const arms = volTargetTrialArms({ bars, constituents: constituentsFor });
+  const run = { arms, market, halfSpreadBps, ledger, logger, window };
+  const base = await volTargetTrialPass(run, 1);
+  const stressed = await volTargetTrialPass(run, COST_STRESS_MULTIPLE);
+  return {
+    verdict: base.verdict,
+    stressed: stressed.verdict,
+    signFlipped:
+      base.verdict.checks.beatsBaselineOutOfSampleAfterHaircut !==
+      stressed.verdict.checks.beatsBaselineOutOfSampleAfterHaircut,
+    dataSanity: dataSanity(bars, constituentsFor, base.dates),
+  };
 }
 
 export function runVolTargetTrial(

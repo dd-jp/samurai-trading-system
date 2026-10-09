@@ -602,6 +602,8 @@ Choices the rulings do not cover, made in the build and awaiting David's confirm
 - the path-noise comparison uses the fixed 0.25 rather than recomputing it;
 - no cost-stress rerun.
 
+*Answered 2026-10-08 (rulings below): every choice above is accepted as built, and the 2× cost rerun is added.*
+
 Limits of the backtest:
 
 - the macro calendar covers only 2026–2027, so every earlier day is a fail-closed macro day at half size, in both arms;
@@ -654,6 +656,27 @@ Build choices David ruled on the same day (2026-10-08, #2024):
 5. **Accepted: a dry run reads no feed and keeps the daily-bar simulation.**
 
 *Built 2026-10-08 (#2024):* ruling 2's floor in `server/apps/v2/signals/processor.ts`, after the stale-close check. The check of ruling 4 is not built.
+
+## Rulings of 2026-10-08 — vol-target trial defaults and 2× cost, data sanity defaults, data spend (#1860, #2074, #2025)
+
+David ruled on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/1860#issuecomment-6069853785), PR [#2074](https://github.com/dd-jp/samurai-trading-system/pull/2074#issuecomment-6069854171) and [#2025](https://github.com/dd-jp/samurai-trading-system/issues/2025#issuecomment-6069861198) on 2026-10-08.
+
+1. **The vol-target trial's build defaults are accepted as built (#1860).** These are the choices listed under the 2026-10-07 rulings above: the start on 2016-01-04, the £10,000 start capital, PBO by CSCV over the pair {baseline, trial} in 16 folds with a 10-day embargo, DSR and the drawdown check over the full window, a year inside the cap when its loss is at most the cap times 30%, and the path noise fixed at 0.25.
+2. **The trial runs doc 67's 2× modelled-cost rerun, as candidates do (#1860).** The rerun uses the same trial hash, so it is not a new counted trial.
+3. **The one-bar-delay canary does not bind the trial (#1860).** The look-ahead canary applies to candidates only, and this is a sizing trial on arm 2's own entries.
+4. **Both data-sanity defaults are accepted as built (#2074).** A 1.35× adjusted close-to-close jump flags a suspect bar, which David's ruling says is excluded. For mean reversion the universe checked is the union of constituents across the window, which keeps the test survivorship-safe.
+5. **Data spend does not count against the loss cap (#2025).** The EODHD feed picked on 2026-10-07 (with Alpaca's corporate actions as the US cross-check) costs about £180 a year. The £1,500 cap stays a net trading loss, marked to market. Data spend and LLM spend are separate operating budgets: tracked and reported, never deducted from the cap. Data spend also sits outside the ~$30 a month LLM cap.
+
+*Built 2026-10-08 (#1860), ruling 2* (`server/apps/v2/backtest-cli.ts`). Build notes (not rulings):
+
+- `npm run v2:backtest -- vol-target-sizing` now runs the trial twice: once at 1× modelled cost and once at 2×. The report carries `verdict` (1×), `stressed` (2×) and `signFlipped`. Both passes use `simulateBacktest`'s existing `costMultiple`, as the candidate runners do. It scales the spread, impact and fee legs together, in both arms, and stays out of the trial hash, so the rerun resolves to the same trial and the ledger count does not move. The backtest has no CFD route, so no CFD financing or borrow accrues. Saxo's 0.12% a year custody fee is a separate accrual and stays at 1×, as noted under candidate 1. Arm 2 trades US names at Alpaca in the backtest, so it is not charged.
+- `signFlipped` is true when the 2× pass flips `beatsBaselineOutOfSampleAfterHaircut`, the trial's counterpart of the candidates' `beatsBenchmarkAfterHaircut`. As for candidates, it is reported beside the verdict and does not enter `pass`. Doc 67's row says a flip flags the sleeve. Whether a flag fails the trial is not stated in the ruling, so it is left to David (below).
+- The code comments that called these defaults "awaiting David" now cite this ruling.
+
+Awaiting David:
+
+- **Does a 2× sign flip fail the trial?** "As candidates do" is built as a reported flag, not a gated check, which matches the candidate runners. Candidate 1's run note above, though, counts the flip as one of the gate's checks. Either reading is a one-line change.
+- **Ruling 4's "excluded".** The data-sanity block only reports a suspect bar; it does not drop it from the backtest. The ingest hygiene (`server/providers/bar-store/bar-hygiene.ts`) is a separate path. If David means the backtest should drop flagged bars, that is a build, and it changes candidate verdicts.
 
 ## Rulings of 2026-10-09 — a missing quote fails closed, the veto runs once (#2024)
 
