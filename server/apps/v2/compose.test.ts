@@ -277,8 +277,10 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
   });
 
   it('approves a CFD entry through the declared gates and Saxo tariff models (#1916)', () => {
-    const composed = composeCycle(options({ market: richMarket }));
-    expect(request(composed).order).toBeDefined();
+    const result = request(composeCycle(options({ market: richMarket })));
+    expect(result.refusal).toBeUndefined();
+    expect(result.size).toBeGreaterThan(0);
+    expect(result.order).toBeDefined();
   });
 
   it('refuses a CFD entry with whatever the injected CFD gate names, even with a model', () => {
