@@ -16,7 +16,8 @@ export const RANDOM_CANARY_RUNS = 200;
 export const RANDOM_CANARY_FIRST_SEED = 1;
 // Awaiting David (#1747): every candidate's own ATR window is 20 bars
 export const RANDOM_ENTRY_ATR_WINDOW = 20;
-// Awaiting David (#1747): the redraw bound per test fold for the 2026-10-08 re-entry ruling
+// Awaiting David (#1747): the redraw bound for the 2026-10-08 re-entry ruling, charged to each
+// matched trade's own test fold even when the redraw spills into a later one
 export const RANDOM_REENTRY_MAX_DRAWS_PER_FOLD = 1_000;
 
 export interface Trade {
@@ -256,6 +257,7 @@ function overlaps(a: Slot, b: Slot): boolean {
 
 export interface ScheduleInput {
   readonly matched: readonly MatchedTrade[];
+  readonly folds: readonly FoldRange[];
   readonly dates: readonly string[];
   readonly market: MarketData;
   readonly universe: (trial: number, tradingDate: string) => readonly string[];
@@ -318,7 +320,7 @@ function slotsFor(
   from: number,
 ): Slot[] {
   const slots: Slot[] = [];
-  for (let entry = from; entry < trade.range.end; entry += 1) {
+  for (let entry = Math.max(from, trade.range.start); entry < trade.range.end; entry += 1) {
     const exit = exitOf(entry, trade.hold, input.dates.length);
     for (const instrument of readable(trade.trial, entry)) {
       const slot = { instrument, entry, exit };
@@ -343,22 +345,46 @@ export interface RandomDraws {
   release(trade: ScheduledTrade): void;
 }
 
+function spillRanges(input: ScheduleInput, home: FoldRange): FoldRange[] {
+  return [home, ...input.folds.filter((range) => range.fold > home.fold)];
+}
+
+interface DrawState {
+  readonly input: ScheduleInput;
+  readonly readable: Readable;
+  readonly random: () => number;
+  readonly occupied: Occupied;
+}
+
+function placeDraw(
+  { input, readable, random, occupied }: DrawState,
+  unit: number,
+  hold: number | undefined,
+  from: number,
+): ScheduledTrade | undefined {
+  const home = input.matched[unit] as MatchedTrade;
+  for (const range of spillRanges(input, home.range)) {
+    const trade = { ...home, range, hold };
+    const slot = draw(random, slotsFor(input, readable, trade, occupied, from));
+    if (slot === undefined) continue;
+    occupy(occupied, slot);
+    return { ...slot, venue: home.venue, side: home.side, unit, hold };
+  }
+  return undefined;
+}
+
 // Awaiting David (#1747): each matched trade is drawn uniformly over the free (session,
-// instrument) slots of its own test fold, from its trial's universe; a trade with no free slot
-// is dropped and leaves its run unmatched
+// instrument) slots of its own test fold, from its trial's universe. David, 2026-10-09 on #1747:
+// a draw with no free slot left in its fold spills into the next fold, and so on to the last;
+// only a draw that finds none there leaves its run unmatched
 export function randomScheduler(input: ScheduleInput): (seed: number) => RandomDraws {
   const readable = readableBy(input);
   return (seed) => {
     const random = seededRandom(seed);
     const occupied: Occupied = new Map();
     const draws = new Map<number, number>();
-    const place = (unit: number, hold: number | undefined, from: number) => {
-      const trade = { ...(input.matched[unit] as MatchedTrade), hold };
-      const slot = draw(random, slotsFor(input, readable, trade, occupied, from));
-      if (slot === undefined) return undefined;
-      occupy(occupied, slot);
-      return { ...slot, venue: trade.venue, side: trade.side, unit, hold };
-    };
+    const place = (unit: number, hold: number | undefined, from: number) =>
+      placeDraw({ input, readable, random, occupied }, unit, hold, from);
     const schedule = input.matched.flatMap(
       (trade, unit) => place(unit, trade.hold, trade.range.start) ?? [],
     );
@@ -452,10 +478,10 @@ function unservedHold(attempt: Attempt, held: number | undefined): number | unde
   return hold - held;
 }
 
-// David, 2026-10-08 on #1747: after an early exit or a refused or zero-size entry the run draws a
-// new slot in the same fold for the hold still unserved, until the walk-forward path's trades
-// and held sessions are matched. Awaiting David (#1747): a run that cannot place a draw stays
-// unmatched, and any unmatched run fails the candidate's random canary
+// David, 2026-10-08 and 2026-10-09 on #1747: after an early exit or a refused or zero-size entry
+// the run draws a new slot for the hold still unserved, in the same fold or spilling into later
+// ones, until the walk-forward path's trades and held sessions are matched; a run still
+// unmatched at the window's end fails the candidate's random canary
 class RandomRunState {
   readonly #input: RandomSleeveInput;
   readonly #pending = new Map<number, ScheduledTrade[]>();

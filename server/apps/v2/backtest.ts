@@ -461,6 +461,7 @@ function randomPlan(input: BacktestInput, run: CandidateRun): RandomPlan {
   return {
     schedule: {
       matched: matchedTrades(path, run.trades),
+      folds: path.testRanges,
       dates: run.dates,
       market: input.market,
       universe,

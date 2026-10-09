@@ -650,8 +650,21 @@ David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/17
 Awaiting David (defaults picked as the most conservative reading):
 
 - **The draw bound.** At most `RANDOM_REENTRY_MAX_DRAWS_PER_FOLD` = 1,000 redraws per test fold in each run. A redraw past the bound, or one with no free slot left in its fold, leaves that matched trade unserved and its run unmatched.
-- **How the verdict treats an unmatched run.** Any unmatched run fails the candidate's random check: `randomEntries.unmatchedRuns` must be 0 for `beatsRandomEntries`. On the real bars above every run is unmatched, so under this default no candidate can pass. The obvious alternatives are to let a redraw spill past its fold's end, to accept a tolerance, or to drop unmatched runs from the band.
+- **How the verdict treats an unmatched run.** Any unmatched run fails the candidate's random check: `randomEntries.unmatchedRuns` must be 0 for `beatsRandomEntries`. On the real bars above every run is unmatched, so under this default no candidate can pass. The obvious alternatives are to let a redraw spill past its fold's end, to accept a tolerance, or to drop unmatched runs from the band. *Answered 2026-10-09 (ruling below): spill into the next fold; a run still unmatched at the window's end fails the candidate.*
 - **What "matched" counts.** Held sessions match exactly when every redraw lands. The trade count is matched per walk-forward trade, each served in full by one or more positions, not as a count of positions.
+
+## Rulings of 2026-10-09 — random canary spill (#1747)
+
+David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/1747) on 2026-10-09: spill into the next fold.
+
+1. **A draw spills into the next fold.** A random draw, first or redraw, that finds no free slot left in its own test fold moves to the next test fold, and on to later ones, so the run's exposure matches the walk-forward path's in full. A run still unmatched at the window's end, after the last test fold, fails the candidate's random check (`randomEntries.unmatchedRuns` must be 0 for `beatsRandomEntries`). This replaces the 2026-10-08 default that a draw with no free slot in its own fold left the run unmatched.
+
+*Built 2026-10-09* (`server/apps/v2/random-canary.ts`). Build notes (not rulings):
+
+- **How the spill works.** The search runs the trade's own fold from the current session, then each later test fold in order from its first session, and takes a uniform draw over the first fold that has a free slot. Instruments still come from the universe of the trial that made the trade, so venue and side stay consistent. The embargo gaps between folds are skipped, and a draw never moves back into an earlier fold. Each seed's draws stay deterministic.
+- **The draw bound.** `RANDOM_REENTRY_MAX_DRAWS_PER_FOLD` = 1,000 is kept, charged to each matched trade's own fold even when the redraw lands in a later one. It did not bind on the real bars; its value still awaits David.
+- **On cross-asset trend's real bars (candidate 1), seeds 1–3** made 750, 842 and 803 redraws, opened 673, 697 and 704 positions against the path's 548 trades, and held 9,482, 9,627 and 10,185 sessions against 11,096 (before the spill: 82–89 trades unserved and 6,298–7,029 sessions). Each run still left 5, 8 and 4 of its 548 matched trades unserved at the window's end, so all three runs are unmatched and candidate 1 fails the random check. Without that rule its edge (−0.88) would sit just above the 3-run band (−0.90). It fails every other check as well, its walk-forward Sharpe included. The run took 5 minutes.
+- **Where the held sessions still fall short.** In seed 1, the 5 unserved trades account for 285 of the 1,614 missing sessions. Seed 1 also placed 10 draws in the last fold whose holds (2,077 sessions in all) run past the window's last session. Such a draw is held open to the end, the row's `heldSessions` counts an open position as 0, and the draw is not reported as unmatched. The gap was not broken down further. Whether such a draw counts as matched, and whether a finite-hold draw may take a slot its hold cannot finish in, is open with David.
 
 ## Still open
 

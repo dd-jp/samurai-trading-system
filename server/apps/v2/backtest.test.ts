@@ -388,16 +388,40 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       .map((row) => JSON.parse(row.result));
     expect(rows).toHaveLength(3);
     expect(rows.map((row) => [row.seed, row.redraws, row.unmatched])).toEqual([
-      [1, 8, 2],
+      [1, 13, 0],
       [2, 9, 0],
       [3, 11, 0],
     ]);
-    for (const row of rows.slice(1)) {
-      expect(row.traded).toBe(row.matched + row.redraws);
-      expect(row.heldSessions).toBe(row.matchedSessions);
-    }
-    expect(rows[0].heldSessions).toBeLessThan(rows[0].matchedSessions);
-    expect(verdict.randomEntries?.unmatchedRuns).toBe(1);
+    expect(rows.map((row) => row.heldSessions)).toEqual([93, 96, 96]);
+    expect(rows.every((row) => row.matchedSessions === 96)).toBe(true);
+    expect(verdict.randomEntries?.unmatchedRuns).toBe(0);
+  });
+
+  it('fails the random check when a run is still unmatched at the window end', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const log = new CanaryLog(db, clock);
+    const crashing =
+      (lookback: number): SleeveFactory =>
+      (market) => ({
+        ...trendSleeve(`trend-${lookback}`, 'UP', lookback)(market),
+        universe: () => ({ instruments: ['CRASH'], refusals: [] }),
+      });
+    const trials = [3, 5].map((lookback) => ({ config: { lookback }, sleeve: crashing(lookback) }));
+    const { verdict } = await runBacktest(input({ trials, randomCanary: { log, runs: 2 } }));
+    const rows = log
+      .list()
+      .filter((row) => row.kind === 'random')
+      .map((row) => JSON.parse(row.result));
+    expect(rows.map((row) => [row.seed, row.unmatched])).toEqual([
+      [1, 6],
+      [2, 9],
+    ]);
+    for (const row of rows) expect(row.heldSessions).toBeLessThan(row.matchedSessions);
+    const random = verdict.randomEntries as NonNullable<typeof verdict.randomEntries>;
+    expect(random.unmatchedRuns).toBe(2);
+    expect(random.edge).toBeGreaterThan(random.band);
+    expect(random.beats).toBe(false);
     expect(verdict.checks.beatsRandomEntries).toBe(false);
   });
 

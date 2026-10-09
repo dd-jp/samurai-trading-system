@@ -212,7 +212,7 @@ function quantile(values: readonly number[], q: number): number {
 
 // David, 2026-10-08 on #1747 (rulings 1 and 2): the edge is walk-forward Sharpe minus the
 // benchmark's over the same days, and the candidate must sit above the random runs' band;
-// awaiting David (#1747): any run that could not match the path's trades fails the check
+// David, 2026-10-09 on #1747: a run still unmatched at the window's end fails the check
 function randomEntries(input: VerdictInput, forward: WalkForward): RandomEntries | null {
   if (input.random === undefined) return null;
   const edges = input.random.map(

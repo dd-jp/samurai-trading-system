@@ -3,7 +3,7 @@ import type { SleeveSpec } from '../../../contracts/index.js';
 import type { BarSeries, DailyBar } from '../../shared/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
-import type { WalkForwardPath } from './evidence/index.js';
+import type { FoldRange, WalkForwardPath } from './evidence/index.js';
 import {
   bookTrades,
   type EntryOutcome,
@@ -91,8 +91,12 @@ function matched(overrides: Partial<MatchedTrade> = {}): MatchedTrade {
   };
 }
 
-function schedule(trades: readonly MatchedTrade[], universe = ['A', 'B', 'LATE']): ScheduleInput {
-  return { matched: trades, dates: DATES, market, universe: () => universe };
+function schedule(
+  trades: readonly MatchedTrade[],
+  universe = ['A', 'B', 'LATE'],
+  folds: readonly FoldRange[] = [],
+): ScheduleInput {
+  return { matched: trades, folds, dates: DATES, market, universe: () => universe };
 }
 
 describe('constants', () => {
@@ -250,6 +254,7 @@ describe('randomScheduler', () => {
     const seen: [number, string][] = [];
     const input: ScheduleInput = {
       matched: [matched({ trial: 1 })],
+      folds: [],
       dates: DATES,
       market,
       universe: (trial, date) => {
@@ -298,6 +303,66 @@ describe('randomScheduler redraws', () => {
     expect(placed.every((row) => row !== undefined)).toBe(true);
     expect(draws.redraw(0, 1, 30)).toBeUndefined();
     expect(draws.redraw(1, 1, 50)).toBeDefined();
+  });
+});
+
+describe('randomScheduler spills', () => {
+  const tight = { fold: 1, start: 30, end: 31 };
+  const empty = { fold: 2, start: 31, end: 31 };
+  const next = { fold: 3, start: 40, end: 45 };
+  const earlier = { fold: 0, start: 20, end: 30 };
+  const folds = [earlier, tight, empty, next];
+
+  it('places a trade with no free slot left in its fold in the next fold that has one', () => {
+    const trades = [matched({ range: tight, hold: 2 }), matched({ range: tight, hold: 2 })];
+    const draws = randomScheduler(schedule(trades, ['A'], folds))(7);
+    expect(draws.dropped).toBe(0);
+    const [home, spilled] = draws.schedule as [ScheduledTrade, ScheduledTrade];
+    expect(home).toMatchObject({ unit: 0, instrument: 'A', entry: 30, exit: 32 });
+    expect(spilled).toMatchObject({
+      unit: 1,
+      instrument: 'A',
+      venue: 'saxo',
+      side: 'buy',
+      hold: 2,
+    });
+    expect(spilled.entry).toBeGreaterThanOrEqual(next.start);
+    expect(spilled.entry).toBeLessThan(next.end);
+    expect(noOverlap(draws.schedule)).toBe(true);
+  });
+
+  it('spills a redraw past its fold from the given session, never back into an earlier fold', () => {
+    const draws = randomScheduler(schedule([matched({ range: tight, hold: 1 })], ['A'], folds))(3);
+    const row = draws.redraw(0, 1, 42) as ScheduledTrade;
+    expect(row.entry).toBeGreaterThanOrEqual(42);
+    expect(row.entry).toBeLessThan(next.end);
+    expect(draws.redraw(0, 1, next.end)).toBeUndefined();
+  });
+
+  it('leaves a trade unmatched only when no fold to the end of the window has a free slot', () => {
+    const last = { fold: 3, start: 40, end: 41 };
+    const trades = Array.from({ length: 3 }, () => matched({ range: tight, hold: 20 }));
+    const draws = randomScheduler(schedule(trades, ['A'], [tight, last]))(5);
+    expect(draws.schedule.map((row) => row.entry)).toEqual([30]);
+    expect(draws.dropped).toBe(2);
+  });
+
+  it('spills only into folds after its own, whatever else the fold list holds', () => {
+    const trades = Array.from({ length: 6 }, () => matched({ range: tight, hold: 1 }));
+    const rows = (list: readonly FoldRange[]) =>
+      randomScheduler(schedule(trades, ['A', 'B'], list))(13).schedule;
+    expect(rows(folds)).toEqual(rows([empty, next]));
+  });
+
+  it('repeats a seed exactly with spills and moves with another', () => {
+    const trades = Array.from({ length: 6 }, () => matched({ range: tight, hold: 1 }));
+    const scheduler = randomScheduler(schedule(trades, ['A', 'B'], folds));
+    const run = (seed: number) => {
+      const draws = scheduler(seed);
+      return [...draws.schedule, draws.redraw(0, 1, 40), draws.redraw(1, 1, 40)];
+    };
+    expect(run(11)).toEqual(run(11));
+    expect(run(11)).not.toEqual(run(12));
   });
 });
 
