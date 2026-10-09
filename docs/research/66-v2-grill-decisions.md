@@ -649,7 +649,7 @@ David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/17
 
 Awaiting David (defaults picked as the most conservative reading):
 
-- **The draw bound.** At most `RANDOM_REENTRY_MAX_DRAWS_PER_FOLD` = 1,000 redraws per test fold in each run. A redraw past the bound, or one with no free slot left in its fold, leaves that matched trade unserved and its run unmatched.
+- **The draw bound.** At most `RANDOM_REENTRY_MAX_DRAWS_PER_FOLD` = 1,000 redraws per test fold in each run. A redraw past the bound, or one with no free slot left in its fold, leaves that matched trade unserved and its run unmatched. *Ruled 2026-10-09 (ruling 7 of that day): the bound stays at 1,000.*
 - **How the verdict treats an unmatched run.** Any unmatched run fails the candidate's random check: `randomEntries.unmatchedRuns` must be 0 for `beatsRandomEntries`. On the real bars above every run is unmatched, so under this default no candidate can pass. The obvious alternatives are to let a redraw spill past its fold's end, to accept a tolerance, or to drop unmatched runs from the band. *Answered 2026-10-09 (ruling below): spill into the next fold; a run still unmatched at the window's end fails the candidate.*
 - **What "matched" counts.** Held sessions match exactly when every redraw lands. The trade count is matched per walk-forward trade, each served in full by one or more positions, not as a count of positions.
 
@@ -677,7 +677,7 @@ Build choices David ruled on the same day (2026-10-08, #2024):
 
 ## Rulings of 2026-10-09 — random canary spill (#1747)
 
-David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/1747) on 2026-10-09: spill into the next fold. Later the same day he answered the two points the spill run left open (rulings 2 and 3), then two points from the PR review (rulings 4 and 5), then how a run over the tolerance counts (ruling 6).
+David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/1747) on 2026-10-09: spill into the next fold. Later the same day he answered the two points the spill run left open (rulings 2 and 3), then two points from the PR review (rulings 4 and 5), then how a run over the tolerance counts (ruling 6), and last kept the draw bound (ruling 7).
 
 1. **A draw spills into the next fold.** A random draw, first or redraw, that finds no free slot left in its own test fold moves to the next test fold, and on to later ones, so the run's exposure matches the walk-forward path's in full. A run still unmatched at the window's end, after the last test fold, fails the candidate's random check (`randomEntries.unmatchedRuns` must be 0 for `beatsRandomEntries`). This replaces the 2026-10-08 default that a draw with no free slot in its own fold left the run unmatched. *Amended by ruling 6.*
 2. **A draw cut at the window's end counts as matched.** A draw whose hold runs past the window's last session counts as matched. Its hold is cut at the window's end, the same way the candidate's own trades still open at the end are marked there, and its held sessions count up to that last session, not as 0.
@@ -685,7 +685,7 @@ David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/17
 4. **A draw needs a session left to hold.** A draw may not take a slot that leaves no session to hold, such as a draw decided on the window's last session. Such a draw spills to a later fold, and if no slot is left it counts toward the run's unserved trades for the 2% tolerance. This amends ruling 2: a draw cut at the end must still hold at least one session.
 5. **An open path trade's copy holds the same length.** A walk-forward path trade still open at the window's end has a held length of the last session minus its entry. Its random copy holds exactly that many sessions, cut at the end the same way, and no longer runs open-ended to the end.
 6. **A run over the tolerance leaves the band.** A run with more than 2% of the path's trades unserved at the window's end is left out of the random band instead of failing the candidate on its own. The 95th percentile is computed from the runs that remain. The candidate fails its random check only if more than 5% of the runs are left out (`RANDOM_EXCLUDED_RUNS_MAX_SHARE` = 0.05), so exactly 5% passes; if every run is left out, the check fails. This amends rulings 1 and 3: one unmatched run no longer fails the candidate by itself.
-7. **The draw bound stands.** `RANDOM_REENTRY_MAX_DRAWS_PER_FOLD` stays at 1,000 redraws per test fold in each run. A matched trade still unplaced when its fold's bound is spent counts toward the run's unserved trades for the 2% tolerance.
+7. **The draw bound stands.** `RANDOM_REENTRY_MAX_DRAWS_PER_FOLD` stays at 1,000 redraws per test fold in each run. A matched trade whose redraw is refused because its fold's bound is spent counts toward the run's unserved trades for the 2% tolerance.
 
 *Built 2026-10-09* (`server/apps/v2/random-canary.ts`). Build notes (not rulings):
 
