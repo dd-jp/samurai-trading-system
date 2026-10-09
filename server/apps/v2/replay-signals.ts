@@ -101,7 +101,7 @@ const QUOTE_SQL = `
 export function journalledQuotes(
   journal: StoreHandle,
   tradingDate: string,
-  event: SettledSignal,
+  settled: SettledSignal,
   since: string,
 ): LatestQuoteSource {
   return {
@@ -109,18 +109,18 @@ export function journalledQuotes(
       const row = journal.prepare(QUOTE_SQL).get({
         sleeve: SIGNALS_SLEEVE_ID,
         date: tradingDate,
-        signal: event.signal_id,
+        signal: settled.signal_id,
         since,
-        until: event.recorded_at,
+        until: settled.recorded_at,
       }) as { quote: string } | undefined;
       if (row !== undefined) {
         const { ask, bid, quoted_at } = JSON.parse(row.quote) as LatestQuote;
         return Promise.resolve({ ask, bid, quoted_at });
       }
       const detail =
-        event.status === 'failed'
-          ? event.detail
-          : `replay: no journalled ${symbol} quote for signal ${event.signal_id} by ${event.recorded_at}`;
+        settled.status === 'failed'
+          ? settled.detail
+          : `replay: no journalled ${symbol} quote for signal ${settled.signal_id} by ${settled.recorded_at}`;
       return Promise.reject(new Error(detail));
     },
   };
