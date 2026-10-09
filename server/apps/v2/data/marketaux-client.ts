@@ -1,6 +1,7 @@
+import { fetchTokenUrl } from './token-url-fetch.js';
+
 export const MARKETAUX_NEWS_URL = 'https://api.marketaux.com/v1/news/all';
 export const MARKETAUX_PAGE_LIMIT = 3;
-const REQUEST_TIMEOUT_MS = 10_000;
 
 export interface MarketauxArticle {
   readonly title: string;
@@ -87,18 +88,9 @@ export class MarketauxClient implements MarketauxFetch {
   ) {}
 
   async fetchArticles(tidm: string, start: Date, end: Date): Promise<MarketauxResult> {
-    const response = await this.#get(requestUrl(this.apiKey, tidm, start, end));
+    const response = await fetchTokenUrl(this.fetchImpl, requestUrl(this.apiKey, tidm, start, end));
+    if (typeof response === 'string') throw new MarketauxRequestError(response);
     if (!response.ok) throw new MarketauxRequestError(`http_${response.status}`);
     return parseMarketauxBody(await response.json().catch(() => undefined));
-  }
-
-  // the caught error is discarded on purpose: fetch failures can embed the URL, and the URL carries api_token
-  async #get(url: URL): Promise<Response> {
-    try {
-      return await this.fetchImpl(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-    } catch (error) {
-      const timedOut = error instanceof Error && error.name === 'TimeoutError';
-      throw new MarketauxRequestError(timedOut ? 'timeout' : 'network');
-    }
   }
 }
