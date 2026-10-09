@@ -12,6 +12,11 @@ export const SIGNAL_LIST_MAX = 200;
 
 export type SignalVetoVerdict = 'pass' | 'veto';
 
+export interface SignalVetoRetry {
+  readonly claimed: boolean;
+  readonly veto: SignalVeto | undefined;
+}
+
 interface SignalRow {
   signal_id: string;
   symbol: string;
@@ -108,18 +113,46 @@ export class SignalStore {
   }
 
   recordVeto(signalId: string, veto: SignalVeto): void {
-    this.db
-      .prepare(
-        `INSERT INTO v2_signal_vetoes (signal_id, kind, reason, recorded_at)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run(signalId, veto.kind, veto.reason, toStoredTimestamp(this.clock.now()));
+    this.#insertVeto('v2_signal_vetoes', signalId, veto);
   }
 
   vetoFor(signalId: string): SignalVeto | undefined {
     return this.db
       .prepare('SELECT kind, reason FROM v2_signal_vetoes WHERE signal_id = ?')
       .get(signalId) as SignalVeto | undefined;
+  }
+
+  claimVetoRetry(signalId: string): void {
+    this.db
+      .prepare('INSERT INTO v2_signal_veto_retries (signal_id, claimed_at) VALUES (?, ?)')
+      .run(signalId, toStoredTimestamp(this.clock.now()));
+  }
+
+  recordRetryVeto(signalId: string, veto: SignalVeto): void {
+    this.#insertVeto('v2_signal_veto_retry_verdicts', signalId, veto);
+  }
+
+  vetoRetry(signalId: string): SignalVetoRetry {
+    const row = this.db
+      .prepare(
+        `SELECT v.kind, v.reason FROM v2_signal_veto_retries r
+         LEFT JOIN v2_signal_veto_retry_verdicts v ON v.signal_id = r.signal_id
+         WHERE r.signal_id = ?`,
+      )
+      .get(signalId) as { kind: SignalVeto['kind'] | null; reason: string | null } | undefined;
+    if (row === undefined) return { claimed: false, veto: undefined };
+    if (row.kind === null) return { claimed: true, veto: undefined };
+    return { claimed: true, veto: { kind: row.kind, reason: row.reason as string } };
+  }
+
+  #insertVeto(
+    table: 'v2_signal_vetoes' | 'v2_signal_veto_retry_verdicts',
+    signalId: string,
+    veto: SignalVeto,
+  ): void {
+    this.db
+      .prepare(`INSERT INTO ${table} (signal_id, kind, reason, recorded_at) VALUES (?, ?, ?, ?)`)
+      .run(signalId, veto.kind, veto.reason, toStoredTimestamp(this.clock.now()));
   }
 
   #idForDigest(key: string): string | undefined {

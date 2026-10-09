@@ -235,6 +235,45 @@ describe('SignalStore veto journal (#2024)', () => {
   });
 });
 
+describe('SignalStore veto retry journal (David 2026-10-09, #2024)', () => {
+  it('reads unclaimed, then claimed without a verdict, then the verdict, refusing a second of each', () => {
+    const { signal } = store.record(payload({}), RECEIVED, QUEUED);
+    const id = signal.signal_id;
+    store.recordVeto(id, { kind: 'unavailable', reason: 'llm_call_failed: timeout' });
+    expect(store.vetoRetry(id)).toEqual({ claimed: false, veto: undefined });
+
+    store.claimVetoRetry(id);
+    expect(store.vetoRetry(id)).toEqual({ claimed: true, veto: undefined });
+    expect(() => store.claimVetoRetry(id)).toThrow(/append-only/);
+
+    now = new Date('2026-09-30T12:00:31.000Z');
+    store.recordRetryVeto(id, { kind: 'pass', reason: 'fine' });
+    expect(store.vetoRetry(id)).toEqual({ claimed: true, veto: { kind: 'pass', reason: 'fine' } });
+    expect(db.prepare('SELECT claimed_at FROM v2_signal_veto_retries').get()).toEqual({
+      claimed_at: '2026-09-30T12:00:01.000Z',
+    });
+    expect(db.prepare('SELECT recorded_at FROM v2_signal_veto_retry_verdicts').get()).toEqual({
+      recorded_at: '2026-09-30T12:00:31.000Z',
+    });
+    expect(() => store.recordRetryVeto(id, { kind: 'veto', reason: 'rewritten' })).toThrow(
+      /append-only/,
+    );
+    for (const table of ['v2_signal_veto_retries', 'v2_signal_veto_retry_verdicts']) {
+      expect(() => db.prepare(`UPDATE ${table} SET signal_id = 'x'`).run()).toThrow(/append-only/);
+      expect(() => db.prepare(`DELETE FROM ${table}`).run()).toThrow(/append-only/);
+    }
+  });
+
+  it('refuses a retry verdict without a claim, and a claim without a first verdict', () => {
+    const { signal } = store.record(payload({}), RECEIVED, QUEUED);
+    expect(() => store.claimVetoRetry(signal.signal_id)).toThrow(/FOREIGN KEY/);
+    store.recordVeto(signal.signal_id, { kind: 'unavailable', reason: 'llm_call_failed: x' });
+    expect(() => store.recordRetryVeto(signal.signal_id, { kind: 'pass', reason: 'y' })).toThrow(
+      /FOREIGN KEY/,
+    );
+  });
+});
+
 describe('v2_signals append-only', () => {
   it('refuses updates and deletes on both tables', () => {
     store.record(payload({}), RECEIVED, QUEUED);

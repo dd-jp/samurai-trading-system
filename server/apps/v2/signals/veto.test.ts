@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { V2Bar } from '../../../../contracts/index.js';
 import { MockLlmClient, type SpendCap, UNCAPPED_SPEND } from '../../../shared/debate/index.js';
 import {
+  callFailed,
   parseVetoReply,
   SIGNAL_VETO_BARS,
   SIGNAL_VETO_PROMPT,
@@ -138,5 +139,19 @@ describe('signalVeto', () => {
       kind: 'unavailable',
       reason: 'llm_call_failed: timeout',
     });
+  });
+});
+
+describe('callFailed (David 2026-10-09, #2024)', () => {
+  it('is true only for an unavailable verdict from a failed call', () => {
+    expect(callFailed({ kind: 'unavailable', reason: 'llm_call_failed: timeout' })).toBe(true);
+    expect(callFailed({ kind: 'unavailable', reason: 'llm_spend_cap:budget' })).toBe(false);
+    expect(callFailed({ kind: 'veto', reason: 'llm_call_failed: quoted by the model' })).toBe(
+      false,
+    );
+    expect(callFailed({ kind: 'pass', reason: 'llm_call_failed: quoted by the model' })).toBe(
+      false,
+    );
+    expect(callFailed({ kind: 'unavailable', reason: 'x llm_call_failed: later' })).toBe(false);
   });
 });

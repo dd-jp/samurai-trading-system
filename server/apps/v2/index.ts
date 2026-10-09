@@ -156,7 +156,14 @@ export interface V2Root {
 
 export type SignalProcessorStore = Pick<
   SignalStore,
-  'due' | 'appendEvent' | 'vetoVerdicts' | 'recordVeto' | 'vetoFor'
+  | 'due'
+  | 'appendEvent'
+  | 'vetoVerdicts'
+  | 'recordVeto'
+  | 'vetoFor'
+  | 'claimVetoRetry'
+  | 'recordRetryVeto'
+  | 'vetoRetry'
 >;
 
 export type SignalPass =

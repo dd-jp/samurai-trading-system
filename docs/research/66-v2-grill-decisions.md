@@ -665,9 +665,17 @@ David answered the review of PR #2092 (finding F1), recorded on [#2024](https://
 *Built 2026-10-09 (#2024).* Build notes (not rulings):
 
 - The verdict is journalled in a new append-only table, `v2_signal_vetoes` (migration 0099), keyed by the signal id. It holds the kind and the reason, and is written right after the veto returns and before the quote read, so a pass that fails on the quote, or a crash after the veto, keeps the verdict. A retry reads it and makes no LLM call; a vetoed signal stays vetoed.
-- The cached verdict includes `unavailable`. A veto that could not run on the first pass (spend cap, call failure) is not retried, so the primary stays skipped for that signal. This is the literal reading of "runs once" and is recorded in the spec's known limits.
+- The cached verdict includes `unavailable`. A veto that could not run on the first pass (spend cap, call failure) is not retried, so the primary stays skipped for that signal. This is the literal reading of "runs once" and is recorded in the spec's known limits. *Superseded for call failures by ruling 3 below.*
 - A signal entered after retries journals the same decisions as one entered on its first pass, apart from its own signal id; a test holds this.
 - `npm run v2:replay` replays the debate and arm 2 decisions only; it does not re-run the signals sleeve. The journalled verdict is what a signals replay would read, but none is built yet.
+
+3. **A failed veto call gets one more attempt (David, 2026-10-09).** When the veto comes back `unavailable` because the LLM call failed, it gets one more attempt on a later pass in the same session, and that second verdict is final. An `unavailable` caused by the spend cap stays final on the first attempt, as built.
+
+*Built 2026-10-09 (#2024).* Build notes for ruling 3 (not rulings):
+
+- The two causes are told apart by the reason the veto already journals: `signalVeto` writes `llm_call_failed: <error>` when the judge call throws and `llm_spend_cap:<kind>` when the spend cap refuses before any call. The LLM client itself never reports the spend cap, since the cap is checked before the call. Only the first reason earns the retry.
+- After a call failure the pass fails the signal, so neither leg enters and both wait for the retry; the first verdict stays in `v2_signal_vetoes` unchanged. The retry is journalled in two new append-only tables (migration 0100): `v2_signal_veto_retries` holds a claim written before the second call, and `v2_signal_veto_retry_verdicts` holds its verdict. A restart after the claim but before the verdict makes no third call: the retry is journalled as `unavailable` (interrupted) and is final. Every later pass reuses the retry's verdict, so a replayed or retried signal journals the same decisions.
+- A failure on the last pass of the session leaves no later pass, so the signal is dropped with the error and neither leg enters, as for a failed quote read. This is recorded in the spec's known limits.
 
 ## Still open
 

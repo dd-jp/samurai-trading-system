@@ -397,7 +397,7 @@ describe('processSignals, dry run', () => {
     );
   });
 
-  it('treats a failed veto call as unavailable: the primary refuses, the shadow enters', async () => {
+  it('holds both legs after a failed veto call, failing the signal for a later pass', async () => {
     const fixtures = await writeFixtures();
     const failing = (_request: AnthropicMessageRequest): string => {
       throw new Error('upstream 503');
@@ -405,15 +405,19 @@ describe('processSignals, dry run', () => {
     const { root, signals } = open(fixtures, new SimulatedClock(IN_SESSION), {}, failing);
     const id = post(signals, {});
 
-    await root.processSignals(signals, IN_SESSION);
+    const pass = await root.processSignals(signals, IN_SESSION);
 
+    expect(pass).toMatchObject({
+      outcomes: [
+        {
+          status: 'failed',
+          detail: 'veto llm_call_failed: upstream 503; one retry left on a later pass',
+        },
+      ],
+    });
     expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
-    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
-    const primary = root.db
-      .prepare("SELECT action, reason FROM v2_decisions WHERE book_id = 'signals/primary'")
-      .get() as { action: string; reason: string };
-    expect(primary.action).toBe('skip');
-    expect(primary.reason).toMatch(/^vetoed: unavailable: llm_call_failed/);
+    expect(root.journal.orderFor(shadowId(id))).toBeUndefined();
+    expect(root.db.prepare('SELECT COUNT(*) AS n FROM v2_decisions').get()).toEqual({ n: 0 });
   });
 
   it('marks a signal whose entry order already exists processed without a second veto or order', async () => {
@@ -1416,33 +1420,6 @@ describe('the veto runs once per signal (David 2026-10-09, #2024)', () => {
     expect(after.root.journal.orderFor(shadowId(id))).toBeDefined();
   });
 
-  it('an unavailable veto stays unavailable on retry: no second call, the primary stays out', async () => {
-    const fixtures = await writeFixtures();
-    let calls = 0;
-    const script: Script = (request) => {
-      calls += 1;
-      if (calls === 1) throw new Error('upstream 503');
-      return PASS_SCRIPT(request);
-    };
-    const { root, signals } = open(
-      fixtures,
-      new SimulatedClock(IN_SESSION),
-      { quotes: quotesAt(STALE, FRESH) },
-      script,
-    );
-    const id = post(signals, {});
-
-    await root.processSignals(signals, IN_SESSION);
-    const firstPassCalls = calls;
-    await root.processSignals(signals, new Date(IN_SESSION.getTime() + 30_000));
-
-    expect(firstPassCalls).toBeGreaterThan(0);
-    expect(calls).toBe(firstPassCalls);
-    expect(signals.vetoFor(id)?.kind).toBe('unavailable');
-    expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
-    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
-  });
-
   it('a signal entered after retries journals the same decisions as one entered at once', async () => {
     const clean = await writeFixtures();
     const once = open(clean, new SimulatedClock(IN_SESSION), { quotes: quotesAt(FRESH) });
@@ -1460,5 +1437,245 @@ describe('the veto runs once per signal (David 2026-10-09, #2024)', () => {
     const decisions = decisionRows(once.root, onceId);
     expect(decisions).toHaveLength(2);
     expect(decisionRows(twice.root, twiceId)).toEqual(decisions);
+  });
+});
+
+describe('a failed veto call gets one more attempt (David 2026-10-09, #2024)', () => {
+  const LATER = new Date(IN_SESSION.getTime() + 30_000);
+  const LATEST = new Date(IN_SESSION.getTime() + 60_000);
+
+  function failingThen(...replies: readonly (string | Error)[]): Script {
+    let calls = 0;
+    return () => {
+      const reply = replies[Math.min(calls, replies.length - 1)] as string | Error;
+      calls += 1;
+      if (reply instanceof Error) throw reply;
+      return reply;
+    };
+  }
+
+  const PASS = '{"veto": false, "reason": "trend is flat, stop outside noise"}';
+  const FAIL = new Error('upstream 503');
+
+  function callsOf(transports: readonly ScriptedTransport[]): number {
+    return transports.flatMap((transport) => transport.calls).length;
+  }
+
+  function primaryDecision(root: V2Root) {
+    return root.db
+      .prepare("SELECT action, reason FROM v2_decisions WHERE book_id = 'signals/primary'")
+      .get();
+  }
+
+  function decisionRows(root: V2Root, signalId: string): readonly string[] {
+    const rows = root.db
+      .prepare(
+        `SELECT book_id, trading_date, instrument, action, reason, payload
+         FROM v2_decisions ORDER BY book_id`,
+      )
+      .all();
+    return rows.map((row) => JSON.stringify(row).replaceAll(signalId, '<signal>'));
+  }
+
+  function spendTheCap(storePath: string): void {
+    const db = openSharedStore(storePath);
+    try {
+      db.prepare(
+        `INSERT INTO llm_spend (trace_id, stage, model, input_tokens, output_tokens, cost_usd, latency_ms, timestamp)
+         VALUES ('t', 'debate', 'm', 1, 1, 1000, 1, '${D}T00:00:00.000Z')`,
+      ).run();
+    } finally {
+      db.close();
+    }
+  }
+
+  it('a call failure then a pass makes exactly 2 calls, and the primary enters', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals, transports } = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      {},
+      failingThen(FAIL, PASS),
+    );
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+    const retried = await root.processSignals(signals, LATER);
+
+    expect(retried).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(callsOf(transports)).toBe(2);
+    expect(root.journal.orderFor(primaryId(id))).toBeDefined();
+    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
+    expect(signals.vetoFor(id)).toEqual({
+      kind: 'unavailable',
+      reason: 'llm_call_failed: upstream 503',
+    });
+    expect(signals.vetoRetry(id)).toEqual({
+      claimed: true,
+      veto: { kind: 'pass', reason: 'trend is flat, stop outside noise' },
+    });
+    expect(signals.get(id)?.events.map((event) => event.status)).toEqual([
+      'queued',
+      'failed',
+      'processed',
+    ]);
+  });
+
+  it('a second failure is final: the primary stays out, the shadow enters, exactly 2 calls', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals, transports } = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      {},
+      failingThen(FAIL, FAIL, PASS),
+    );
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+    const retried = await root.processSignals(signals, LATER);
+
+    expect(retried).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(callsOf(transports)).toBe(2);
+    expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
+    expect(primaryDecision(root)).toEqual({
+      action: 'skip',
+      reason: 'vetoed: unavailable: llm_call_failed: upstream 503',
+    });
+    expect(await root.processSignals(signals, LATEST)).toMatchObject({ ran: false });
+    expect(callsOf(transports)).toBe(2);
+  });
+
+  it('a spend-cap refusal on the first attempt makes no call and is final at once', async () => {
+    const fixtures = await writeFixtures();
+    spendTheCap(fixtures.storePath);
+    const { root, signals, transports } = open(fixtures, new SimulatedClock(IN_SESSION));
+    const id = post(signals, {});
+
+    const pass = await root.processSignals(signals, IN_SESSION);
+
+    expect(pass).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(callsOf(transports)).toBe(0);
+    expect(signals.vetoRetry(id)).toEqual({ claimed: false, veto: undefined });
+    expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
+  });
+
+  it('a spend-cap refusal on the retry leaves exactly 1 call and is final', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals, transports } = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      {},
+      failingThen(FAIL, PASS),
+    );
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+    spendTheCap(fixtures.storePath);
+    const capped = await root.processSignals(signals, LATER);
+
+    expect(capped).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(callsOf(transports)).toBe(1);
+    expect(signals.vetoRetry(id).veto).toEqual({
+      kind: 'unavailable',
+      reason: 'llm_spend_cap:budget',
+    });
+    expect(root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(root.journal.orderFor(shadowId(id))).toBeDefined();
+    expect(primaryDecision(root)).toEqual({
+      action: 'skip',
+      reason: 'vetoed: unavailable: llm_spend_cap:budget',
+    });
+  });
+
+  it('a restart after the retry journalled its verdict makes no third call', async () => {
+    const fixtures = await writeFixtures();
+    const STALE = quote(25, new Date(IN_SESSION.getTime() - 1));
+    const before = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      { quotes: quotesAt(STALE) },
+      failingThen(FAIL, PASS),
+    );
+    const id = post(before.signals, {});
+    await before.root.processSignals(before.signals, IN_SESSION);
+    await before.root.processSignals(before.signals, LATER);
+    roots.splice(roots.indexOf(before.root), 1);
+    before.root.close();
+
+    const after = open(fixtures, new SimulatedClock(IN_SESSION), { quotes: quotesAt(quote(25)) });
+    const entered = await after.root.processSignals(after.signals, LATEST);
+
+    expect(entered).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(callsOf(before.transports)).toBe(2);
+    expect(callsOf(after.transports)).toBe(0);
+    expect(after.root.journal.orderFor(primaryId(id))).toBeDefined();
+  });
+
+  it('a restart during the retry call makes no third call: the retry is unavailable and final', async () => {
+    const fixtures = await writeFixtures();
+    const before = open(fixtures, new SimulatedClock(IN_SESSION), {}, failingThen(FAIL));
+    const id = post(before.signals, {});
+    await before.root.processSignals(before.signals, IN_SESSION);
+    before.signals.claimVetoRetry(id);
+    roots.splice(roots.indexOf(before.root), 1);
+    before.root.close();
+
+    const after = open(fixtures, new SimulatedClock(IN_SESSION));
+    const pass = await after.root.processSignals(after.signals, LATER);
+
+    expect(pass).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(callsOf(before.transports)).toBe(1);
+    expect(callsOf(after.transports)).toBe(0);
+    expect(after.signals.vetoRetry(id).veto).toEqual({
+      kind: 'unavailable',
+      reason: 'llm_call_failed: the retry was interrupted before its verdict was journalled',
+    });
+    expect(after.root.journal.orderFor(primaryId(id))).toBeUndefined();
+    expect(after.root.journal.orderFor(shadowId(id))).toBeDefined();
+  });
+
+  it('a signal entered after a retried veto journals the same decisions as one passed at once', async () => {
+    const clean = await writeFixtures();
+    const once = open(clean, new SimulatedClock(IN_SESSION));
+    const onceId = post(once.signals, {});
+    await once.root.processSignals(once.signals, LATER);
+
+    const retried = await writeFixtures();
+    const twice = open(retried, new SimulatedClock(IN_SESSION), {}, failingThen(FAIL, PASS));
+    const twiceId = post(twice.signals, {});
+    await twice.root.processSignals(twice.signals, IN_SESSION);
+    await twice.root.processSignals(twice.signals, LATER);
+
+    const decisions = decisionRows(once.root, onceId);
+    expect(decisions).toHaveLength(2);
+    expect(decisionRows(twice.root, twiceId)).toEqual(decisions);
+  });
+
+  it('a retried veto that fails twice journals the same decisions on every later pass', async () => {
+    const fixtures = await writeFixtures();
+    const { root, signals } = open(
+      fixtures,
+      new SimulatedClock(IN_SESSION),
+      { quotes: quotesAt(quote(25, new Date(IN_SESSION.getTime() - 1)), quote(25)) },
+      failingThen(FAIL),
+    );
+    const id = post(signals, {});
+
+    await root.processSignals(signals, IN_SESSION);
+    await root.processSignals(signals, LATER);
+    const entered = await root.processSignals(signals, LATEST);
+
+    expect(entered).toMatchObject({ outcomes: [{ status: 'processed' }] });
+    expect(signals.vetoRetry(id).veto).toEqual({
+      kind: 'unavailable',
+      reason: 'llm_call_failed: upstream 503',
+    });
+    expect(decisionRows(root, id)).toHaveLength(2);
+    expect(primaryDecision(root)).toEqual({
+      action: 'skip',
+      reason: 'vetoed: unavailable: llm_call_failed: upstream 503',
+    });
   });
 });
