@@ -38,6 +38,28 @@ function canonical(value: unknown): unknown {
   );
 }
 
+const CHAIN_GENESIS = '';
+
+interface StoredTrial extends TrialRow {
+  readonly config: string;
+}
+
+function chainLink(previous: string, row: StoredTrial): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        previous,
+        row.trial,
+        row.candidate,
+        row.config_hash,
+        row.config,
+        row.source,
+        row.recorded_at,
+      ]),
+    )
+    .digest('hex');
+}
+
 export function trialHash(candidate: string, config: TrialConfig): string {
   return createHash('sha256')
     .update(JSON.stringify(canonical({ candidate, config })))
@@ -54,6 +76,7 @@ export class TrialLedger {
     sessionB: SessionBLedger,
   ) {
     this.#db = guardedStore(db, 'v2');
+    this.#verifyChain();
     if (this.count() === 0) this.#seed(sessionB);
     else this.#assertSeeded(sessionB);
   }
@@ -72,19 +95,80 @@ export class TrialLedger {
 
   record(candidate: string, config: TrialConfig): number {
     const hash = trialHash(candidate, config);
-    return this.#trialOf(hash) ?? this.#insert(this.count() + 1, candidate, hash, config, 'v2');
+    return this.#db
+      .transaction(
+        () => this.#trialOf(hash) ?? this.#insert(this.count() + 1, candidate, hash, config, 'v2'),
+      )
+      .immediate();
+  }
+
+  chainHead(): string {
+    const row = this.#db
+      .prepare('SELECT link FROM v2_trial_chain ORDER BY trial DESC LIMIT 1')
+      .get() as { link: string } | undefined;
+    return row?.link ?? CHAIN_GENESIS;
+  }
+
+  #verifyChain(): void {
+    const rows = this.#db
+      .prepare(
+        `SELECT t.trial, t.candidate, t.config_hash, t.config, t.source, t.recorded_at, c.link
+         FROM v2_trials t LEFT JOIN v2_trial_chain c USING (trial) ORDER BY t.trial`,
+      )
+      .all() as (StoredTrial & { link: string | null })[];
+    const links = this.#linkCount();
+    if (links === 0) {
+      this.#linkAll(rows);
+      return;
+    }
+    let head = CHAIN_GENESIS;
+    for (const row of rows) {
+      head = chainLink(head, row);
+      if (row.link !== head) {
+        throw new Error(
+          `TrialLedger: trial #${row.trial} does not match its chain link; v2_trials was changed outside the ledger`,
+        );
+      }
+    }
+    if (links !== rows.length) {
+      throw new Error(`TrialLedger: v2_trial_chain holds ${links} links for ${rows.length} trials`);
+    }
+  }
+
+  #linkAll(rows: readonly StoredTrial[]): void {
+    this.#db
+      .transaction(() => {
+        let head = CHAIN_GENESIS;
+        for (const row of rows) {
+          head = chainLink(head, row);
+          this.#link(row.trial, head);
+        }
+      })
+      .immediate();
+  }
+
+  #linkCount(): number {
+    return (this.#db.prepare('SELECT COUNT(*) AS n FROM v2_trial_chain').get() as { n: number }).n;
+  }
+
+  #link(trial: number, link: string): void {
+    this.#db.prepare('INSERT INTO v2_trial_chain (trial, link) VALUES (?, ?)').run(trial, link);
   }
 
   #seed(ledger: SessionBLedger): void {
-    for (const entry of ledger.entries) {
-      this.#insert(
-        entry.trial,
-        `momentum/${entry.config.venue}`,
-        entry.config_hash,
-        entry.config,
-        'session-b',
-      );
-    }
+    this.#db
+      .transaction(() => {
+        for (const entry of ledger.entries) {
+          this.#insert(
+            entry.trial,
+            `momentum/${entry.config.venue}`,
+            entry.config_hash,
+            entry.config,
+            'session-b',
+          );
+        }
+      })
+      .immediate();
   }
 
   #assertSeeded(ledger: SessionBLedger): void {
@@ -111,19 +195,21 @@ export class TrialLedger {
     config: TrialConfig,
     source: string,
   ): number {
+    const row: StoredTrial = {
+      trial,
+      candidate,
+      config_hash: hash,
+      config: JSON.stringify(canonical(config)),
+      source,
+      recorded_at: toStoredTimestamp(this.clock.now()),
+    };
     this.#db
       .prepare(
         `INSERT INTO v2_trials (trial, candidate, config_hash, config, source, recorded_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(
-        trial,
-        candidate,
-        hash,
-        JSON.stringify(canonical(config)),
-        source,
-        toStoredTimestamp(this.clock.now()),
-      );
+      .run(row.trial, row.candidate, row.config_hash, row.config, row.source, row.recorded_at);
+    this.#link(trial, chainLink(this.chainHead(), row));
     return trial;
   }
 }
@@ -146,7 +232,7 @@ export function main(storePath: string = researchStorePath()): number {
   try {
     const ledger = new TrialLedger(db, new SystemClock(), sessionBLedger());
     process.stdout.write(
-      `${JSON.stringify({ trials_counted: ledger.count(), trials: ledger.list() }, null, 2)}\n`,
+      `${JSON.stringify({ trials_counted: ledger.count(), chain_head: ledger.chainHead(), trials: ledger.list() }, null, 2)}\n`,
     );
     return 0;
   } finally {
