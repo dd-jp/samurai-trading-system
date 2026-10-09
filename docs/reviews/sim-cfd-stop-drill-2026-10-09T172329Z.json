@@ -1,0 +1,280 @@
+{
+  "drill": "sim-cfd-stop-drill",
+  "refs": [
+    "#1400",
+    "#1916"
+  ],
+  "gateway": "https://gateway.saxobank.com/sim/openapi",
+  "startedAt": "2026-10-09T17:23:29.159Z",
+  "instruments": [
+    {
+      "symbol": "AAPL:xnas",
+      "assetType": "CfdOnStock",
+      "outcome": "passed",
+      "uic": 211,
+      "supportedOrderTypes": [
+        "StopLimit",
+        "StopIfTraded",
+        "TrailingStopIfTraded",
+        "Limit",
+        "Market"
+      ],
+      "orderDistances": {
+        "EntryDefaultDistance": 2,
+        "EntryDefaultDistanceType": "Percentage",
+        "LimitDefaultDistance": 0,
+        "LimitDefaultDistanceType": "Percentage",
+        "StopLimitDefaultDistance": 5,
+        "StopLimitDefaultDistanceType": "Pips",
+        "StopLossDefaultDistance": 2,
+        "StopLossDefaultDistanceType": "Percentage",
+        "StopLossDefaultEnabled": false,
+        "StopLossDefaultOrderType": "Stop",
+        "TakeProfitDefaultDistance": 2,
+        "TakeProfitDefaultDistanceType": "Percentage",
+        "TakeProfitDefaultEnabled": false
+      },
+      "quote": {
+        "bid": 334.94,
+        "ask": 334.97,
+        "isMarketOpen": true,
+        "shortTradeDisabled": false,
+        "delayedByMinutes": 15
+      },
+      "amount": 1,
+      "stop": {
+        "placedPrice": 368.47,
+        "orderId": "5040771492",
+        "rest": {
+          "orderId": "5040771492",
+          "uic": 211,
+          "assetType": "CfdOnStock",
+          "openOrderType": "StopIfTraded",
+          "status": "Working",
+          "buySell": "Buy",
+          "amount": 1,
+          "price": 368.47,
+          "orderRelation": "Oco",
+          "observedAt": "2026-10-09T17:23:30.181Z"
+        },
+        "amendAttempts": [
+          {
+            "price": 333.03,
+            "status": 400,
+            "body": {
+              "ErrorInfo": {
+                "ErrorCode": "OnWrongSideOfMarket",
+                "Message": "Price is on wrong side of market"
+              },
+              "OrderId": "5040771492"
+            }
+          },
+          {
+            "price": 334.88,
+            "status": 200,
+            "body": {
+              "OrderId": "5040771492"
+            }
+          }
+        ],
+        "triggeredAt": "2026-10-09T17:23:56.807000Z",
+        "triggerStatus": "FinalFill",
+        "triggerFillPrice": 334.89
+      },
+      "targetPrice": 301.44,
+      "entry": {
+        "orderId": "5040771490",
+        "externalReference": "drill-1791566609159-211",
+        "placedAt": "2026-10-09T17:23:29.952Z",
+        "relatedOrderIds": [
+          "5040771491",
+          "5040771492"
+        ],
+        "fillPrice": 334.71,
+        "filledAt": "2026-10-09T17:23:30.035Z"
+      },
+      "positionClosedAfterTrigger": true
+    },
+    {
+      "symbol": "ISF:xlon",
+      "assetType": "CfdOnEtf",
+      "outcome": "skipped",
+      "uic": 4361,
+      "supportedOrderTypes": [
+        "Market",
+        "Limit",
+        "StopIfTraded",
+        "TrailingStopIfTraded",
+        "StopLimit"
+      ],
+      "orderDistances": {
+        "EntryDefaultDistance": 2,
+        "EntryDefaultDistanceType": "Percentage",
+        "LimitDefaultDistance": 0,
+        "LimitDefaultDistanceType": "Percentage",
+        "StopLimitDefaultDistance": 5,
+        "StopLimitDefaultDistanceType": "Pips",
+        "StopLossDefaultDistance": 2,
+        "StopLossDefaultDistanceType": "Percentage",
+        "StopLossDefaultEnabled": false,
+        "StopLossDefaultOrderType": "Stop",
+        "TakeProfitDefaultDistance": 2,
+        "TakeProfitDefaultDistanceType": "Percentage",
+        "TakeProfitDefaultEnabled": false
+      },
+      "quote": {
+        "bid": 1027.4,
+        "ask": 1027.8,
+        "isMarketOpen": false,
+        "shortTradeDisabled": false,
+        "delayedByMinutes": 15
+      },
+      "reason": "market_closed"
+    }
+  ],
+  "cleanup": {
+    "cancelled": [],
+    "flattened": [],
+    "errors": []
+  },
+  "steps": [
+    {
+      "at": "2026-10-09T17:23:29.360Z",
+      "code": "drill_trial_account_confirmed"
+    },
+    {
+      "at": "2026-10-09T17:23:29.447Z",
+      "code": "drill_instrument_started",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "assetType": "CfdOnStock"
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:29.952Z",
+      "code": "drill_entry_placed",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "status": 200,
+        "body": {
+          "ExternalReference": "drill-1791566609159-211",
+          "OrderId": "5040771490",
+          "Orders": [
+            {
+              "ExternalReference": "drill-1791566609159-211:target",
+              "OrderId": "5040771491"
+            },
+            {
+              "ExternalReference": "drill-1791566609159-211:stop",
+              "OrderId": "5040771492"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:30.036Z",
+      "code": "drill_entry_filled",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 334.71
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:30.181Z",
+      "code": "drill_stop_resting",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "order": {
+          "orderId": "5040771492",
+          "uic": 211,
+          "assetType": "CfdOnStock",
+          "openOrderType": "StopIfTraded",
+          "status": "Working",
+          "buySell": "Buy",
+          "amount": 1,
+          "price": 368.47,
+          "orderRelation": "Oco"
+        }
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:30.902Z",
+      "code": "drill_stop_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 333.03,
+        "status": 400
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:32.218Z",
+      "code": "drill_stop_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 334.88,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:57.602Z",
+      "code": "drill_stop_triggered",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "activity": {
+          "orderId": "5040771492",
+          "status": "FinalFill",
+          "activityTime": "2026-10-09T17:23:56.807000Z",
+          "averagePrice": 334.89,
+          "fillAmount": 1
+        }
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:57.712Z",
+      "code": "drill_instrument_passed",
+      "detail": {
+        "symbol": "AAPL:xnas"
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:57.712Z",
+      "code": "drill_instrument_started",
+      "detail": {
+        "symbol": "ISF:xlon",
+        "assetType": "CfdOnEtf"
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:57.993Z",
+      "code": "drill_instrument_skipped",
+      "detail": {
+        "symbol": "ISF:xlon",
+        "reason": "market_closed"
+      }
+    },
+    {
+      "at": "2026-10-09T17:23:57.993Z",
+      "code": "drill_cleanup_started",
+      "detail": {
+        "instruments": 2
+      }
+    }
+  ],
+  "passed": true,
+  "account": {
+    "isTrialAccount": true,
+    "currency": "EUR"
+  },
+  "flatBefore": {
+    "at": "2026-10-09T17:23:29.360Z",
+    "netPositions": 0,
+    "openOrders": 0
+  },
+  "flatAfter": {
+    "at": "2026-10-09T17:23:58.173Z",
+    "netPositions": 0,
+    "openOrders": 0
+  },
+  "finishedAt": "2026-10-09T17:23:58.244Z"
+}
