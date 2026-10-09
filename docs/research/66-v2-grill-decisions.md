@@ -322,7 +322,7 @@ Open after these rulings: ~~whether #1854 (stale-price guard, parked "until an e
 
 9. **Buy-stop entries:** run one Alpaca paper probe of a `stop` / `stop_limit` bracket parent. If Alpaca accepts it with the legs held, a buy-stop signal (entry above the last close) enters as a stop parent rather than being refused as `entry_is_buy_stop`. The probe accepted both parent types with the legs `held` (`docs/reviews/alpaca-stop-parent-probe-2026-09-30.md`). David then ruled `stop_limit`, not a plain `stop` (2026-09-30, #1941): trigger at the zone low, limit at the zone high, so risk stays capped at 1R; a gap past the limit is missed and recorded.
 10. **Loss budget split per sleeve, not pooled.** `signals/primary` and `debate/primary` each carry their own capital share of the yearly cap and the daily cap (signals 70%, debate 30%), per the 2026-09-27 per-sleeve rule. This supersedes the account-wide pooling of #1799 part 1 (the "Account-wide loss-budget pooling scope" row above). The pool is removed, in paper, live and the backtest alike.
-11. **Veto unavailable:** skip the primary entry, as built; the shadow still records the trade.
+11. **Veto unavailable:** skip the primary entry, as built; the shadow still records the trade. *(2026-10-09: a failed call first gets one more attempt and both legs wait for it; see that day's ruling 3 and its build notes.)*
 12. **Daily cap within the day:** it binds at the next mark, not mid-session. Recorded; paper decides, and it is fixed only if same-day signal clusters show up.
 
 Still open and recorded, not ruled: the universe is only the current S&P 500 constituents; the shadow fills over the whole day's bar; the ≤10% veto-rate cap is not enforced in code; a failed signal is never retried; a zone that straddles the close enters at its high. *(The first four were ruled on 2026-10-05, #2024, in the signals-sleeve rulings below; the straddling zone stays recorded, not ruled.)*
@@ -665,9 +665,28 @@ David answered the review of PR #2092 (finding F1), recorded on [#2024](https://
 *Built 2026-10-09 (#2024).* Build notes (not rulings):
 
 - The verdict is journalled in a new append-only table, `v2_signal_vetoes` (migration 0099), keyed by the signal id. It holds the kind and the reason, and is written right after the veto returns and before the quote read, so a pass that fails on the quote, or a crash after the veto, keeps the verdict. A retry reads it and makes no LLM call; a vetoed signal stays vetoed.
-- The cached verdict includes `unavailable`. A veto that could not run on the first pass (spend cap, call failure) is not retried, so the primary stays skipped for that signal. This is the literal reading of "runs once" and is recorded in the spec's known limits.
+- The cached verdict includes `unavailable`. A veto that could not run on the first pass (spend cap, call failure) is not retried, so the primary stays skipped for that signal. This is the literal reading of "runs once" and is recorded in the spec's known limits. *Superseded for call failures by ruling 3 below.*
 - A signal entered after retries journals the same decisions as one entered on its first pass, apart from its own signal id; a test holds this.
 - `npm run v2:replay` replays the debate and arm 2 decisions only; it does not re-run the signals sleeve. The journalled verdict is what a signals replay would read, but none is built yet.
+
+3. **A failed veto call gets one more attempt (David, 2026-10-09).** When the veto comes back `unavailable` because the LLM call failed, it gets one more attempt on a later pass in the same session, and that second verdict is final. An `unavailable` caused by the spend cap stays final on the first attempt, as built.
+
+*Built 2026-10-09 (#2024).* Build notes for ruling 3 (not rulings):
+
+- The two causes are told apart by the reason the veto already journals: `signalVeto` writes `llm_call_failed: <error>` when the judge call throws and `llm_spend_cap:<kind>` when the spend cap refuses before any call. The LLM client itself never reports the spend cap, since the cap is checked before the call. Only the first reason earns the retry.
+- After a call failure the pass fails the signal, so neither leg enters and both wait for the retry (ruled as ruling 4 below); the first verdict stays in `v2_signal_vetoes` unchanged. Every later pass reuses the retry's verdict, so a replayed or retried signal journals the same decisions.
+- A failure on the last pass of the session leaves no later pass, so the signal is dropped with the error and neither leg enters, as for a failed quote read. This is recorded in the spec's known limits.
+
+David answered the review of PR #2097 (findings F1 and F2), recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024):
+
+4. **The shadow waits with the primary (David, 2026-10-09, F1).** After a failed veto call both legs wait for the retry, so both fill at the same first quote (the 2026-10-08 ruling (d)). This is how it was built. A failure on the session's last pass, which leaves the shadow without a record of a signal the gate admitted, stays a known limit.
+5. **One claims table, so no crash path makes a third call (David, 2026-10-09, F2).** A claim is journalled before every LLM call, the first included. A restart that finds a claim with no verdict counts that attempt as a failed call: attempt 1 claimed with no verdict lets attempt 2 run, and attempt 2 claimed with no verdict is a final `unavailable`. No crash path makes a third call. The spend cap stays final and makes no call.
+
+*Built 2026-10-09 (#2024).* Build notes for ruling 5 (not rulings):
+
+- Migration 0100 adds two append-only tables; 0099 is untouched. `v2_signal_veto_claims` holds one row per `(signal_id, attempt)`, attempt 1 or 2, written before the call; a trigger refuses an attempt-2 claim until the first verdict is in `v2_signal_vetoes`. `v2_signal_veto_retry_verdicts` holds the second verdict, keyed by the signal and tied by a foreign key to its attempt-2 claim. The first verdict stays in `v2_signal_vetoes`.
+- A restart that finds attempt 1 claimed with no verdict journals the first verdict as `unavailable` (`llm_call_failed: the call was interrupted before its verdict was journalled`) and runs attempt 2 in the same pass, since that pass is already a later one. A restart that finds attempt 2 claimed with no verdict journals the same reason as the final verdict and makes no call.
+- The spend cap is checked inside the veto call, after the claim, so a capped attempt still writes its claim and then its final verdict, with no LLM call.
 
 ## Still open
 
