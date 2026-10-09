@@ -16,7 +16,7 @@ export const RANDOM_CANARY_RUNS = 200;
 export const RANDOM_CANARY_FIRST_SEED = 1;
 // Awaiting David (#1747): every candidate's own ATR window is 20 bars
 export const RANDOM_ENTRY_ATR_WINDOW = 20;
-// Awaiting David (#1747): the redraw bound for the 2026-10-08 re-entry ruling, charged to each
+// David, 2026-10-09 on #1747: the redraw bound for the 2026-10-08 re-entry ruling, charged to each
 // matched trade's own test fold even when the redraw spills into a later one
 export const RANDOM_REENTRY_MAX_DRAWS_PER_FOLD = 1_000;
 // David, 2026-10-09 on #1747: a run with at most this share of the path's trades unserved at the
