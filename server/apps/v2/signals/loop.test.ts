@@ -13,6 +13,8 @@ function harness(overrides: Partial<SignalLoopDeps> = {}, pass?: () => Promise<S
     due: () => [{ signal_id: 's1' } as never],
     appendEvent: () => {},
     vetoVerdicts: () => [],
+    recordVeto: () => {},
+    vetoFor: () => undefined,
   };
   const processSignals = vi.fn(
     pass ?? (() => Promise.resolve<SignalPass>({ ran: true, outcomes: [] })),
@@ -46,7 +48,13 @@ describe('SignalLoop', () => {
     await closedMarket.loop.tick();
     expect(closedMarket.opened).toEqual([]);
     const idle = harness({
-      signals: { due: () => [], appendEvent: () => {}, vetoVerdicts: () => [] },
+      signals: {
+        due: () => [],
+        appendEvent: () => {},
+        vetoVerdicts: () => [],
+        recordVeto: () => {},
+        vetoFor: () => undefined,
+      },
     });
     await idle.loop.tick();
     expect(idle.opened).toEqual([]);
@@ -175,7 +183,13 @@ describe('SignalLoop', () => {
 
   it('has no pass age while nothing is due', async () => {
     const idle = harness({
-      signals: { due: () => [], appendEvent: () => {}, vetoVerdicts: () => [] },
+      signals: {
+        due: () => [],
+        appendEvent: () => {},
+        vetoVerdicts: () => [],
+        recordVeto: () => {},
+        vetoFor: () => undefined,
+      },
     });
     await idle.loop.tick();
     expect(idle.loop.passAgeMs()).toBeUndefined();

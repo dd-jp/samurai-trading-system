@@ -655,6 +655,19 @@ Build choices David ruled on the same day (2026-10-08, #2024):
 
 *Built 2026-10-08 (#2024):* ruling 2's floor in `server/apps/v2/signals/processor.ts`, after the stale-close check. The check of ruling 4 is not built.
 
+## Rulings of 2026-10-09 — a missing quote fails closed, the veto runs once (#2024)
+
+David answered the review of PR #2092 (finding F1), recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024). The spec is `docs/specs/signals-sleeve-spec.md`.
+
+1. **A missing quote blocks both legs.** When the Alpaca latest quote is older than the signal's `process_after`, has no ask, or the read fails, neither leg enters. The 30 s retry continues until the signal's session ends, and the signal is then dropped as before.
+2. **The veto runs once per signal.** Its verdict is journalled, and every retry reuses it, so a retry spends no LLM budget. A replayed day must still produce the same decisions.
+
+*Built 2026-10-09 (#2024).* Build notes (not rulings):
+
+- The verdict is journalled in a new append-only table, `v2_signal_vetoes` (migration 0099), keyed by the signal id. It holds the kind and the reason, and is written right after the veto returns and before the quote read, so a pass that fails on the quote, or a crash after the veto, keeps the verdict. A retry reads it and makes no LLM call; a vetoed signal stays vetoed.
+- The cached verdict includes `unavailable`. A veto that could not run on the first pass (spend cap, call failure) is not retried, so the primary stays skipped for that signal. This is the literal reading of "runs once" and is recorded in the spec's known limits.
+- A signal entered after retries journals the same decisions as one entered on its first pass, apart from its own signal id; a test holds this.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

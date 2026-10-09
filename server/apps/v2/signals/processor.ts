@@ -37,7 +37,10 @@ const OUTCOME_LOG = {
 export interface SignalProcessorDeps {
   readonly cycle: CycleDeps;
   readonly latestReconcile: (tradingDate: string, venue: 'alpaca') => ReconcileVerdict;
-  readonly signals: Pick<SignalStore, 'due' | 'appendEvent' | 'vetoVerdicts'>;
+  readonly signals: Pick<
+    SignalStore,
+    'due' | 'appendEvent' | 'vetoVerdicts' | 'recordVeto' | 'vetoFor'
+  >;
   readonly faults: FaultSink;
   readonly panel: Pick<LlmPanel, 'judge' | 'spendCap'>;
   readonly constituents: (tradingDate: string) => readonly string[];
@@ -286,13 +289,16 @@ function passDetail(
   );
 }
 
-async function enter(
+// David 2026-10-09 (#2024): the veto runs once per signal and a retry reuses its journalled
+// verdict, so a pass that fails on the quote spends no LLM budget when it retries
+async function onceVeto(
   deps: SignalProcessorDeps,
   signal: SignalWire,
-  tradingDate: string,
   admitted: Admitted,
-): Promise<string> {
-  const bars = deps.cycle.market.barsBefore(signal.symbol, tradingDate, SIGNAL_VETO_BARS);
+  bars: readonly V2Bar[],
+): Promise<SignalVeto> {
+  const journalled = deps.signals.vetoFor(signal.signal_id);
+  if (journalled !== undefined) return journalled;
   const { low, high } = entryRange(signal.entry);
   const veto = await signalVeto(
     deps.panel.judge,
@@ -310,6 +316,18 @@ async function enter(
     },
     `v2-signal-${signal.signal_id}`,
   );
+  deps.signals.recordVeto(signal.signal_id, veto);
+  return veto;
+}
+
+async function enter(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  tradingDate: string,
+  admitted: Admitted,
+): Promise<string> {
+  const bars = deps.cycle.market.barsBefore(signal.symbol, tradingDate, SIGNAL_VETO_BARS);
+  const veto = await onceVeto(deps, signal, admitted, bars);
   const quote = await entryQuote(deps, signal, admitted.plan);
   const decision = decisionFor(signal, admitted, bars, veto, quote);
   const blocked = reconcileBlocked(deps, tradingDate);

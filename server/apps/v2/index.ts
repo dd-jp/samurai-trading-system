@@ -154,7 +154,10 @@ export interface V2Root {
   close(): void;
 }
 
-export type SignalProcessorStore = Pick<SignalStore, 'due' | 'appendEvent' | 'vetoVerdicts'>;
+export type SignalProcessorStore = Pick<
+  SignalStore,
+  'due' | 'appendEvent' | 'vetoVerdicts' | 'recordVeto' | 'vetoFor'
+>;
 
 export type SignalPass =
   | { readonly ran: true; readonly outcomes: readonly SignalOutcome[] }
