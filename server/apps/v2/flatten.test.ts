@@ -28,6 +28,7 @@ import {
 import { FlattenLoop } from './flatten-loop.js';
 import { CapitalConfigStore } from './risk/index.js';
 import { RunLease } from './run-lease.js';
+import { declaredCfdCosts } from './signal/index.js';
 
 const D = '2026-10-02';
 const MID_DAY = new Date(`${D}T14:00:00.000Z`);
@@ -168,6 +169,7 @@ function harness(db: StoreHandle = newStore(), now: Date = MID_DAY): Harness {
     dryRun: false,
     brokerMode: 'paper',
     halfSpreadBps: () => 5,
+    cfdCosts: declaredCfdCosts(),
     brokerAccess: (pricing) => ({
       executor: new V2OrderExecutor({
         brokers: { alpaca },

@@ -42,7 +42,7 @@ import {
   sleeveAllocationGbp,
   type VolTargetSizing,
 } from './risk/index.js';
-import { declaredVolTarget } from './signal/index.js';
+import { declaredCfdCosts, declaredVolTarget } from './signal/index.js';
 import { type TrialConfig, type TrialLedger, trialHash } from './trial-ledger.js';
 
 export type SleeveFactory = (market: MarketData) => Sleeve;
@@ -361,6 +361,7 @@ async function simulate(
       dryRun: true,
       brokerMode: 'paper',
       halfSpreadBps: input.halfSpreadBps,
+      cfdCosts: declaredCfdCosts(),
       costMultiple: input.costMultiple,
       volTarget: volTargetOf(input),
     });

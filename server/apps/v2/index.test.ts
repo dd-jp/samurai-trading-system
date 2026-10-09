@@ -623,15 +623,13 @@ describe('composeV2Root', () => {
       });
       expect(exitCodeFor(report)).toBe(0);
       const needsDavid = report.refusals.filter((refusal) => refusal.includes('needs David'));
-      expect(needsDavid).toHaveLength(6);
-      expect(needsDavid.some((refusal) => refusal.includes('CFD_RESTING_STOP_VERIFIED'))).toBe(
-        true,
-      );
+      expect(needsDavid).toHaveLength(5);
       for (const parameter of [
         'CFD_COST_MODEL',
         'CFD_SPREAD_MODEL',
         'CFD_FINANCING_MODEL',
         'CFD_BORROW_MODEL',
+        'CFD_RESTING_STOP_VERIFIED',
       ]) {
         expect(needsDavid.some((refusal) => refusal.includes(parameter))).toBe(false);
       }

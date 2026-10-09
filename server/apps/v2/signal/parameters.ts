@@ -103,7 +103,7 @@ export const CFD_BORROW_MODEL = set<CfdBorrowModel>(
   '#1850',
   saxoCfdBorrow(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR),
 );
-export const CFD_RESTING_STOP_VERIFIED = unset<boolean>('CFD_RESTING_STOP_VERIFIED', '#1916');
+export const CFD_RESTING_STOP_VERIFIED = set<boolean>('CFD_RESTING_STOP_VERIFIED', '#1916', true);
 // Setting it is a new counted trial (CLAUDE.md), so it stays unset until David pre-declares the
 // target, window and sleeves; unset, every sleeve sizes exactly as before
 export const VOL_TARGET_SIZING = unset<VolTargetSizing>('VOL_TARGET_SIZING', '#1860');

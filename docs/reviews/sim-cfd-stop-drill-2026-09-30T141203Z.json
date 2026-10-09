@@ -1,0 +1,22 @@
+{
+  "drill": "sim-cfd-stop-drill",
+  "refs": ["#1400", "#1916"],
+  "gateway": "https://gateway.saxobank.com/sim/openapi",
+  "startedAt": "2026-09-30T14:12:03.615Z",
+  "instruments": [],
+  "cleanup": {
+    "cancelled": [],
+    "flattened": [],
+    "errors": []
+  },
+  "steps": [
+    {
+      "at": "2026-09-30T14:12:03.908Z",
+      "code": "drill_refused",
+      "detail": "saxo_sim_unauthorized: the SIM token is expired or invalid; ask David for a fresh one"
+    }
+  ],
+  "passed": false,
+  "failure": "saxo_sim_unauthorized: the SIM token is expired or invalid; ask David for a fresh one",
+  "finishedAt": "2026-09-30T14:12:03.908Z"
+}
