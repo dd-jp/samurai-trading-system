@@ -1,12 +1,19 @@
-import type { BookSpec, SignalWire, SleeveDecision, V2Bar } from '../../../../contracts/index.js';
+import type {
+  BookSpec,
+  EntryQuote,
+  LatestQuoteSource,
+  SignalWire,
+  SleeveDecision,
+  V2Bar,
+} from '../../../../contracts/index.js';
 import { civilDateKey, ET_ZONE, toCivilDate } from '../../../providers/calendar/index.js';
 import { describeThrownSafely, digest } from '../../../shared/index.js';
 import { type CycleDeps, type EntryPassReport, runEntryPass } from '../cycle.js';
 import { isFresh } from '../data/index.js';
 import type { FaultSink, ReconcileVerdict } from '../journal/index.js';
 import type { LlmPanel } from '../signal/index.js';
-import { SIGNALS_SLEEVE_ID } from '../signal/index.js';
-import { entryRange, planSignalEntry, type SignalEntryPlan } from './entry.js';
+import { MOVERS_MIN_DOLLAR_VOLUME_USD, SIGNALS_SLEEVE_ID } from '../signal/index.js';
+import { entryRange, planSignalEntry, quoteFill, type SignalEntryPlan } from './entry.js';
 import type { SignalStore } from './store.js';
 import { SIGNAL_VETO_BARS, type SignalVeto, signalVeto } from './veto.js';
 
@@ -30,11 +37,15 @@ const OUTCOME_LOG = {
 export interface SignalProcessorDeps {
   readonly cycle: CycleDeps;
   readonly latestReconcile: (tradingDate: string, venue: 'alpaca') => ReconcileVerdict;
-  readonly signals: Pick<SignalStore, 'due' | 'appendEvent' | 'vetoVerdicts'>;
+  readonly signals: Pick<
+    SignalStore,
+    'due' | 'appendEvent' | 'vetoVerdicts' | 'recordVeto' | 'vetoFor'
+  >;
   readonly faults: FaultSink;
   readonly panel: Pick<LlmPanel, 'judge' | 'spendCap'>;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly calendar: { isOpen(instant: Date): boolean };
+  readonly quotes: LatestQuoteSource | undefined;
 }
 
 export type SignalOutcomeStatus = 'processed' | 'refused' | 'failed';
@@ -134,6 +145,17 @@ function gateRefusal(
   return undefined;
 }
 
+// David 2026-10-08 (#2024): the debate pool's movers floor, on the last bar's USD dollar volume
+function dollarVolumeRefusal(lastBar: V2Bar): Refusal | undefined {
+  const dollarVolume = lastBar.rawClose * lastBar.volume;
+  if (dollarVolume >= MOVERS_MIN_DOLLAR_VOLUME_USD) return undefined;
+  return {
+    code: 'below_dollar_volume_floor',
+    detail: `last bar ${lastBar.date} dollar volume ${dollarVolume} below ${MOVERS_MIN_DOLLAR_VOLUME_USD}`,
+    ticket: RULINGS_TICKET,
+  };
+}
+
 function admit(
   deps: SignalProcessorDeps,
   signal: SignalWire,
@@ -146,6 +168,8 @@ function admit(
   if (lastBar === undefined || !isFresh(lastBar, tradingDate)) {
     return { code: 'stale_last_close', detail: `last bar ${lastDate} before ${tradingDate}` };
   }
+  const floor = dollarVolumeRefusal(lastBar);
+  if (floor !== undefined) return floor;
   const verdict = planSignalEntry(signal, lastBar.rawClose);
   if (!verdict.ok) return { code: verdict.refusal, detail: verdict.detail };
   const conflicts = conflictingBooks(deps, signal.symbol);
@@ -161,11 +185,30 @@ function entryLabel(plan: SignalEntryPlan): string {
     : `buy-stop ${plan.trigger} limit ${plan.limit}`;
 }
 
+// David 2026-10-08 (#2024): both legs fill at the first quote after the signal is due, so a quote
+// older than process_after (the receipt in session, else the next open) is not that quote
+async function entryQuote(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  plan: SignalEntryPlan,
+): Promise<EntryQuote | undefined> {
+  if (deps.quotes === undefined) return undefined;
+  const quote = await deps.quotes.latestQuote(signal.symbol);
+  if (Date.parse(quote.quoted_at) < Date.parse(signal.process_after)) {
+    throw new Error(
+      `no ${signal.symbol} quote since ${signal.process_after}: latest ${quote.quoted_at}`,
+    );
+  }
+  const { ask, bid, quoted_at } = quote;
+  return { ask, bid, quoted_at, fill: quoteFill(plan, ask) };
+}
+
 function decisionFor(
   signal: SignalWire,
   admitted: Admitted,
   bars: readonly V2Bar[],
   veto: SignalVeto,
+  quote: EntryQuote | undefined,
 ): SleeveDecision {
   const { plan, lastBar } = admitted;
   const { low, high } = entryRange(signal.entry);
@@ -186,6 +229,7 @@ function decisionFor(
     inputs_hash: digest({ signal: signal.signal_id, bars }),
     debate_id: undefined,
     veto: veto.kind === 'pass' ? undefined : `${veto.kind}: ${veto.reason}`,
+    entry_quote: quote,
     payload: {
       signal_id: signal.signal_id,
       entry_low: low,
@@ -199,6 +243,7 @@ function decisionFor(
       r: plan.riskPerShare,
       veto_kind: veto.kind,
       veto_reason: veto.reason,
+      entry_quote: quote,
     },
   };
 }
@@ -244,13 +289,16 @@ function passDetail(
   );
 }
 
-async function enter(
+// David 2026-10-09 (#2024): the veto runs once per signal and a retry reuses its journalled
+// verdict, so a pass that fails on the quote spends no LLM budget when it retries
+async function onceVeto(
   deps: SignalProcessorDeps,
   signal: SignalWire,
-  tradingDate: string,
   admitted: Admitted,
-): Promise<string> {
-  const bars = deps.cycle.market.barsBefore(signal.symbol, tradingDate, SIGNAL_VETO_BARS);
+  bars: readonly V2Bar[],
+): Promise<SignalVeto> {
+  const journalled = deps.signals.vetoFor(signal.signal_id);
+  if (journalled !== undefined) return journalled;
   const { low, high } = entryRange(signal.entry);
   const veto = await signalVeto(
     deps.panel.judge,
@@ -268,7 +316,20 @@ async function enter(
     },
     `v2-signal-${signal.signal_id}`,
   );
-  const decision = decisionFor(signal, admitted, bars, veto);
+  deps.signals.recordVeto(signal.signal_id, veto);
+  return veto;
+}
+
+async function enter(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  tradingDate: string,
+  admitted: Admitted,
+): Promise<string> {
+  const bars = deps.cycle.market.barsBefore(signal.symbol, tradingDate, SIGNAL_VETO_BARS);
+  const veto = await onceVeto(deps, signal, admitted, bars);
+  const quote = await entryQuote(deps, signal, admitted.plan);
+  const decision = decisionFor(signal, admitted, bars, veto, quote);
   const blocked = reconcileBlocked(deps, tradingDate);
   journalBlocked(deps, signal, tradingDate, blocked);
   const report = await runEntryPass(deps.cycle, {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bracketTarget, planSignalEntry } from './entry.js';
+import { bracketTarget, planSignalEntry, quoteFill } from './entry.js';
 
 describe('bracketTarget', () => {
   it('takes the first target at least 2R above the entry', () => {
@@ -59,5 +59,21 @@ describe('planSignalEntry', () => {
         detail: `last close ${lastClose} is at or below the stop 48`,
       });
     }
+  });
+});
+
+describe('quoteFill (David 2026-10-08, #2024)', () => {
+  it('fills a limit at an ask at or below it, and not above', () => {
+    expect(quoteFill({ limit: 25, trigger: undefined }, 24.8)).toBe(24.8);
+    expect(quoteFill({ limit: 25, trigger: undefined }, 25)).toBe(25);
+    expect(quoteFill({ limit: 25, trigger: undefined }, 25.01)).toBeNull();
+  });
+
+  it('fills a buy-stop only at an ask from the trigger to the limit', () => {
+    const plan = { limit: 25.6, trigger: 25.5 };
+    expect(quoteFill(plan, 25.49)).toBeNull();
+    expect(quoteFill(plan, 25.5)).toBe(25.5);
+    expect(quoteFill(plan, 25.6)).toBe(25.6);
+    expect(quoteFill(plan, 25.61)).toBeNull();
   });
 });

@@ -70,6 +70,16 @@ export interface AlpacaPosition {
   avg_entry_price: string;
 }
 
+export interface AlpacaLatestQuote {
+  t: string;
+  ap: number;
+  bp: number;
+}
+
+export interface AlpacaQuoteClient {
+  getLatestQuote(symbol: string): Promise<AlpacaLatestQuote>;
+}
+
 export interface AlpacaBrokerClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
   submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder>;

@@ -212,6 +212,29 @@ describe('SignalStore.vetoVerdicts', () => {
   });
 });
 
+describe('SignalStore veto journal (#2024)', () => {
+  it('reads back the one verdict journalled for a signal and refuses a second', () => {
+    const { signal } = store.record(payload({}), RECEIVED, QUEUED);
+    const other = store.record(payload({ symbol: 'AMD' }), RECEIVED, QUEUED).signal;
+    expect(store.vetoFor(signal.signal_id)).toBeUndefined();
+
+    store.recordVeto(signal.signal_id, { kind: 'veto', reason: 'stop in noise' });
+
+    expect(store.vetoFor(signal.signal_id)).toEqual({ kind: 'veto', reason: 'stop in noise' });
+    expect(store.vetoFor(other.signal_id)).toBeUndefined();
+    expect(db.prepare('SELECT recorded_at FROM v2_signal_vetoes').get()).toEqual({
+      recorded_at: '2026-09-30T12:00:01.000Z',
+    });
+    expect(() => store.recordVeto(signal.signal_id, { kind: 'pass', reason: 'rewritten' })).toThrow(
+      /append-only/,
+    );
+    expect(() => db.prepare("UPDATE v2_signal_vetoes SET kind = 'pass'").run()).toThrow(
+      /append-only/,
+    );
+    expect(() => db.prepare('DELETE FROM v2_signal_vetoes').run()).toThrow(/append-only/);
+  });
+});
+
 describe('v2_signals append-only', () => {
   it('refuses updates and deletes on both tables', () => {
     store.record(payload({}), RECEIVED, QUEUED);

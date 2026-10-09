@@ -18,10 +18,12 @@ import type {
   AlpacaBrokerClient,
   AlpacaCashActivity,
   AlpacaCashInLieuActivity,
+  AlpacaLatestQuote,
   AlpacaMarketOrderRequest,
   AlpacaOcoOrderRequest,
   AlpacaOrder,
   AlpacaPosition,
+  AlpacaQuoteClient,
 } from './alpaca-client.js';
 
 type AlpacaRequestInit = Omit<RequestInit, 'method'> & { method: AlpacaHttpMethod };
@@ -165,6 +167,22 @@ function validateAlpacaAccount(body: unknown, context: string): AlpacaAccount {
   return body as unknown as AlpacaAccount;
 }
 
+function validateAlpacaLatestQuote(body: unknown, context: string): AlpacaLatestQuote {
+  const quote = isRecord(body) ? body.quote : undefined;
+  if (!isRecord(quote)) failValidation(context, 'quote must be an object', body);
+  const { t, ap, bp } = quote;
+  runValidationRules(
+    [
+      [typeof t !== 'string' || Number.isNaN(Date.parse(t)), 'quote.t must be a timestamp'],
+      [!Number.isFinite(ap), 'quote.ap must be a finite number'],
+      [!Number.isFinite(bp), 'quote.bp must be a finite number'],
+    ],
+    context,
+    body,
+  );
+  return { t: t as string, ap: ap as number, bp: bp as number };
+}
+
 type ValidationRules = ReadonlyArray<readonly [failed: boolean, message: string]>;
 
 function activityRules(raw: Record<string, unknown>): ValidationRules {
@@ -225,6 +243,8 @@ const ALPACA_TRADING_HOSTS: Readonly<Record<string, AlpacaTradingEnvironment>> =
   'paper-api.alpaca.markets': 'paper',
   'api.alpaca.markets': 'live',
 };
+
+const ALPACA_DATA_BASE_URL = 'https://data.alpaca.markets';
 
 const BASE_URL_BY_ENVIRONMENT: Readonly<Record<AlpacaTradingEnvironment, string>> = {
   paper: 'https://paper-api.alpaca.markets',
@@ -299,6 +319,7 @@ export interface AlpacaHttpBrokerClientOptions {
   apiSecret?: string;
   environment?: AlpacaTradingEnvironment;
   baseUrl?: string;
+  dataBaseUrl?: string;
   timeoutMs?: number;
   retry?: RetryConfig;
 }
@@ -315,10 +336,11 @@ async function parseAlpacaJson(response: Response, context: string): Promise<unk
   }
 }
 
-export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
+export class AlpacaHttpBrokerClient implements AlpacaBrokerClient, AlpacaQuoteClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
   readonly baseUrl: string;
+  readonly dataBaseUrl: string;
   private readonly timeoutMs: number;
   private readonly retry: RetryConfig;
 
@@ -341,6 +363,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
       environment,
     );
     this.baseUrl = resolveBaseUrl(environment, options.baseUrl);
+    this.dataBaseUrl = options.dataBaseUrl ?? ALPACA_DATA_BASE_URL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.retry = options.retry ?? DEFAULT_RETRY_CONFIG;
   }
@@ -359,20 +382,24 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
     context: string,
     validate: (body: unknown, context: string) => T,
     retry: RetryConfig = this.retry,
+    origin: string = this.baseUrl,
   ): Promise<T> {
     return withRetry<T>(
       async () =>
-        validate(await parseAlpacaJson(await this.send(path, init, context), context), context),
+        validate(
+          await parseAlpacaJson(await this.send(`${origin}${path}`, init, context), context),
+          context,
+        ),
       retry,
       isRetryableAlpacaBrokerError,
     );
   }
 
-  private async send(path: string, init: AlpacaRequestInit, context: string): Promise<Response> {
+  private async send(url: string, init: AlpacaRequestInit, context: string): Promise<Response> {
     let response: Response;
     try {
       response = await fetchWithTimeout(
-        `${this.baseUrl}${path}`,
+        url,
         { ...init, headers: this.headers(init) },
         this.timeoutMs,
       );
@@ -460,6 +487,18 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient {
       { method: 'GET' },
       'getAccount',
       validateAlpacaAccount,
+    );
+  }
+
+  // No feed parameter, so Alpaca answers from the account's own data feed (David 2026-10-08, #2024)
+  async getLatestQuote(symbol: string): Promise<AlpacaLatestQuote> {
+    return this.request<AlpacaLatestQuote>(
+      `/v2/stocks/${encodeURIComponent(symbol)}/quotes/latest`,
+      { method: 'GET' },
+      'getLatestQuote',
+      validateAlpacaLatestQuote,
+      this.retry,
+      this.dataBaseUrl,
     );
   }
 
