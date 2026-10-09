@@ -812,6 +812,8 @@ function fakeAlpaca(
   return client(orders, filled);
 }
 
+// A filled bracket as measured in #2086: the take-profit rests `new` and the stop stays `held`, off
+// the open listing
 function filledAt(order: AlpacaOrder, clock: SimulatedClock): AlpacaOrder {
   return {
     ...order,
@@ -819,7 +821,26 @@ function filledAt(order: AlpacaOrder, clock: SimulatedClock): AlpacaOrder {
     filled_qty: order.qty,
     filled_avg_price: order.limit_price ?? '0',
     filled_at: clock.now().toISOString(),
+    legs: (order.legs ?? []).map((leg) => ({
+      ...leg,
+      status: leg.type === 'stop' ? 'held' : 'new',
+    })),
   };
+}
+
+function openParts(order: AlpacaOrder): AlpacaOrder[] {
+  const { legs, ...parent } = order;
+  if (order.status !== 'filled') return [parent];
+  return (legs ?? [])
+    .filter((leg) => leg.status === 'new')
+    .map((leg) => ({
+      ...leg,
+      client_order_id: leg.client_order_id ?? leg.id,
+      symbol: order.symbol,
+      side: leg.side ?? order.side,
+      qty: leg.qty ?? order.qty,
+      order_class: order.order_class,
+    }));
 }
 
 function client(
@@ -829,8 +850,20 @@ function client(
   return {
     orders,
     submitOrder: vi.fn((request) => {
+      const id = `alp-${orders.length + 1}`;
+      const leg = (suffix: string, type: 'limit' | 'stop') => ({
+        id: `${id}-${suffix}`,
+        client_order_id: `${id}-${suffix}-uuid`,
+        side: request.side === 'buy' ? ('sell' as const) : ('buy' as const),
+        qty: request.qty,
+        type,
+        status: 'held',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+      });
       const order: AlpacaOrder = {
-        id: `alp-${orders.length + 1}`,
+        id,
         client_order_id: request.client_order_id,
         symbol: request.symbol,
         side: request.side,
@@ -841,7 +874,10 @@ function client(
         filled_avg_price: null,
         filled_at: null,
         limit_price: request.limit_price,
-        legs: [],
+        legs: [
+          { ...leg('tp', 'limit'), limit_price: request.take_profit.limit_price },
+          { ...leg('sl', 'stop'), stop_price: request.stop_loss.stop_price },
+        ],
       };
       orders.push(order);
       return Promise.resolve(order);
@@ -859,8 +895,10 @@ function client(
     submitMarketOrder: vi.fn().mockRejectedValue(new Error('unused')),
     submitOcoOrder: vi.fn().mockRejectedValue(new Error('unused')),
     cancelOrder: vi.fn().mockResolvedValue(undefined),
-    listOpenOrders: vi.fn().mockResolvedValue([]),
-    listOrderHistory: vi.fn().mockResolvedValue([]),
+    listOpenOrders: vi.fn(() => Promise.resolve(orders.map(filled).flatMap(openParts))),
+    listOrderHistory: vi.fn((symbols: readonly string[]) =>
+      Promise.resolve(orders.filter((order) => symbols.includes(order.symbol)).map(filled)),
+    ),
     getPositions: vi.fn(() =>
       Promise.resolve(
         orders
@@ -975,6 +1013,16 @@ describe('processSignals, paper with a fake Alpaca', () => {
     await after.root.run();
     expect(after.root.books.position('signals/no-veto', 'UP')).toBeUndefined();
     expect(after.root.books.position('signals/primary', 'UP')?.qty).toBe(35);
+    expect(
+      after.root.db
+        .prepare(
+          "SELECT trading_date, status FROM v2_reconciles WHERE source = 'broker' AND trading_date > ?",
+        )
+        .all(D),
+    ).toEqual([
+      { trading_date: '2026-10-01', status: 'clean' },
+      { trading_date: '2026-10-02', status: 'clean' },
+    ]);
   });
 
   it('submits a buy-stop primary as a stop-limit parent: stop at the zone low, limit at its high', async () => {

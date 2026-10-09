@@ -54,17 +54,22 @@ interface Broker {
 function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient {
   const orders: AlpacaOrder[] = [];
   const filledQty = (order: AlpacaOrder) => Math.floor(Number(order.qty) * broker.filledShare);
+  const targetStatus = (filled: boolean): string => {
+    if (broker.stopFilledAt !== undefined) return 'canceled';
+    return filled ? 'new' : 'held';
+  };
   const view = (order: AlpacaOrder): AlpacaOrder => {
     const qty = filledQty(order);
+    const filled = qty === Number(order.qty);
     const [target, stop] = order.legs as [Leg, Leg];
     return {
       ...order,
-      status: qty < Number(order.qty) ? 'partially_filled' : 'filled',
+      status: filled ? 'filled' : 'partially_filled',
       filled_qty: String(qty),
       filled_avg_price: qty > 0 ? (order.limit_price ?? null) : null,
       filled_at: qty > 0 ? clock.now().toISOString() : null,
       legs: [
-        target,
+        { ...target, status: targetStatus(filled) },
         {
           ...stop,
           ...(broker.stopFilledAt === undefined
@@ -85,6 +90,9 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
       const id = `alp-${orders.length + 1}`;
       const leg = (suffix: string, type: Leg['type']): Leg => ({
         id: `${id}-${suffix}`,
+        client_order_id: `${id}-${suffix}-uuid`,
+        side: request.side === 'buy' ? 'sell' : 'buy',
+        qty: request.qty,
         type,
         status: 'held',
         filled_qty: '0',
@@ -104,7 +112,7 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
         filled_at: null,
         limit_price: request.limit_price,
         legs: [
-          leg('tp', 'limit'),
+          { ...leg('tp', 'limit'), limit_price: request.take_profit.limit_price },
           { ...leg('sl', 'stop'), stop_price: request.stop_loss.stop_price },
         ],
       };
@@ -126,21 +134,28 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
     cancelOrder: vi.fn().mockResolvedValue(undefined),
     listOpenOrders: vi.fn(() =>
       Promise.resolve(
-        held().map((order) => ({
-          ...order,
-          id: `${order.id}-sl`,
-          client_order_id: `${order.client_order_id}-stop`,
-          side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
-          type: 'stop',
-          order_class: 'simple',
-          status: 'new',
-          qty: String(filledQty(order)),
-          filled_qty: '0',
-          stop_price: order.legs?.[1]?.stop_price ?? null,
-        })),
+        orders.flatMap((order) =>
+          (view(order).legs ?? [])
+            .filter((leg) => leg.status === 'new')
+            .map((leg) => ({
+              ...leg,
+              client_order_id: leg.client_order_id ?? leg.id,
+              symbol: order.symbol,
+              side: leg.side ?? order.side,
+              qty: leg.qty ?? order.qty,
+              order_class: 'bracket',
+            })),
+        ),
       ),
     ),
-    listOrderHistory: vi.fn().mockResolvedValue([]),
+    listOrderHistory: vi.fn((symbols: readonly string[]) => {
+      const history = orders.filter((order) => symbols.includes(order.symbol)).map(view);
+      if (broker.stopAtReconcile) {
+        broker.stopAtReconcile = false;
+        broker.stopFilledAt = clock.now().toISOString();
+      }
+      return Promise.resolve(history);
+    }),
     getPositions: vi.fn(() =>
       Promise.resolve(
         held().map((order) => ({
@@ -151,13 +166,7 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
         })),
       ),
     ),
-    getAccount: vi.fn(() => {
-      if (broker.stopAtReconcile) {
-        broker.stopAtReconcile = false;
-        broker.stopFilledAt = clock.now().toISOString();
-      }
-      return Promise.resolve({ cash: '100000', equity: '100000' });
-    }),
+    getAccount: vi.fn().mockResolvedValue({ cash: '100000', equity: '100000' }),
   };
 }
 
