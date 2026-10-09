@@ -15,9 +15,10 @@ import {
   runVolTargetIndexAgainst,
   runVolTargetTrialAgainst,
 } from './backtest-cli.js';
+import { walkForwardRanges } from './backtest-verdict.js';
 import { CanaryLog } from './canary-log.js';
 import type { CycleCompositionOptions } from './compose.js';
-import { candidateOutcome, flipsSignAtDoubledCost } from './cost-stress.js';
+import { baselinePicksAt, candidateOutcome, costStress } from './cost-stress.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
 import { CROSS_ASSET_TREND_TIDMS, VOL_TARGET_INDEX_TIDMS } from './signal/index.js';
@@ -181,12 +182,17 @@ describe('runCrossAssetTrendAgainst', () => {
       expect(report.baseline.dates).toEqual(report.stressed.dates);
       expect(report.minbtlLimit).toBeGreaterThan(0);
       expect(report.windowYears).toBeGreaterThan(0);
-      expect(report.signFlipped).toBe(
-        flipsSignAtDoubledCost(
-          candidateOutcome(report.baseline),
-          candidateOutcome(report.stressed),
-        ),
+      const ranges = walkForwardRanges(report.baseline.dates.length, 16, undefined);
+      expect(baselinePicksAt(report.baseline, report.baseline, ranges)).toEqual(
+        candidateOutcome(report.baseline),
       );
+      const stress = costStress(
+        candidateOutcome(report.baseline),
+        candidateOutcome(report.stressed),
+        baselinePicksAt(report.baseline, report.stressed, ranges),
+      );
+      expect(report.baseline.verdict.costStress).toEqual(stress);
+      expect(report.signFlipped).toBe(stress.flipped.length > 0);
       expect(report.baseline.verdict.checks.holdsSignAtDoubledCost).toBe(!report.signFlipped);
       expect(report.baseline.verdict.pass).toBe(
         Object.values(report.baseline.verdict.checks).every(Boolean),
@@ -541,6 +547,11 @@ describe('runVolTargetTrialAgainst', () => {
           turnsNonPositive(verdict.scaled.totalReturn, stressed.scaled.totalReturn),
       );
       expect(verdict.checks.holdsSignAtDoubledCost).toBe(!report.signFlipped);
+      expect(verdict.costStress.baselinePicks).toEqual(verdict.costStress.ownPicks);
+      expect(verdict.costStress.ownPicks).toEqual({
+        sharpeOutOfSample: stressed.scaled.sharpeOutOfSample,
+        totalReturn: stressed.scaled.totalReturn,
+      });
       const rerun = await run();
       expect(ledger.count()).toBe(1);
       expect(rerun).toEqual(report);

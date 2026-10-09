@@ -25,13 +25,19 @@ import {
   runBacktest,
   simulateBacktest,
 } from './backtest.js';
-import type { OneBarDelay, RandomEntries, TrialSeries } from './backtest-verdict.js';
+import {
+  type OneBarDelay,
+  type RandomEntries,
+  type TrialSeries,
+  walkForwardRanges,
+} from './backtest-verdict.js';
 import { CanaryLog } from './canary-log.js';
 import {
+  baselinePicksAt,
   type CostStressed,
   type CostStressedResult,
   candidateOutcome,
-  flipsSignAtDoubledCost,
+  costStress,
   trialOutcome,
   withCostStress,
 } from './cost-stress.js';
@@ -221,12 +227,18 @@ async function runCandidateAgainst(
     spec.window.to,
     spec.calendarReference,
   );
-  const signFlipped = flipsSignAtDoubledCost(
+  const stress = costStress(
     candidateOutcome(baseline),
     candidateOutcome(stressed),
+    baselinePicksAt(
+      baseline,
+      stressed,
+      walkForwardRanges(stressed.dates.length, WALK_FORWARD_FOLDS, spec.embargo),
+    ),
   );
+  const signFlipped = stress.flipped.length > 0;
   return {
-    baseline: { ...baseline, verdict: withCostStress(baseline.verdict, signFlipped) },
+    baseline: { ...baseline, verdict: withCostStress(baseline.verdict, stress) },
     stressed,
     trialsCounted: ledger.count(),
     minbtlLimit,
@@ -491,7 +503,7 @@ async function volTargetTrialPass(
 }
 
 // David 2026-10-08 (#1860): doc 67's 2x modelled-cost rerun runs as it does for candidates, on
-// the same trial hash
+// the same trial hash. The run holds one trial, so the 1x pick priced at 2x is the 2x run's own
 export async function runVolTargetTrialAgainst(
   market: MarketData,
   bars: BarsSource,
@@ -505,12 +517,11 @@ export async function runVolTargetTrialAgainst(
   const run = { arms, market, halfSpreadBps, ledger, logger, window };
   const base = await volTargetTrialPass(run, 1);
   const stressed = await volTargetTrialPass(run, COST_STRESS_MULTIPLE);
-  const signFlipped = flipsSignAtDoubledCost(
-    trialOutcome(base.verdict),
-    trialOutcome(stressed.verdict),
-  );
+  const atDoubledCost = trialOutcome(stressed.verdict);
+  const stress = costStress(trialOutcome(base.verdict), atDoubledCost, atDoubledCost);
+  const signFlipped = stress.flipped.length > 0;
   return {
-    verdict: withCostStress(base.verdict, signFlipped),
+    verdict: withCostStress(base.verdict, stress),
     stressed: stressed.verdict,
     signFlipped,
     dataSanity: dataSanity(bars, constituentsFor, base.dates),
