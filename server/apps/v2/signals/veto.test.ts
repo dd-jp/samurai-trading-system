@@ -3,6 +3,7 @@ import type { V2Bar } from '../../../../contracts/index.js';
 import { MockLlmClient, type SpendCap, UNCAPPED_SPEND } from '../../../shared/debate/index.js';
 import {
   callFailed,
+  panelVeto,
   parseVetoReply,
   SIGNAL_VETO_BARS,
   SIGNAL_VETO_PROMPT,
@@ -96,6 +97,19 @@ describe('parseVetoReply', () => {
     ['null {} null', 'veto is not a boolean'],
   ])('refuses %s', (raw, reason) => {
     expect(parseVetoReply(raw)).toEqual({ valid: false, reason });
+  });
+});
+
+describe('panelVeto', () => {
+  it('asks the panel judge under the signal trace, whichever attempt it is', async () => {
+    const judge = new MockLlmClient();
+    judge.enqueueText('{"veto": true, "reason": "stop inside noise"}');
+    const verdict = await panelVeto({ judge, spendCap: UNCAPPED_SPEND })('sig-1', 2, INPUT);
+    expect(verdict).toEqual({ kind: 'veto', reason: 'stop inside noise' });
+    expect(judge.requests[0]?.context.attribution).toEqual({
+      trace_id: 'v2-signal-sig-1',
+      stage: 'v2_signal_veto',
+    });
   });
 });
 

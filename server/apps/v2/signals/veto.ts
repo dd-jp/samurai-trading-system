@@ -33,6 +33,19 @@ export type SignalVeto =
   | { readonly kind: 'veto'; readonly reason: string }
   | { readonly kind: 'unavailable'; readonly reason: string };
 
+export type SignalVetoAttempt = 1 | 2;
+
+export type SignalVetoCall = (
+  signalId: string,
+  attempt: SignalVetoAttempt,
+  input: SignalVetoInput,
+) => Promise<SignalVeto>;
+
+export const INTERRUPTED_VETO: SignalVeto = {
+  kind: 'unavailable',
+  reason: 'llm_call_failed: the call was interrupted before its verdict was journalled',
+};
+
 // David 2026-10-09 (#2024): only a call failure earns a retry; a spend-cap refusal is final
 export function callFailed(veto: SignalVeto): boolean {
   return veto.kind === 'unavailable' && veto.reason.startsWith(CALL_FAILED);
@@ -119,4 +132,9 @@ export async function signalVeto(
   } catch (error) {
     return { kind: 'unavailable', reason: `${CALL_FAILED} ${describeThrownSafely(error)}` };
   }
+}
+
+export function panelVeto(panel: { judge: LlmClient; spendCap: SpendCap }): SignalVetoCall {
+  return (signalId, _attempt, input) =>
+    signalVeto(panel.judge, panel.spendCap, input, `v2-signal-${signalId}`);
 }

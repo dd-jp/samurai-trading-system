@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import BetterSqlite3 from 'better-sqlite3';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { LatestQuote, LatestQuoteSource } from '../../../../contracts/index.js';
 import { ParquetBarStore } from '../../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../../providers/calendar/index.js';
@@ -17,6 +17,7 @@ import { migratedMemoryStore } from '../../../shared/store/migrated-template.js'
 import { JournalReader } from '../api/journal-reader.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from '../execution/alpaca/alpaca-client.js';
 import { composeV2Root, type V2Root, type V2RootOptions } from '../index.js';
+import { type ReplayCliOptions, replayFromFiles } from '../replay-cli.js';
 import { sleeveCapitalYear } from '../risk/allocation.js';
 import { CapitalConfigStore, dailyCapGbp } from '../risk/index.js';
 import { RunLease } from '../run-lease.js';
@@ -35,10 +36,14 @@ const CALENDAR = new UsEquityRegularHoursCalendar();
 interface Fixtures {
   readonly directory: string;
   readonly storePath: string;
-  readonly base: Pick<
-    V2RootOptions,
-    'barStoreRoot' | 'constituentsPath' | 'fxPath' | 'spreadsPath' | 'saxoSpreadsPath'
-  >;
+  readonly base: {
+    readonly [K in
+      | 'barStoreRoot'
+      | 'constituentsPath'
+      | 'fxPath'
+      | 'spreadsPath'
+      | 'saxoSpreadsPath']: string;
+  };
 }
 
 const dirs: string[] = [];
@@ -1767,5 +1772,257 @@ describe('a failed veto call gets one more attempt (David 2026-10-09, #2024)', (
       action: 'skip',
       reason: 'vetoed: unavailable: llm_call_failed: upstream 503',
     });
+  });
+});
+
+describe('replay of a signals day (#2096)', () => {
+  const LATER = new Date(IN_SESSION.getTime() + 30_000);
+  const NEXT = '2026-10-01';
+  const FAIL = new Error('upstream 503');
+  const PASS = '{"veto": false, "reason": "trend is flat, stop outside noise"}';
+
+  function vetoFailingOnce(): Script {
+    let vetoes = 0;
+    return (request) => {
+      const prompt = request.messages[0]?.content ?? '';
+      if (!prompt.includes('Signal veto persona')) {
+        return '{"stance":"neutral","rationale":"flat","converged":true}';
+      }
+      vetoes += 1;
+      if (vetoes === 1) throw FAIL;
+      return PASS;
+    };
+  }
+
+  async function journalDay() {
+    const fixtures = await writeFixtures();
+    dirs.splice(dirs.indexOf(fixtures.directory), 1);
+    const clock = new SimulatedClock(new Date(`${D}T06:30:00.000Z`));
+    const alpaca = fakeAlpaca(clock);
+    const options: Partial<V2RootOptions> = {
+      dryRun: false,
+      nousBaseUrl: 'https://nous.test/v1',
+      nousApiKey: 'present',
+      alpacaClient: alpaca,
+      quotes: quotesAt(quote(25)),
+    };
+    const day = open(fixtures, clock, options, vetoFailingOnce());
+    await day.root.run();
+    clock.advanceTo(IN_SESSION);
+    const id = post(day.signals, {});
+    const thin = post(day.signals, { symbol: 'THIN' });
+    const first = await day.root.processSignals(day.signals, IN_SESSION);
+    clock.advanceTo(LATER);
+    const second = await day.root.processSignals(day.signals, LATER);
+    clock.advanceTo(new Date(`${NEXT}T06:30:00.000Z`));
+    await open(fixtures, clock, options, vetoFailingOnce()).root.run();
+    for (const root of roots.splice(0)) root.close();
+    for (const handle of handles.splice(0)) handle.close();
+    const replay: ReplayCliOptions = {
+      ...fixtures.base,
+      tradingDate: D,
+      storePath: fixtures.storePath,
+      cfdCataloguePath: join(fixtures.directory, 'none.json'),
+    };
+    return { fixtures, replay, id, thin, first, second, alpaca };
+  }
+
+  let journalled: Awaited<ReturnType<typeof journalDay>>;
+  let tampers = 0;
+  beforeAll(async () => {
+    journalled = await journalDay();
+  });
+  afterAll(() => {
+    rmSync(journalled.fixtures.directory, { recursive: true, force: true });
+  });
+
+  function tampered(
+    replay: ReplayCliOptions,
+    sql: string,
+    ...triggers: string[]
+  ): ReplayCliOptions {
+    tampers += 1;
+    const storePath = `${replay.storePath}.tampered-${tampers}`;
+    copyFileSync(replay.storePath, storePath);
+    const db = new BetterSqlite3(storePath);
+    try {
+      for (const trigger of triggers) db.exec(`DROP TRIGGER ${trigger}`);
+      if (db.prepare(sql).run().changes === 0) throw new Error(`tamper changed nothing: ${sql}`);
+    } finally {
+      db.close();
+    }
+    return { ...replay, storePath };
+  }
+
+  it('replays the day identical: a retried veto, a dollar-volume refusal, the entry quote, and the next day the shadow fill', async () => {
+    const { replay, id, thin, first, second, alpaca } = journalled;
+    expect(first).toMatchObject({
+      outcomes: expect.arrayContaining([
+        expect.objectContaining({ signal_id: id, status: 'failed' }),
+        expect.objectContaining({ signal_id: thin, status: 'refused' }),
+      ]),
+    });
+    expect(second).toMatchObject({ outcomes: [{ signal_id: id, status: 'processed' }] });
+    expect(alpaca.submitOrder).toHaveBeenCalledTimes(1);
+
+    const day = await replayFromFiles(replay);
+    expect(day).toMatchObject({ tradingDate: D, signals: 3 });
+    expect(day.divergences).toEqual([]);
+    expect(alpaca.submitOrder).toHaveBeenCalledTimes(1);
+
+    const next = await replayFromFiles({ ...replay, tradingDate: NEXT });
+    expect(next.divergences).toEqual([]);
+    expect(next.fills).toBeGreaterThan(0);
+  });
+
+  it('shows a changed retry verdict as a signal decision divergence', async () => {
+    const { replay } = journalled;
+
+    const result = await replayFromFiles(
+      tampered(
+        replay,
+        "UPDATE v2_signal_veto_retry_verdicts SET reason = 'edited'",
+        'v2_signal_veto_retry_verdicts_no_update',
+      ),
+    );
+
+    expect(result.divergences).toContainEqual(
+      expect.objectContaining({ kind: 'row_field', stage: 'signal_decisions', field: 'reason' }),
+    );
+  });
+
+  it('a missing retry verdict surfaces as the input the replay lacks, with no LLM call', async () => {
+    const { replay, id } = journalled;
+
+    const result = await replayFromFiles(
+      tampered(
+        replay,
+        'DELETE FROM v2_signal_veto_retry_verdicts',
+        'v2_signal_veto_retry_verdicts_no_delete',
+      ),
+    );
+
+    expect(result.divergences).toContainEqual({
+      kind: 'row_field',
+      stage: 'signal_events',
+      key: `${id}#2`,
+      field: 'outcome',
+      journalled: expect.stringMatching(/^processed: veto pass: /),
+      replayed: `failed: replay: no journalled attempt 2 veto verdict for signal ${id}, and the replay makes no LLM call`,
+    });
+  });
+
+  it('reads the entry quote back from the journalled decisions', async () => {
+    const { replay } = journalled;
+
+    const result = await replayFromFiles(
+      tampered(
+        replay,
+        `UPDATE v2_decisions SET payload = json_set(payload, '$.entry_quote.ask', 24.9)
+          WHERE book_id LIKE 'signals/%'`,
+        'v2_decisions_no_update',
+      ),
+    );
+
+    expect(result.divergences).toContainEqual(
+      expect.objectContaining({ kind: 'row_field', stage: 'signal_orders', field: 'payload' }),
+    );
+  });
+
+  it('compares the dollar-volume refusal', async () => {
+    const { replay } = journalled;
+
+    const result = await replayFromFiles(
+      tampered(
+        replay,
+        "UPDATE v2_refusals SET message = 'edited' WHERE parameter = 'below_dollar_volume_floor'",
+      ),
+    );
+
+    expect(result.divergences).toEqual([
+      expect.objectContaining({ kind: 'row_field', stage: 'signal_refusals', field: 'message' }),
+    ]);
+  });
+
+  it('leaves a day whose signal event precedes the mark to review by hand', async () => {
+    const { replay } = journalled;
+
+    const result = await replayFromFiles(
+      tampered(
+        replay,
+        `UPDATE v2_signal_events SET recorded_at = '${D}T06:00:00.000Z' WHERE status = 'refused'`,
+        'v2_signal_events_no_update',
+      ),
+    );
+
+    expect(result.divergences).toEqual([
+      { kind: 'signals_not_replayed', tradingDate: D, reason: 'before_mark', events: 3 },
+    ]);
+  });
+
+  it('leaves signal events on a day with no mark to review by hand', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const handle = openSharedStore(fixtures.storePath);
+    const signals = new SignalStore(handle, clock);
+    signals.appendEvent(post(signals, {}), 'failed', 'disk full');
+    handle.close();
+
+    const result = await replayFromFiles({
+      ...journalled.replay,
+      ...fixtures.base,
+      storePath: fixtures.storePath,
+    });
+
+    expect(result).toMatchObject({ decisions: 0, signals: 1 });
+    expect(result.divergences).toEqual([
+      { kind: 'signals_not_replayed', tradingDate: D, reason: 'unmarked', events: 1 },
+    ]);
+  });
+
+  it('replays a signal refused under a pause set after the mark identical', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(new Date(`${D}T06:30:00.000Z`));
+    const day = open(fixtures, clock);
+    await day.root.run();
+    clock.advanceTo(IN_SESSION);
+    day.root.db
+      .prepare(
+        "INSERT INTO v2_controls (action, reason, source, idempotency_key, set_at) VALUES ('pause', 'news day', 'test', 'k-2096', ?)",
+      )
+      .run(`${D}T13:59:00.000Z`);
+    const id = post(day.signals, {});
+    await day.root.processSignals(day.signals, IN_SESSION);
+    expect(day.signals.get(id)?.events.at(-1)?.detail).toBe('manual_control_paused: news day');
+    for (const root of roots.splice(0)) root.close();
+    for (const handle of handles.splice(0)) handle.close();
+
+    const result = await replayFromFiles({
+      ...journalled.replay,
+      ...fixtures.base,
+      storePath: fixtures.storePath,
+    });
+
+    expect(result).toMatchObject({ signals: 1, divergences: [] });
+  });
+
+  it('replays a dry-run day, which reads no quote, identical', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(new Date(`${D}T06:30:00.000Z`));
+    const day = open(fixtures, clock);
+    await day.root.run();
+    clock.advanceTo(IN_SESSION);
+    post(day.signals, {});
+    await day.root.processSignals(day.signals, IN_SESSION);
+    for (const root of roots.splice(0)) root.close();
+    for (const handle of handles.splice(0)) handle.close();
+
+    const result = await replayFromFiles({
+      ...journalled.replay,
+      ...fixtures.base,
+      storePath: fixtures.storePath,
+    });
+
+    expect(result).toMatchObject({ signals: 1, divergences: [] });
   });
 });

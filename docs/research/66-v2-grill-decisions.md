@@ -667,7 +667,7 @@ David answered the review of PR #2092 (finding F1), recorded on [#2024](https://
 - The verdict is journalled in a new append-only table, `v2_signal_vetoes` (migration 0099), keyed by the signal id. It holds the kind and the reason, and is written right after the veto returns and before the quote read, so a pass that fails on the quote, or a crash after the veto, keeps the verdict. A retry reads it and makes no LLM call; a vetoed signal stays vetoed.
 - The cached verdict includes `unavailable`. A veto that could not run on the first pass (spend cap, call failure) is not retried, so the primary stays skipped for that signal. This is the literal reading of "runs once" and is recorded in the spec's known limits. *Superseded for call failures by ruling 3 below.*
 - A signal entered after retries journals the same decisions as one entered on its first pass, apart from its own signal id; a test holds this.
-- `npm run v2:replay` replays the debate and arm 2 decisions only; it does not re-run the signals sleeve. The journalled verdict is what a signals replay would read, but none is built yet.
+- `npm run v2:replay` replays the debate and arm 2 decisions only; it does not re-run the signals sleeve. The journalled verdict is what a signals replay would read, but none is built yet. *Superseded 2026-10-09 by #2096 (build notes after ruling 5).*
 
 3. **A failed veto call gets one more attempt (David, 2026-10-09).** When the veto comes back `unavailable` because the LLM call failed, it gets one more attempt on a later pass in the same session, and that second verdict is final. An `unavailable` caused by the spend cap stays final on the first attempt, as built.
 
@@ -687,6 +687,13 @@ David answered the review of PR #2097 (findings F1 and F2), recorded on [#2024](
 - Migration 0100 adds two append-only tables; 0099 is untouched. `v2_signal_veto_claims` holds one row per `(signal_id, attempt)`, attempt 1 or 2, written before the call; a trigger refuses an attempt-2 claim until the first verdict is in `v2_signal_vetoes`. `v2_signal_veto_retry_verdicts` holds the second verdict, keyed by the signal and tied by a foreign key to its attempt-2 claim. The first verdict stays in `v2_signal_vetoes`.
 - A restart that finds attempt 1 claimed with no verdict journals the first verdict as `unavailable` (`llm_call_failed: the call was interrupted before its verdict was journalled`) and runs attempt 2 in the same pass, since that pass is already a later one. A restart that finds attempt 2 claimed with no verdict journals the same reason as the final verdict and makes no call.
 - The spend cap is checked inside the veto call, after the claim, so a capped attempt still writes its claim and then its final verdict, with no LLM call.
+
+*Built 2026-10-09 ([#2096](https://github.com/dd-jp/samurai-trading-system/issues/2096)): the signals replay.* Build notes (not rulings):
+
+- `npm run v2:replay` re-runs the day's signals passes after the cycle replay (`server/apps/v2/replay-signals.ts`): each settled signal event of the day's US session, in journal order, at its journalled instant. Each veto attempt reads its journalled verdict in place of the LLM, the quote is the `entry_quote` on that pass's decisions, and the primary's bracket is answered from its journalled order. Signal events, veto claims and verdicts, signals decisions, refusals, entry orders and `veto_rate` faults are compared with the journal. Ruling 2's "a replayed day must still produce the same decisions" is held by a test that journals a paper day with a retried veto, a dollar-volume refusal and an entry quote, and replays it and the next day, whose cycle books the shadow fill, identical.
+- A missing verdict or quote is never invented: the replay fails that event with the input it lacks, which shows as a divergence on the event.
+- A pass's own start instant is not journalled, nor which signals it took. A day whose signal events all follow the cycle's mark replays; one with a signal event at or before the mark, or with signal events and no mark, is reported as `signals_not_replayed` for review by hand, following the #1990 precedent for a day that ran more than once.
+- A pass that crashed after journalling an entry, with no settle event, is not re-run, so the next pass diverges where the journal closed it as `already_submitted`. Recorded in the spec's known limits.
 
 ## Still open
 
