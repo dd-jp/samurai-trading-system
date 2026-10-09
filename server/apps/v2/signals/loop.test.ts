@@ -5,16 +5,25 @@ import { SignalLoop, type SignalLoopDeps } from './loop.js';
 
 const NOW = new Date('2026-09-30T14:00:00.000Z');
 
+const IDLE_SIGNALS: SignalProcessorStore = {
+  due: () => [],
+  appendEvent: () => {},
+  vetoVerdicts: () => [],
+  recordVeto: () => {},
+  vetoFor: () => undefined,
+  claimVeto: () => {},
+  vetoClaimed: () => false,
+  recordRetryVeto: () => {},
+  retryVetoFor: () => undefined,
+};
+
 function harness(overrides: Partial<SignalLoopDeps> = {}, pass?: () => Promise<SignalPass>) {
   const logs: LogEntry[] = [];
   const opened: string[] = [];
   const closed: string[] = [];
   const signals: SignalProcessorStore = {
+    ...IDLE_SIGNALS,
     due: () => [{ signal_id: 's1' } as never],
-    appendEvent: () => {},
-    vetoVerdicts: () => [],
-    recordVeto: () => {},
-    vetoFor: () => undefined,
   };
   const processSignals = vi.fn(
     pass ?? (() => Promise.resolve<SignalPass>({ ran: true, outcomes: [] })),
@@ -48,13 +57,7 @@ describe('SignalLoop', () => {
     await closedMarket.loop.tick();
     expect(closedMarket.opened).toEqual([]);
     const idle = harness({
-      signals: {
-        due: () => [],
-        appendEvent: () => {},
-        vetoVerdicts: () => [],
-        recordVeto: () => {},
-        vetoFor: () => undefined,
-      },
+      signals: IDLE_SIGNALS,
     });
     await idle.loop.tick();
     expect(idle.opened).toEqual([]);
@@ -183,13 +186,7 @@ describe('SignalLoop', () => {
 
   it('has no pass age while nothing is due', async () => {
     const idle = harness({
-      signals: {
-        due: () => [],
-        appendEvent: () => {},
-        vetoVerdicts: () => [],
-        recordVeto: () => {},
-        vetoFor: () => undefined,
-      },
+      signals: IDLE_SIGNALS,
     });
     await idle.loop.tick();
     expect(idle.loop.passAgeMs()).toBeUndefined();
