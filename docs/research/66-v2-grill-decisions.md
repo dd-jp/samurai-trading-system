@@ -664,13 +664,13 @@ David ruled on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/18
 1. **The vol-target trial's build defaults are accepted as built (#1860).** These are the choices listed under the 2026-10-07 rulings above: the start on 2016-01-04, the £10,000 start capital, PBO by CSCV over the pair {baseline, trial} in 16 folds with a 10-day embargo, DSR and the drawdown check over the full window, a year inside the cap when its loss is at most the cap times 30%, and the path noise fixed at 0.25.
 2. **The trial runs doc 67's 2× modelled-cost rerun, as candidates do (#1860).** The rerun uses the same trial hash, so it is not a new counted trial.
 3. **The one-bar-delay canary does not bind the trial (#1860).** The look-ahead canary applies to candidates only, and this is a sizing trial on arm 2's own entries.
-4. **Both data-sanity defaults are accepted as built (#2074).** A 1.35× adjusted close-to-close jump flags a suspect bar, which David's ruling says is excluded. For mean reversion the universe checked is the union of constituents across the window, which keeps the test survivorship-safe.
+4. **Both data-sanity defaults are accepted as built (#2074).** A 1.35× adjusted close-to-close jump flags a suspect bar *(the ruling's text said such a bar is excluded; corrected 2026-10-09, below: it is reported only, not excluded)*. For mean reversion the universe checked is the union of constituents across the window, which keeps the test survivorship-safe.
 5. **Data spend does not count against the loss cap (#2025).** The EODHD feed picked on 2026-10-07 (with Alpaca's corporate actions as the US cross-check) costs about £180 a year. The £1,500 cap stays a net trading loss, marked to market. Data spend and LLM spend are separate operating budgets: tracked and reported, never deducted from the cap. Data spend also sits outside the ~$30 a month LLM cap.
 
 *Built 2026-10-08 (#1860), ruling 2* (`server/apps/v2/backtest-cli.ts`). Build notes (not rulings):
 
 - `npm run v2:backtest -- vol-target-sizing` now runs the trial twice: once at 1× modelled cost and once at 2×. The report carries `verdict` (1×), `stressed` (2×) and `signFlipped`. Both passes use `simulateBacktest`'s existing `costMultiple`, as the candidate runners do. It scales the spread, impact and fee legs together, in both arms, and stays out of the trial hash, so the rerun resolves to the same trial and the ledger count does not move. The backtest has no CFD route, so no CFD financing or borrow accrues. Saxo's 0.12% a year custody fee is a separate accrual and stays at 1×, as noted under candidate 1. Arm 2 trades US names at Alpaca in the backtest, so it is not charged.
-- `signFlipped` is true when the 2× pass flips `beatsBaselineOutOfSampleAfterHaircut`, the trial's counterpart of the candidates' `beatsBenchmarkAfterHaircut`. As for candidates, it is reported beside the verdict and does not enter `pass`. Doc 67's row says a flip flags the sleeve. Whether a flag fails the trial is not stated in the ruling, so it is left to David (below).
+- `signFlipped` is true when the 2× pass flips `beatsBaselineOutOfSampleAfterHaircut`, the trial's counterpart of the candidates' `beatsBenchmarkAfterHaircut`. As for candidates, it is reported beside the verdict and does not enter `pass`. Doc 67's row says a flip flags the sleeve. Whether a flag fails the trial is not stated in the ruling, so it is left to David (below). *(Superseded 2026-10-09, below: the flip is the trial's own Sharpe or return sign, and it fails the trial and candidates.)*
 - The code comments that called these defaults "awaiting David" now cite this ruling.
 - **A run on the snapshot bars, not the counted run.** On 2026-10-09 the trial ran on the bar store `npm run bars:snapshot` restores (the last commit that tracked it, `ff29a732`), against a scratch research ledger, which holds only Session B's 8 rows, so the trial is number 9 there. The Mac's store and ledger are the counted ones; its trial count is higher, which lowers the DSR. Both passes took 42 minutes on a shared 4-vCPU container. FAIL at both cost levels:
 
@@ -685,9 +685,9 @@ David ruled on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/18
   | Years inside the cap, both arms | all | all |
   | Checks passed | lower drawdown only | lower drawdown only |
 
-  `signFlipped` is false: the haircut check fails at both levels. The trial's own return and out-of-sample Sharpe do change sign at 2×, while unscaled arm 2 stays positive. The 1× gap to the baseline (−0.08) is inside the 0.25 path noise; the 2× gap (−0.32) is beyond it. The data-sanity block checked 722 series and flagged 148.
+  `signFlipped` is false: the haircut check fails at both levels *(under the 2026-10-09 rule below it is true, a second failing check)*. The trial's own return and out-of-sample Sharpe do change sign at 2×, while unscaled arm 2 stays positive. The 1× gap to the baseline (−0.08) is inside the 0.25 path noise; the 2× gap (−0.32) is beyond it. The data-sanity block checked 722 series and flagged 148.
 
-Awaiting David:
+Awaiting David *(both answered 2026-10-09, below)*:
 
 - **Does a 2× sign flip fail the trial, and which sign?** "As candidates do" is built as a reported flag on the haircut check, not a gated check, which matches the candidate runners. Candidate 1's run note above, though, counts the flip as one of the gate's checks. Doc 67's row says only "the sign". On the snapshot run the haircut check does not flip, but the trial's return and Sharpe do. Each reading is a one-line change.
 - **Ruling 4's "excluded".** The data-sanity block only reports a suspect bar; it does not drop it from the backtest. The ingest hygiene (`server/providers/bar-store/bar-hygiene.ts`) is a separate path. If David means the backtest should drop flagged bars, that is a build, and it changes candidate verdicts.
@@ -705,6 +705,21 @@ David answered the review of PR #2092 (finding F1), recorded on [#2024](https://
 - The cached verdict includes `unavailable`. A veto that could not run on the first pass (spend cap, call failure) is not retried, so the primary stays skipped for that signal. This is the literal reading of "runs once" and is recorded in the spec's known limits.
 - A signal entered after retries journals the same decisions as one entered on its first pass, apart from its own signal id; a test holds this.
 - `npm run v2:replay` replays the debate and arm 2 decisions only; it does not re-run the signals sleeve. The journalled verdict is what a signals replay would read, but none is built yet.
+
+## Rulings of 2026-10-09 — a 2× cost flip fails, suspect bars stay report-only (#1860, #2074)
+
+David answered the two points left awaiting him under the 2026-10-08 rulings above, on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/1860) and PR [#2074](https://github.com/dd-jp/samurai-trading-system/pull/2074).
+
+1. **A 2× cost flip fails (#1860).** A trial or candidate fails if its own out-of-sample Sharpe or its total return is positive at 1× modelled cost and ≤ 0 at 2×. This binds the vol-target trial and every S2 candidate. It replaces the reported-only flag on the haircut check. Candidate 1's run note treated a flip of that check as a gate check; a flip is now a gate check, but of the Sharpe and return signs.
+2. **Suspect bars stay report-only (#2074).** A bar whose adjusted close-to-close move is beyond 1.35× is flagged in the data-sanity block and stays in the backtest. A sample of the flagged bars is reviewed before David decides on exclusion. The 2026-10-08 ruling 4's "excluded" is corrected above.
+
+*Built 2026-10-09 (#1860), ruling 1* (`server/apps/v2/cost-stress.ts`, wired in `server/apps/v2/backtest-cli.ts`). Build notes (not rulings):
+
+- The 1× verdict carries a new check, `holdsSignAtDoubledCost`, which `pass` requires; the 2× verdict is reported as before and carries no such check. `signFlipped` now means the ruled flip, not a change in the haircut check.
+- For the trial, "its own" figures are the scaled arm's `sharpeOutOfSample` and its `totalReturn` over the whole window, the two figures quoted in the snapshot run above. For a candidate, the out-of-sample Sharpe is the walk-forward path's `strategySharpe` (before the haircut), and the total return is that of the trial each pass selects, over the whole window. The selection can differ between the two passes.
+- A value of exactly 0 at 2× counts as a flip; a value at or below 0 at 1× cannot flip.
+- On the snapshot run above, the trial's Sharpe goes from 0.125 to −0.225 and its return from +4.8% to −4.5%, so `holdsSignAtDoubledCost` fails alongside the haircut, DSR and PBO checks. The verdict stays FAIL.
+- No candidate's verdict changes. Candidates 1 and 2 fail at 1× on other checks, and a new check cannot lift a FAIL. Candidate 1's walk-forward Sharpe is negative at 1×, and candidate 2's walk-forward Sharpe is negative at 1× while its selected trial's return stays positive at 2× (£1,782 and £1,659 on a £1,400 book), so neither flips on the Sharpe, and candidate 2 does not flip on the return. Candidate 1's selected-trial return at each level is not in its run note, so whether it flips on the return is not known; the verdict is FAIL either way. Candidate 3 has not run.
 
 ## Still open
 

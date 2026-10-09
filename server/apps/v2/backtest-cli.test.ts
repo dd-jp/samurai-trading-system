@@ -17,6 +17,7 @@ import {
 } from './backtest-cli.js';
 import { CanaryLog } from './canary-log.js';
 import type { CycleCompositionOptions } from './compose.js';
+import { candidateOutcome, flipsSignAtDoubledCost } from './cost-stress.js';
 import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
 import { CROSS_ASSET_TREND_TIDMS, VOL_TARGET_INDEX_TIDMS } from './signal/index.js';
@@ -180,7 +181,16 @@ describe('runCrossAssetTrendAgainst', () => {
       expect(report.baseline.dates).toEqual(report.stressed.dates);
       expect(report.minbtlLimit).toBeGreaterThan(0);
       expect(report.windowYears).toBeGreaterThan(0);
-      expect(typeof report.signFlipped).toBe('boolean');
+      expect(report.signFlipped).toBe(
+        flipsSignAtDoubledCost(
+          candidateOutcome(report.baseline),
+          candidateOutcome(report.stressed),
+        ),
+      );
+      expect(report.baseline.verdict.checks.holdsSignAtDoubledCost).toBe(!report.signFlipped);
+      expect(report.baseline.verdict.pass).toBe(
+        Object.values(report.baseline.verdict.checks).every(Boolean),
+      );
       expect(report.regimeSplit).toBe(report.baseline.verdict.regimeSplit);
       expect(report.regimeSplit.periods.map((row) => row.period)).toContain('2020-crash');
       expect(report.dataSanity).toEqual({
@@ -525,10 +535,12 @@ describe('runVolTargetTrialAgainst', () => {
       expect([stressed.from, stressed.to]).toEqual([verdict.from, verdict.to]);
       expect(stressed.scaled.totalReturn).toBeLessThan(verdict.scaled.totalReturn);
       expect(stressed.baseline.totalReturn).toBeLessThan(verdict.baseline.totalReturn);
+      const turnsNonPositive = (base: number, doubled: number) => base > 0 && doubled <= 0;
       expect(report.signFlipped).toBe(
-        verdict.checks.beatsBaselineOutOfSampleAfterHaircut !==
-          stressed.checks.beatsBaselineOutOfSampleAfterHaircut,
+        turnsNonPositive(verdict.scaled.sharpeOutOfSample, stressed.scaled.sharpeOutOfSample) ||
+          turnsNonPositive(verdict.scaled.totalReturn, stressed.scaled.totalReturn),
       );
+      expect(verdict.checks.holdsSignAtDoubledCost).toBe(!report.signFlipped);
       const rerun = await run();
       expect(ledger.count()).toBe(1);
       expect(rerun).toEqual(report);

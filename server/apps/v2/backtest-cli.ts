@@ -28,6 +28,14 @@ import {
 import type { OneBarDelay, RandomEntries, TrialSeries } from './backtest-verdict.js';
 import { CanaryLog } from './canary-log.js';
 import {
+  type CostStressed,
+  type CostStressedResult,
+  candidateOutcome,
+  flipsSignAtDoubledCost,
+  trialOutcome,
+  withCostStress,
+} from './cost-stress.js';
+import {
   BarsMarketData,
   type BarsSource,
   CALENDAR_REFERENCE,
@@ -98,7 +106,7 @@ export interface BacktestCliOptions {
 }
 
 export interface CandidateRunReport {
-  readonly baseline: BacktestResult;
+  readonly baseline: CostStressedResult;
   readonly stressed: BacktestResult;
   readonly trialsCounted: number;
   readonly minbtlLimit: number;
@@ -213,15 +221,17 @@ async function runCandidateAgainst(
     spec.window.to,
     spec.calendarReference,
   );
+  const signFlipped = flipsSignAtDoubledCost(
+    candidateOutcome(baseline),
+    candidateOutcome(stressed),
+  );
   return {
-    baseline,
+    baseline: { ...baseline, verdict: withCostStress(baseline.verdict, signFlipped) },
     stressed,
     trialsCounted: ledger.count(),
     minbtlLimit,
     windowYears: (end.getTime() - start.getTime()) / (365.25 * 86_400_000),
-    signFlipped:
-      baseline.verdict.checks.beatsBenchmarkAfterHaircut !==
-      stressed.verdict.checks.beatsBenchmarkAfterHaircut,
+    signFlipped,
     regimeSplit: baseline.verdict.regimeSplit,
     oneBarDelay: baseline.verdict.oneBarDelay,
     randomEntries: baseline.verdict.randomEntries,
@@ -419,7 +429,7 @@ export function runVolTargetIndexCandidate(
 }
 
 export interface VolTargetTrialReport {
-  readonly verdict: VolTargetVerdict;
+  readonly verdict: CostStressed<VolTargetVerdict>;
   readonly stressed: VolTargetVerdict;
   readonly signFlipped: boolean;
   readonly dataSanity: DataSanityReport;
@@ -481,7 +491,7 @@ async function volTargetTrialPass(
 }
 
 // David 2026-10-08 (#1860): doc 67's 2x modelled-cost rerun runs as it does for candidates, on
-// the same trial hash; like theirs, a sign flip is flagged beside the verdict, not gated in it
+// the same trial hash
 export async function runVolTargetTrialAgainst(
   market: MarketData,
   bars: BarsSource,
@@ -495,12 +505,14 @@ export async function runVolTargetTrialAgainst(
   const run = { arms, market, halfSpreadBps, ledger, logger, window };
   const base = await volTargetTrialPass(run, 1);
   const stressed = await volTargetTrialPass(run, COST_STRESS_MULTIPLE);
+  const signFlipped = flipsSignAtDoubledCost(
+    trialOutcome(base.verdict),
+    trialOutcome(stressed.verdict),
+  );
   return {
-    verdict: base.verdict,
+    verdict: withCostStress(base.verdict, signFlipped),
     stressed: stressed.verdict,
-    signFlipped:
-      base.verdict.checks.beatsBaselineOutOfSampleAfterHaircut !==
-      stressed.verdict.checks.beatsBaselineOutOfSampleAfterHaircut,
+    signFlipped,
     dataSanity: dataSanity(bars, constituentsFor, base.dates),
   };
 }
