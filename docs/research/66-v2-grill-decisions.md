@@ -665,7 +665,7 @@ David ruled on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/18
 2. **The trial runs doc 67's 2× modelled-cost rerun, as candidates do (#1860).** The rerun uses the same trial hash, so it is not a new counted trial.
 3. **The one-bar-delay canary does not bind the trial (#1860).** The look-ahead canary applies to candidates only, and this is a sizing trial on arm 2's own entries.
 4. **Both data-sanity defaults are accepted as built (#2074).** A 1.35× adjusted close-to-close jump flags a suspect bar *(the ruling's text said such a bar is excluded; corrected 2026-10-09, below: it is reported only, not excluded)*. For mean reversion the universe checked is the union of constituents across the window, which keeps the test survivorship-safe.
-5. **Data spend does not count against the loss cap (#2025).** The EODHD feed picked on 2026-10-07 (with Alpaca's corporate actions as the US cross-check) costs about £180 a year. The £1,500 cap stays a net trading loss, marked to market. Data spend and LLM spend are separate operating budgets: tracked and reported, never deducted from the cap. Data spend also sits outside the ~$30 a month LLM cap.
+5. **Data spend does not count against the loss cap (#2025).** The EODHD feed picked on 2026-10-07 (with Alpaca's corporate actions as the US cross-check) costs about £180 a year. The £1,500 cap stays a net trading loss, marked to market. Data spend and LLM spend are separate operating budgets (opex): tracked and reported, never deducted from the cap. Data spend also sits outside the ~$30 a month LLM cap.
 
 *Built 2026-10-08 (#1860), ruling 2* (`server/apps/v2/backtest-cli.ts`). Build notes (not rulings):
 
