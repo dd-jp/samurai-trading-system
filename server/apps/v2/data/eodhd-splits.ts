@@ -8,9 +8,10 @@ export type SplitsAcross =
 
 const CONFLICT = Symbol('conflict');
 
-// a read cannot vouch for days after it was made, whatever window it asked for
+// asOf is a UTC date, so a read made before that day's session cannot vouch for it; nor for any later day
 export function coverageEnd(read: SplitsRead): string {
-  return read.asOf < read.to ? read.asOf : read.to;
+  const lastWholeDay = addDays(read.asOf, -1);
+  return lastWholeDay < read.to ? lastWholeDay : read.to;
 }
 
 function covers(read: SplitsRead, date: string): boolean {
@@ -42,10 +43,11 @@ function listedDates(reads: readonly SplitsRead[], after: string, through: strin
   return [...dates].filter((date) => date > after && date <= through).sort();
 }
 
-function assertOneSymbol(reads: readonly SplitsRead[]): void {
+function assertInputs(reads: readonly SplitsRead[], after: string, through: string): void {
   if (new Set(reads.map((read) => read.symbol)).size > 1) {
     throw new Error('splitsAcross: reads for more than one symbol');
   }
+  if (after > through) throw new Error('splitsAcross: window ends before it starts');
 }
 
 export function splitsAcross(
@@ -53,7 +55,7 @@ export function splitsAcross(
   after: string,
   through: string,
 ): SplitsAcross {
-  assertOneSymbol(reads);
+  assertInputs(reads, after, through);
   const uncovered = firstUncovered(reads, addDays(after, 1));
   if (uncovered <= through) return { kind: 'uncovered', from: uncovered };
   const splits: EodhdSplit[] = [];

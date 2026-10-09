@@ -63,6 +63,9 @@ function parseSplit(raw: unknown): EodhdSplit {
 export function parseSplitsBody(body: unknown, window: SplitsWindow): readonly EodhdSplit[] {
   if (!Array.isArray(body)) throw new EodhdRequestError('bad_body');
   const splits = body.map(parseSplit).sort((a, b) => a.date.localeCompare(b.date));
+  if (new Set(splits.map((split) => split.date)).size < splits.length) {
+    throw new EodhdRequestError('bad_body');
+  }
   if (splits.some((split) => split.date < window.from || split.date > window.to)) {
     throw new EodhdRequestError('out_of_window');
   }

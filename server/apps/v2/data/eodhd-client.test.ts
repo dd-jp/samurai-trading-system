@@ -107,6 +107,10 @@ describe('parseSplitsBody', () => {
       [{ date: '2020-8-31', split: '4.000000/1.000000' }],
       [{ date: '2020-08-32', split: '4.000000/1.000000' }],
       [{ date: '2020-08-31', split: '4.000000:1.000000' }],
+      [
+        { date: '2020-08-31', split: '4.000000/1.000000' },
+        { date: '2020-08-31', split: '2.000000/1.000000' },
+      ],
     ]) {
       expect(() => parseSplitsBody(body, HISTORY)).toThrow(
         expect.objectContaining({ reason: 'bad_body' }),
