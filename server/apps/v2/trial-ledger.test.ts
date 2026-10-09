@@ -208,6 +208,18 @@ describe('TrialLedger hash chain', () => {
     expect(reopened.record('trend', { lookback: 90 })).toBe(10);
     expect(new TrialLedger(legacy, clock, SESSION_B).count()).toBe(10);
   });
+
+  it('leaves a legacy ledger unlinked when its open is refused', () => {
+    const { db: source } = chained();
+    const legacy = migratedMemoryStore();
+    const insert = legacy.prepare(
+      `INSERT INTO v2_trials (trial, candidate, config_hash, config, source, recorded_at)
+       VALUES (@trial, @candidate, @config_hash, @config, @source, @recorded_at)`,
+    );
+    for (const row of rows(source).slice(1)) insert.run({ ...row, trial: row.trial - 1 });
+    expect(() => new TrialLedger(legacy, clock, SESSION_B)).toThrow("is not Session B's");
+    expect(links(legacy)).toEqual([]);
+  });
 });
 
 describe('main', () => {

@@ -76,9 +76,13 @@ export class TrialLedger {
     sessionB: SessionBLedger,
   ) {
     this.#db = guardedStore(db, 'v2');
-    this.#verifyChain();
-    if (this.count() === 0) this.#seed(sessionB);
-    else this.#assertSeeded(sessionB);
+    this.#db
+      .transaction(() => {
+        this.#verifyChain();
+        if (this.count() === 0) this.#seed(sessionB);
+        else this.#assertSeeded(sessionB);
+      })
+      .immediate();
   }
 
   count(): number {
@@ -136,15 +140,11 @@ export class TrialLedger {
   }
 
   #linkAll(rows: readonly StoredTrial[]): void {
-    this.#db
-      .transaction(() => {
-        let head = CHAIN_GENESIS;
-        for (const row of rows) {
-          head = chainLink(head, row);
-          this.#link(row.trial, head);
-        }
-      })
-      .immediate();
+    let head = CHAIN_GENESIS;
+    for (const row of rows) {
+      head = chainLink(head, row);
+      this.#link(row.trial, head);
+    }
   }
 
   #linkCount(): number {
@@ -156,19 +156,15 @@ export class TrialLedger {
   }
 
   #seed(ledger: SessionBLedger): void {
-    this.#db
-      .transaction(() => {
-        for (const entry of ledger.entries) {
-          this.#insert(
-            entry.trial,
-            `momentum/${entry.config.venue}`,
-            entry.config_hash,
-            entry.config,
-            'session-b',
-          );
-        }
-      })
-      .immediate();
+    for (const entry of ledger.entries) {
+      this.#insert(
+        entry.trial,
+        `momentum/${entry.config.venue}`,
+        entry.config_hash,
+        entry.config,
+        'session-b',
+      );
+    }
   }
 
   #assertSeeded(ledger: SessionBLedger): void {
