@@ -276,6 +276,19 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    table: 'v2_trial_chain',
+    seed: `INSERT INTO v2_trials (trial, candidate, config_hash, config, source, recorded_at)
+        VALUES (1, 'trend', 'hash-1', '{}', 'original', '2026-10-01T07:00:00.000Z');
+      INSERT INTO v2_trial_chain (trial, link) VALUES (1, '${'a'.repeat(64)}')`,
+    attacks: [
+      {
+        name: 'same trial',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_trial_chain (trial, link) VALUES (1, '${'b'.repeat(64)}')`,
+      },
+    ],
+  },
+  {
     table: 'v2_faults',
     seed: `INSERT INTO v2_faults (fault_id, kind, trading_date, code, detail, recorded_at)
       VALUES (1, 'stale_bar', '2026-10-01', 'CODE', 'original', '2026-10-01T07:00:00.000Z')`,
