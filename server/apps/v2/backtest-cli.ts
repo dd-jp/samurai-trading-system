@@ -14,6 +14,7 @@ import {
   VOL_TARGET_TRIAL_SIZING,
   VOL_TARGET_TRIAL_START_CAPITAL_GBP,
   VOL_TARGET_TRIAL_TO,
+  type VolTargetTrialArms,
   volTargetTrialArms,
 } from './arm2-backtest.js';
 import {
@@ -24,8 +25,22 @@ import {
   runBacktest,
   simulateBacktest,
 } from './backtest.js';
-import type { OneBarDelay, RandomEntries, TrialSeries } from './backtest-verdict.js';
+import {
+  type OneBarDelay,
+  type RandomEntries,
+  type TrialSeries,
+  walkForwardRanges,
+} from './backtest-verdict.js';
 import { CanaryLog } from './canary-log.js';
+import {
+  baselinePicksAt,
+  type CostStressed,
+  type CostStressedResult,
+  candidateOutcome,
+  costStress,
+  trialOutcome,
+  withCostStress,
+} from './cost-stress.js';
 import {
   BarsMarketData,
   type BarsSource,
@@ -97,7 +112,7 @@ export interface BacktestCliOptions {
 }
 
 export interface CandidateRunReport {
-  readonly baseline: BacktestResult;
+  readonly baseline: CostStressedResult;
   readonly stressed: BacktestResult;
   readonly trialsCounted: number;
   readonly minbtlLimit: number;
@@ -212,15 +227,23 @@ async function runCandidateAgainst(
     spec.window.to,
     spec.calendarReference,
   );
+  const stress = costStress(
+    candidateOutcome(baseline),
+    candidateOutcome(stressed),
+    baselinePicksAt(
+      baseline,
+      stressed,
+      walkForwardRanges(stressed.dates.length, WALK_FORWARD_FOLDS, spec.embargo),
+    ),
+  );
+  const signFlipped = stress.flipped.length > 0;
   return {
-    baseline,
+    baseline: { ...baseline, verdict: withCostStress(baseline.verdict, stress) },
     stressed,
     trialsCounted: ledger.count(),
     minbtlLimit,
     windowYears: (end.getTime() - start.getTime()) / (365.25 * 86_400_000),
-    signFlipped:
-      baseline.verdict.checks.beatsBenchmarkAfterHaircut !==
-      stressed.verdict.checks.beatsBenchmarkAfterHaircut,
+    signFlipped,
     regimeSplit: baseline.verdict.regimeSplit,
     oneBarDelay: baseline.verdict.oneBarDelay,
     randomEntries: baseline.verdict.randomEntries,
@@ -418,7 +441,9 @@ export function runVolTargetIndexCandidate(
 }
 
 export interface VolTargetTrialReport {
-  readonly verdict: VolTargetVerdict;
+  readonly verdict: CostStressed<VolTargetVerdict>;
+  readonly stressed: VolTargetVerdict;
+  readonly signFlipped: boolean;
   readonly dataSanity: DataSanityReport;
 }
 
@@ -432,16 +457,20 @@ const VOL_TARGET_TRIAL_WINDOW: VolTargetTrialWindow = {
   outOfSampleFrom: VOL_TARGET_TRIAL_OUT_OF_SAMPLE_FROM,
 };
 
-export async function runVolTargetTrialAgainst(
-  market: MarketData,
-  bars: BarsSource,
-  constituentsFor: (tradingDate: string) => readonly string[],
-  halfSpreadBps: (instrument: string) => number,
-  ledger: TrialLedger,
-  logger: Logger,
-  window: VolTargetTrialWindow = VOL_TARGET_TRIAL_WINDOW,
-): Promise<VolTargetTrialReport> {
-  const arms = volTargetTrialArms({ bars, constituents: constituentsFor });
+interface VolTargetTrialRun {
+  readonly arms: VolTargetTrialArms;
+  readonly market: MarketData;
+  readonly halfSpreadBps: (instrument: string) => number;
+  readonly ledger: TrialLedger;
+  readonly logger: Logger;
+  readonly window: VolTargetTrialWindow;
+}
+
+async function volTargetTrialPass(
+  run: VolTargetTrialRun,
+  costMultiple: number,
+): Promise<{ dates: readonly string[]; verdict: VolTargetVerdict }> {
+  const { arms, window, ledger } = run;
   const simulation = await simulateBacktest({
     candidate: VOL_TARGET_TRIAL_CANDIDATE_ID,
     trials: [arms.trial],
@@ -450,13 +479,14 @@ export async function runVolTargetTrialAgainst(
     to: window.to,
     startCapitalGbp: VOL_TARGET_TRIAL_START_CAPITAL_GBP,
     lossCapGbp: BACKTEST_LOSS_CAP_GBP,
-    market,
-    halfSpreadBps,
+    market: run.market,
+    halfSpreadBps: run.halfSpreadBps,
     ledger,
-    logger,
+    logger: run.logger,
     folds: VOL_TARGET_TRIAL_FOLDS,
     embargo: VOL_TARGET_TRIAL_EMBARGO,
     calendarReference: CALENDAR_REFERENCE,
+    costMultiple,
     volTarget: VOL_TARGET_TRIAL_SIZING,
   });
   const verdict = volTargetVerdict({
@@ -469,7 +499,33 @@ export async function runVolTargetTrialAgainst(
     folds: VOL_TARGET_TRIAL_FOLDS,
     embargo: VOL_TARGET_TRIAL_EMBARGO,
   });
-  return { verdict, dataSanity: dataSanity(bars, constituentsFor, simulation.dates) };
+  return { dates: simulation.dates, verdict };
+}
+
+// David 2026-10-08 (#1860): doc 67's 2x modelled-cost rerun runs as it does for candidates, on
+// the same trial hash. The run holds one trial, so the 1x pick priced at 2x is the 2x run's own
+export async function runVolTargetTrialAgainst(
+  market: MarketData,
+  bars: BarsSource,
+  constituentsFor: (tradingDate: string) => readonly string[],
+  halfSpreadBps: (instrument: string) => number,
+  ledger: TrialLedger,
+  logger: Logger,
+  window: VolTargetTrialWindow = VOL_TARGET_TRIAL_WINDOW,
+): Promise<VolTargetTrialReport> {
+  const arms = volTargetTrialArms({ bars, constituents: constituentsFor });
+  const run = { arms, market, halfSpreadBps, ledger, logger, window };
+  const base = await volTargetTrialPass(run, 1);
+  const stressed = await volTargetTrialPass(run, COST_STRESS_MULTIPLE);
+  const atDoubledCost = trialOutcome(stressed.verdict);
+  const stress = costStress(trialOutcome(base.verdict), atDoubledCost, atDoubledCost);
+  const signFlipped = stress.flipped.length > 0;
+  return {
+    verdict: withCostStress(base.verdict, stress),
+    stressed: stressed.verdict,
+    signFlipped,
+    dataSanity: dataSanity(bars, constituentsFor, base.dates),
+  };
 }
 
 export function runVolTargetTrial(

@@ -278,7 +278,7 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 | Area | Item | Pass condition |
 |---|---|---|
 | Backtest | Look-ahead canary | The edge survives shifting the signal one bar later (an edge that collapses points to look-ahead; corrected 2026-10-07, doc 66); the walk-forward edge over the benchmark sits above the 95th percentile of 200 matched random-entry runs (corrected 2026-10-08, doc 66) |
-| Backtest | Cost stress | Result reported at 1× and 2× modelled cost; 2× must not flip the sign, or the sleeve is flagged |
+| Backtest | Cost stress | Result reported at 1× and 2× modelled cost; 2× must not flip the sign, or the sleeve is flagged *(2026-10-09, doc 66: a flip of the out-of-sample Sharpe or total return from positive to ≤ 0 fails the trial or candidate; 2026-10-09, doc 66, "flip if either flips": the flip is read on the 2× run's own picks and on the 1× picks priced at 2×, and either one fails it)* |
 | Backtest | Regime split | Per-period table (incl. 2020 crash, 2022 drawdown); no single period carries the result alone |
 | Backtest | Locked final holdout | A final time slice the research loop can never read; read once, at promotion |
 | Backtest | Data sanity | Coverage invariant per series (postmortem §2); adjusted-price jumps, gaps, zero-volume days flagged |
@@ -299,7 +299,7 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 | Resilience | Separate sleeve books | Each sleeve's paper book is isolated; one sleeve's loss cannot size the other (Q14) |
 | Security | Keys and egress | Broker keys trade-only, withdrawals disabled, IP-restricted where the venue offers it; test that no account data or key leaves in any LLM request, plus a runtime guard refusing any LLM request that carries a known secret value (Q16, #1881) |
 | Cost | LLM spend cap | ~$30/month cap enforced across providers; breach stops LLM calls, never trading exits (Q16) |
-| Self-learning | Model swap = new trial | Changing any pinned model version resets that sleeve's paper evaluation (Q16) |
+| Self-learning | Model swap = new trial | Changing a pinned model version resets the G1 closed-trade count of each book whose own pin set changed, told apart by a pin digest on each entry; arm 2 and the no-veto shadows pin nothing and never reset; Sharpe, drawdown and equity stay whole-book (Q16, #1747) |
 | Self-learning | Trial counter | Append-only, tamper-evident; every backtest run increments it |
 | Self-learning | Promotion dry run | One full proposal → gate → paper-promotion cycle on a dummy change before the first real one |
 | Adaptability | Rule scenarios | Scenario tests prove each pre-declared rule fires (vol spike, trend break, sleeve slump → demotion) |
