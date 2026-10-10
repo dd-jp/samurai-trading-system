@@ -3,6 +3,7 @@ import { UsEquityRegularHoursCalendar } from '../../providers/calendar/index.js'
 import { SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
+import { rewoundCopy } from './replay-book.js';
 import {
   journalledQuotes,
   journalledVeto,
@@ -262,5 +263,54 @@ describe('signalDivergences', () => {
       { kind: 'row_extra', stage: 'signal_vetoes', key: `${copy.id}|claim 1#1` },
       { kind: 'row_extra', stage: 'signal_vetoes', key: `${copy.id}|verdict 1#1` },
     ]);
+  });
+});
+
+describe('rewoundCopy signal rows', () => {
+  it('drops the veto rows and settled events from the run start on, and keeps queued events and earlier rows', () => {
+    const { db, clock, signals, id } = journal();
+    signals.claimVeto(id, 1);
+    signals.recordVeto(id, { kind: 'unavailable', reason: 'llm_call_failed: 503' });
+    signals.appendEvent(id, 'failed', 'one retry left');
+    const startedAt = `${D}T15:00:00.000Z`;
+    clock.advanceTo(new Date(startedAt));
+    signals.claimVeto(id, 2);
+    signals.recordRetryVeto(id, { kind: 'pass', reason: 'ok' });
+    signals.appendEvent(id, 'processed', 'entered');
+    const parsed = parseSignalPayload({ symbol: 'DN', entry: 25, targets: [26], stop: 24.5 });
+    if (!parsed.ok) throw new Error(parsed.reason);
+    const late = signals.record(
+      parsed.payload,
+      clock.now(),
+      classifySignalWindow(clock.now(), new UsEquityRegularHoursCalendar()),
+    ).signal.signal_id;
+    signals.claimVeto(late, 1);
+    signals.recordVeto(late, { kind: 'veto', reason: 'no' });
+    signals.appendEvent(late, 'processed', 'vetoed');
+
+    const copy = rewoundCopy(db, D, startedAt);
+    handles.push(copy);
+    const rows = (handle: StoreHandle, sql: string) => handle.prepare(sql).all();
+    const tables = {
+      events: 'SELECT signal_id, status FROM v2_signal_events ORDER BY event_id',
+      claims: 'SELECT signal_id, attempt FROM v2_signal_veto_claims ORDER BY signal_id, attempt',
+      vetoes: 'SELECT signal_id FROM v2_signal_vetoes ORDER BY signal_id',
+      retries: 'SELECT signal_id FROM v2_signal_veto_retry_verdicts',
+    };
+
+    expect(
+      Object.fromEntries(Object.entries(tables).map(([k, sql]) => [k, rows(copy, sql)])),
+    ).toEqual({
+      events: [
+        { signal_id: id, status: 'queued' },
+        { signal_id: id, status: 'failed' },
+        { signal_id: late, status: 'queued' },
+      ],
+      claims: [{ signal_id: id, attempt: 1 }],
+      vetoes: [{ signal_id: id }],
+      retries: [],
+    });
+    expect(rows(db, tables.events)).toHaveLength(5);
+    expect(rows(db, tables.claims)).toHaveLength(3);
   });
 });
