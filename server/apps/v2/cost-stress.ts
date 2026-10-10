@@ -99,6 +99,10 @@ export function candidateOutcome(result: BacktestResult): SignedOutcome {
   };
 }
 
+function sameSessions(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((date, index) => date === right[index]);
+}
+
 // `ranges` are the walk-forward folds both runs were scored on; fold 0 only trains
 export function baselinePicksAt(
   baseline: BacktestResult,
@@ -107,7 +111,7 @@ export function baselinePicksAt(
 ): SignedOutcome {
   const { selectedByFold } = baseline.verdict.walkForward;
   const aligned =
-    stressed.dates.length === baseline.dates.length && selectedByFold.length === ranges.length - 1;
+    sameSessions(baseline.dates, stressed.dates) && selectedByFold.length === ranges.length - 1;
   if (!aligned) {
     throw new Error('baselinePicksAt: the 1x and 2x runs do not share their walk-forward folds');
   }

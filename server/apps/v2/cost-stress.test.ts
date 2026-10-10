@@ -200,10 +200,13 @@ describe('baselinePicksAt', () => {
       selectedByFold: [1, 1],
       strategySharpe: 1,
     });
-    const stressed = { ...base, dates: DATES.slice(1) };
-    expect(() => baselinePicksAt(base, stressed, RANGES)).toThrow(
-      'baselinePicksAt: the 1x and 2x runs do not share their walk-forward folds',
-    );
+    const longer = { ...base, dates: [...DATES, '2024-01-10'] };
+    const shifted = { ...base, dates: [...DATES.slice(0, -1), '2024-01-10'] };
+    for (const stressed of [longer, shifted]) {
+      expect(() => baselinePicksAt(base, stressed, RANGES)).toThrow(
+        'baselinePicksAt: the 1x and 2x runs do not share their walk-forward folds',
+      );
+    }
   });
 
   it('throws when the folds do not match the 1x picks', () => {

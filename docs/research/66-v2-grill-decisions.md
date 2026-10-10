@@ -785,7 +785,7 @@ David answered the review of PR #2097 (findings F1 and F2), recorded on [#2024](
 
 ## Rulings of 2026-10-09 — a 2× cost flip fails, suspect bars stay report-only (#1860, #2074)
 
-David answered the two points left awaiting him under the 2026-10-08 rulings above, on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/1860) and PR [#2074](https://github.com/dd-jp/samurai-trading-system/pull/2074). Later the same day he answered finding 3 of the PR [#2098](https://github.com/dd-jp/samurai-trading-system/pull/2098#issuecomment-6085533478) review (ruling 3).
+David answered the two points left awaiting him under the 2026-10-08 rulings above, on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/1860) and PR [#2074](https://github.com/dd-jp/samurai-trading-system/pull/2074). Later the same day he answered finding 5 of the PR [#2098](https://github.com/dd-jp/samurai-trading-system/pull/2098#issuecomment-6085533478) review (ruling 3).
 
 1. **A 2× cost flip fails (#1860).** A trial or candidate fails if its own out-of-sample Sharpe or its total return is positive at 1× modelled cost and ≤ 0 at 2×. This binds the vol-target trial and every S2 candidate. It replaces the reported-only flag on the haircut check. Candidate 1's run note treated a flip of that check as a gate check; a flip is now a gate check, but of the Sharpe and return signs.
 2. **Suspect bars stay report-only (#2074).** A bar whose adjusted close-to-close move is beyond 1.35× is flagged in the data-sanity block and stays in the backtest. A sample of the flagged bars is reviewed before David decides on exclusion. The 2026-10-08 ruling 4's "excluded" is corrected above.
