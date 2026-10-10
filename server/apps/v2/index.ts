@@ -93,6 +93,7 @@ import {
 } from './signal/index.js';
 import { processDueSignals, type SignalOutcome, signalsDue } from './signals/processor.js';
 import type { SignalStore } from './signals/store.js';
+import { panelVeto } from './signals/veto.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
@@ -648,7 +649,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
           cycle.journal.latestReconcile(date, venue),
         signals,
         faults: cycle.faults,
-        panel,
+        veto: panelVeto(panel),
         constituents,
         calendar: options.sessionCalendar ?? new UsEquityRegularHoursCalendar(),
         quotes,

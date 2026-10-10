@@ -11,21 +11,23 @@ import { describeThrownSafely, digest } from '../../../shared/index.js';
 import { type CycleDeps, type EntryPassReport, runEntryPass } from '../cycle.js';
 import { isFresh } from '../data/index.js';
 import type { FaultSink, ReconcileVerdict } from '../journal/index.js';
-import type { LlmPanel } from '../signal/index.js';
 import { MOVERS_MIN_DOLLAR_VOLUME_USD, SIGNALS_SLEEVE_ID } from '../signal/index.js';
 import { entryRange, planSignalEntry, quoteFill, type SignalEntryPlan } from './entry.js';
-import type { SignalStore, SignalVetoAttempt } from './store.js';
-import { callFailed, SIGNAL_VETO_BARS, type SignalVeto, signalVeto } from './veto.js';
+import type { SignalStore } from './store.js';
+import {
+  callFailed,
+  INTERRUPTED_VETO,
+  SIGNAL_VETO_BARS,
+  type SignalVeto,
+  type SignalVetoAttempt,
+  type SignalVetoCall,
+} from './veto.js';
 
 const TICKET = '#1941';
 const RULINGS_TICKET = '#2024';
 
 const SIGNAL_VETO_RATE_WINDOW = 20;
 const SIGNAL_VETO_RATE_CAP = 0.1;
-const INTERRUPTED: SignalVeto = {
-  kind: 'unavailable',
-  reason: 'llm_call_failed: the call was interrupted before its verdict was journalled',
-};
 
 const CONTROL_REFUSAL = {
   paused: 'manual_control_paused',
@@ -54,7 +56,7 @@ export interface SignalProcessorDeps {
     | 'retryVetoFor'
   >;
   readonly faults: FaultSink;
-  readonly panel: Pick<LlmPanel, 'judge' | 'spendCap'>;
+  readonly veto: SignalVetoCall;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly calendar: { isOpen(instant: Date): boolean };
   readonly quotes: LatestQuoteSource | undefined;
@@ -306,24 +308,20 @@ function askVeto(
   signal: SignalWire,
   admitted: Admitted,
   bars: readonly V2Bar[],
+  attempt: SignalVetoAttempt,
 ): Promise<SignalVeto> {
   const { low, high } = entryRange(signal.entry);
-  return signalVeto(
-    deps.panel.judge,
-    deps.panel.spendCap,
-    {
-      symbol: signal.symbol,
-      entryLow: low,
-      entryHigh: high,
-      limit: admitted.plan.limit,
-      stop: admitted.plan.stop,
-      target: admitted.plan.target,
-      targets: signal.targets,
-      lastClose: admitted.lastBar.rawClose,
-      bars,
-    },
-    `v2-signal-${signal.signal_id}`,
-  );
+  return deps.veto(signal.signal_id, attempt, {
+    symbol: signal.symbol,
+    entryLow: low,
+    entryHigh: high,
+    limit: admitted.plan.limit,
+    stop: admitted.plan.stop,
+    target: admitted.plan.target,
+    targets: signal.targets,
+    lastClose: admitted.lastBar.rawClose,
+    bars,
+  });
 }
 
 function claimedVeto(
@@ -333,9 +331,9 @@ function claimedVeto(
   bars: readonly V2Bar[],
   attempt: SignalVetoAttempt,
 ): Promise<SignalVeto> {
-  if (deps.signals.vetoClaimed(signal.signal_id, attempt)) return Promise.resolve(INTERRUPTED);
+  if (deps.signals.vetoClaimed(signal.signal_id, attempt)) return Promise.resolve(INTERRUPTED_VETO);
   deps.signals.claimVeto(signal.signal_id, attempt);
-  return askVeto(deps, signal, admitted, bars);
+  return askVeto(deps, signal, admitted, bars, attempt);
 }
 
 async function retriedVeto(
@@ -367,7 +365,7 @@ async function onceVeto(
   }
   const veto = await claimedVeto(deps, signal, admitted, bars, 1);
   deps.signals.recordVeto(signal.signal_id, veto);
-  if (veto === INTERRUPTED) return retriedVeto(deps, signal, admitted, bars);
+  if (veto === INTERRUPTED_VETO) return retriedVeto(deps, signal, admitted, bars);
   if (callFailed(veto)) throw new Error(`veto ${veto.reason}; one retry left on a later pass`);
   return veto;
 }
@@ -474,6 +472,21 @@ export function signalsDue(
   return deps.calendar.isOpen(now) && deps.signals.due(now).length > 0;
 }
 
+export async function processSignal(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  tradingDate: string,
+): Promise<SignalOutcome> {
+  let outcome: SignalOutcome;
+  try {
+    outcome = await processOne(deps, signal, tradingDate);
+  } catch (error) {
+    outcome = settle(deps, signal, 'failed', describeThrownSafely(error));
+  }
+  if (outcome.status === 'processed') checkVetoRate(deps, tradingDate);
+  return outcome;
+}
+
 export async function processDueSignals(
   deps: SignalProcessorDeps,
   now: Date,
@@ -482,14 +495,7 @@ export async function processDueSignals(
   const tradingDate = sessionDate(now);
   const outcomes: SignalOutcome[] = [];
   for (const signal of deps.signals.due(now)) {
-    let outcome: SignalOutcome;
-    try {
-      outcome = await processOne(deps, signal, tradingDate);
-    } catch (error) {
-      outcome = settle(deps, signal, 'failed', describeThrownSafely(error));
-    }
-    outcomes.push(outcome);
-    if (outcome.status === 'processed') checkVetoRate(deps, tradingDate);
+    outcomes.push(await processSignal(deps, signal, tradingDate));
   }
   return outcomes;
 }
