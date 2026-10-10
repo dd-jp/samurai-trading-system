@@ -109,7 +109,7 @@ describe('createArm2Sleeve', () => {
     expect(short).toMatchObject({
       direction: 'bearish',
       action: 'skip',
-      reason: 'short_unavailable:cfd_cost_model_unset',
+      reason: 'short_unavailable:cfd_not_backtested',
       venue: 'alpaca',
     });
     const neutral = output.decisions.find((decision) => decision.instrument === 'FLAT');

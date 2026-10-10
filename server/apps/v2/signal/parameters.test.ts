@@ -12,6 +12,7 @@ import {
   CFD_FINANCING_MODEL,
   CFD_RESTING_STOP_VERIFIED,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  CFD_SLEEVE_IDS,
   CFD_SPREAD_MODEL,
   type CfdEntryGate,
   CYCLE_LEVEL_PARAMETERS,
@@ -231,6 +232,11 @@ describe('parameters', () => {
       expect(cfdEntryRefusal(allUnset)).toBe('cfd_cost_model_unset');
       expect(cfdEntryRefusal([...allUnset].reverse())).toBe('cfd_resting_stop_unverified');
     });
+  });
+
+  it('allows CFD routes to the debate sleeve and arm 2 only (doc 66 (f), #1858)', () => {
+    expect(CFD_SLEEVE_IDS).toEqual(['debate', 'arm2']);
+    expect(CFD_SLEEVE_IDS).not.toContain(SIGNALS_SLEEVE_ID);
   });
 
   it('the Saxo appropriateness test is recorded as taken (doc 66 ruling (l), #1774 (b))', () => {

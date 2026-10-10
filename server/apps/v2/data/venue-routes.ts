@@ -90,6 +90,6 @@ export function createVenueRouter(deps: VenueRouterDeps): VenueRouter {
 
 export const CLOSED_VENUE_ROUTER: VenueRouter = createVenueRouter({
   catalogue: undefined,
-  entryRefusal: () => 'cfd_cost_model_unset',
+  entryRefusal: () => 'cfd_not_backtested',
   maxBorrowRatePerYear: 0,
 });

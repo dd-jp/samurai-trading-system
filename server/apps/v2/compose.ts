@@ -31,6 +31,7 @@ import {
   type VolTargetSizing,
 } from './risk/index.js';
 import {
+  CFD_SLEEVE_IDS,
   cfdEntryRefusal,
   declaredVolTarget,
   isSet,
@@ -136,6 +137,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
   const risk = new V2RiskGate({
     books,
     capital,
+    cfdSleeveIds: CFD_SLEEVE_IDS,
     market,
     spec: (sleeveId) => registry.spec(sleeveId),
     venueRefusal: (venue) => (isCfdVenue(venue) ? cfdGate() : undefined),

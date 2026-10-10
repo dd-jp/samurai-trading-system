@@ -91,6 +91,7 @@ function gate(
     bars?: readonly V2Bar[];
     spec?: SleeveSpec;
     venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
+    cfdSleeveIds?: readonly string[];
     fixDate?: string;
     volTarget?: VolTargetSizing;
   } = {},
@@ -121,6 +122,7 @@ function gate(
   return new V2RiskGate({
     books: { lastDay },
     capital: { inForce: () => capital },
+    cfdSleeveIds: options.cfdSleeveIds ?? ['debate'],
     market: {
       ...marketWith(options.bars ?? liquidBars()),
       gbpUsdYearStartFixDate: () => options.fixDate ?? '2025-12-31',
@@ -277,10 +279,44 @@ describe('V2RiskGate', () => {
       expect(closed.approveEntry(request({ decision: { ...cfdShort, venue } }))).toEqual({
         size: 0,
         order: undefined,
-        refusal: 'cfd_cost_model_unset',
+        refusal: 'cfd_not_backtested',
       });
     }
     expect(closed.approveEntry(request()).order).toBeDefined();
+  });
+
+  it('refuses a CFD entry for a sleeve not allowed CFDs before any venue refusal (#1858)', () => {
+    const admitting = gate({ cfdSleeveIds: ['debate', 'arm2'] });
+    for (const sleeve of ['signals', 'mean-reversion', 'arm2-vol-target']) {
+      const book = { ...primary, id: `${sleeve}/primary`, sleeve };
+      for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
+        expect(admitting.approveEntry(request({ book, decision: { ...cfdShort, venue } }))).toEqual(
+          { size: 0, order: undefined, refusal: 'cfd_sleeve_not_allowed' },
+        );
+      }
+      expect(admitting.approveEntry(request({ book })).order).toBeDefined();
+    }
+    const arm2 = { ...primary, id: 'arm2/technical-only', sleeve: 'arm2' };
+    expect(admitting.approveEntry(request({ book: arm2, decision: cfdShort })).order).toBeDefined();
+    const closed = gate({ cfdSleeveIds: ['debate'], venueRefusal: undefined });
+    expect(closed.approveEntry(request({ book: arm2, decision: cfdShort }))).toMatchObject({
+      refusal: 'cfd_sleeve_not_allowed',
+    });
+  });
+
+  it('keeps the side refusals ahead of the sleeve check', () => {
+    const none = gate({ cfdSleeveIds: [] });
+    expect(
+      none.approveEntry(request({ decision: { ...cfdShort, venue: 'alpaca' } })),
+    ).toMatchObject({ refusal: 'short_requires_cfd' });
+    expect(
+      none.approveEntry(request({ decision: { ...decision, venue: 'saxo_cfd_usd' } })),
+    ).toMatchObject({ refusal: 'long_on_cfd' });
+  });
+
+  it('never consults the injected venue refusal for a cash venue', () => {
+    const refusing = gate({ venueRefusal: () => 'cfd_spread_model_unset' });
+    expect(refusing.approveEntry(request()).order).toBeDefined();
   });
 
   it('applies the injected venue refusal to the routed venue and names it', () => {
