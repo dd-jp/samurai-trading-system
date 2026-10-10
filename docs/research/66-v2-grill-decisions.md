@@ -823,7 +823,7 @@ David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/17
 3. **A trial is identified by a pin digest on each entry.** Each entry's order payload carries its sleeve's pin digest, and the evidence counts only the current digest. This changes the payload only, with no migration and no ledger row.
 4. **Legacy entries count as current.** An entry with no digest counts as the current pin set. That holds for the store as it stood on 2026-10-04: `server/apps/v2/signal/models.ts` last changed on 2026-09-28, paper started on 2026-09-30, and the #1787 Sonnet snapshot was already accepted.
 5. **What the digest hashes (2026-10-10).** The digest is the sha256 of the JSON of the sleeve's pins sorted by seat, each pin `{seat, wire, canonicalSlug ?? null}`, keeping the first 16 hex characters, the same hashing approach as `server/apps/v2/trial-ledger.ts`. Only the configured canonical slug counts. The slug observed at the pin check is never used, because Sonnet's observed slug flips (#1787) and would reset the sleeve when nothing changed. Prompt text and `max_tokens` are not part of the digest.
-6. **Pin sets and counting (2026-10-10).**
+6. **Pin sets and counting (2026-10-10, build choices that follow from rulings 1 to 4).**
    - Both debate books pin every debater seat (sonnet, gpt, deepseek), the idle rotation seat included, plus the judge.
    - The signals primary book pins the judge.
    - Arm 2 and every `no-veto` book pin the empty set, so no-veto shadows never reset.

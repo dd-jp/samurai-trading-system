@@ -299,7 +299,7 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 | Resilience | Separate sleeve books | Each sleeve's paper book is isolated; one sleeve's loss cannot size the other (Q14) |
 | Security | Keys and egress | Broker keys trade-only, withdrawals disabled, IP-restricted where the venue offers it; test that no account data or key leaves in any LLM request, plus a runtime guard refusing any LLM request that carries a known secret value (Q16, #1881) |
 | Cost | LLM spend cap | ~$30/month cap enforced across providers; breach stops LLM calls, never trading exits (Q16) |
-| Self-learning | Model swap = new trial | Changing any pinned model version resets that sleeve's paper evaluation (Q16) |
+| Self-learning | Model swap = new trial | Changing a pinned model version resets the G1 closed-trade count of each book whose own pin set changed, told apart by a pin digest on each entry; arm 2 and the no-veto shadows pin nothing and never reset; Sharpe, drawdown and equity stay whole-book (Q16, #1747) |
 | Self-learning | Trial counter | Append-only, tamper-evident; every backtest run increments it |
 | Self-learning | Promotion dry run | One full proposal → gate → paper-promotion cycle on a dummy change before the first real one |
 | Adaptability | Rule scenarios | Scenario tests prove each pre-declared rule fires (vol spike, trend break, sleeve slump → demotion) |
