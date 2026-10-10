@@ -58,6 +58,7 @@ import { storeView } from './reconcile.js';
 import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import { refreshSaxoBars } from './saxo-bar-refresh.js';
 import { CYCLE_LEVEL_PARAMETERS, isSet, SleeveRegistry } from './signal/index.js';
+import { ALL_PINS, pinDigest } from './signal/models.js';
 
 const UNSET_CYCLE_PARAMETERS = CYCLE_LEVEL_PARAMETERS.filter((parameter) => !isSet(parameter));
 
@@ -3268,6 +3269,21 @@ describe('#1941: one Alpaca account across broker-routed books', () => {
     ]);
   });
 
+  it('journals each entry under its own sleeve pin digest, and none for a sleeve with no pin set (#1747)', async () => {
+    const alpaca = new FakeAlpaca();
+    const deps = twoPrimaries(false, alpaca, 'MSFT');
+
+    await runCycle(deps, '2026-09-25');
+
+    const payloadOf = (bookId: string) => JSON.parse(orders(deps, bookId)[0]?.payload ?? '{}');
+    expect(orders(deps, 'debate/primary')).toMatchObject([{ outcome: 'submitted' }]);
+    expect(payloadOf('debate/primary').pin_digest).toBe(pinDigest(ALL_PINS));
+    expect(payloadOf('debate/no-macro-gate').pin_digest).toBe(pinDigest(ALL_PINS));
+    expect(orders(deps, 'trend/primary')).toMatchObject([{ outcome: 'submitted' }]);
+    expect(payloadOf('trend/primary')).not.toHaveProperty('pin_digest');
+    expect(payloadOf('trend/no-macro-gate')).not.toHaveProperty('pin_digest');
+  });
+
   it('lets both primaries enter in a dry run, where no book reaches the broker', async () => {
     const deps = twoPrimaries(true);
 
@@ -3302,6 +3318,7 @@ describe('#1785: gross-cash gate on entries and signal-driven exits', () => {
     expect(last?.payload).not.toHaveProperty('entry_offset_bps');
     expect(last?.payload).not.toHaveProperty('approval');
     expect(last?.payload).not.toHaveProperty('modelled_slippage_bps');
+    expect(last?.payload.pin_digest).toBe(pinDigest(ALL_PINS));
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-25-SYM9')?.payload).toMatchObject({
       entry_offset_bps: 50,
     });

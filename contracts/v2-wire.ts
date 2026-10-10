@@ -320,11 +320,17 @@ export interface EntryOffsetTradesWire {
   readonly closed_trades: number;
 }
 
+export interface ModelPinsTradesWire {
+  readonly pin_digest: string | null;
+  readonly closed_trades: number;
+}
+
 export interface ClosedTradesBookWire {
   readonly book_id: string;
   readonly variant: string;
   readonly closed_trades: number;
   readonly by_entry_offset: readonly EntryOffsetTradesWire[];
+  readonly by_model_pins: readonly ModelPinsTradesWire[];
 }
 
 export interface TradeCountWire {
@@ -644,8 +650,10 @@ export const V2_WIRE_FIELD_NAMES = {
     'variant',
     'closed_trades',
     'by_entry_offset',
+    'by_model_pins',
   ]),
   entryOffsetTrades: fieldsOf<EntryOffsetTradesWire>()(['entry_offset_bps', 'closed_trades']),
+  modelPinsTrades: fieldsOf<ModelPinsTradesWire>()(['pin_digest', 'closed_trades']),
   tradeCount: fieldsOf<TradeCountWire>()(['target', 'books']),
   evidence: fieldsOf<EvidenceWire>()([
     'contract_version',

@@ -625,16 +625,17 @@ function rowsOf(db: StoreHandle, sql: string, tradingDate: string, end: string):
   return db.prepare(sql).all({ date: tradingDate, end }) as Row[];
 }
 
-const MODELLED_SLIPPAGE_KEY = 'modelled_slippage_bps';
+// An order journalled before #1884 carries no modelled slippage, and an entry before #1747 no pin
+// digest, so the replayed one cannot be held to them: every such day would diverge on the payload
+// whatever the tables say
+const LATER_PAYLOAD_KEYS = ['modelled_slippage_bps', 'pin_digest'];
 
-// An order journalled before #1884 carries no modelled slippage, so the replayed one cannot be
-// held to it: every such day would diverge on the payload whatever the tables say
 function comparableTo(journalled: Row, replayed: Row): Row {
   const [before, after] = [journalled.payload, replayed.payload];
   if (typeof before !== 'string' || typeof after !== 'string') return replayed;
-  if (MODELLED_SLIPPAGE_KEY in (JSON.parse(before) as Record<string, unknown>)) return replayed;
+  const held = JSON.parse(before) as Record<string, unknown>;
   const kept = Object.entries(JSON.parse(after) as Record<string, unknown>).filter(
-    ([name]) => name !== MODELLED_SLIPPAGE_KEY,
+    ([name]) => name in held || !LATER_PAYLOAD_KEYS.includes(name),
   );
   return { ...replayed, payload: JSON.stringify(Object.fromEntries(kept)) };
 }

@@ -4,6 +4,7 @@ import type { StoreHandle } from '../../../shared/store/index.js';
 import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { annualisedSharpe } from '../evidence/index.js';
 import { Journal } from '../journal/journal.js';
+import { ALL_PINS, JUDGE_PIN, pinDigest } from '../signal/models.js';
 import { EvidenceReader } from './evidence.js';
 
 const CAPTURED = {
@@ -26,11 +27,11 @@ function open(): void {
   db = migratedMemoryStore();
 }
 
-function book(bookId: string, variant: string): void {
+function book(bookId: string, variant: string, sleeveId = 'debate'): void {
   db.prepare(
     `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
-     VALUES (?, 'debate', ?, 1000, 1000, 'x')`,
-  ).run(bookId, variant);
+     VALUES (?, ?, ?, 1000, 1000, 'x')`,
+  ).run(bookId, sleeveId, variant);
 }
 
 function day(bookId: string, date: string, equity: number): void {
@@ -241,12 +242,14 @@ describe('EvidenceReader (P5–P8)', () => {
             { entry_offset_bps: null, closed_trades: 2 },
             { entry_offset_bps: 50, closed_trades: 2 },
           ],
+          by_model_pins: [{ pin_digest: null, closed_trades: 4 }],
         },
         {
           book_id: 'debate/no-veto',
           variant: 'no-veto',
           closed_trades: 1,
           by_entry_offset: [{ entry_offset_bps: null, closed_trades: 1 }],
+          by_model_pins: [{ pin_digest: null, closed_trades: 1 }],
         },
       ],
     });
@@ -288,6 +291,90 @@ describe('EvidenceReader (P5–P8)', () => {
             { entry_offset_bps: 0, closed_trades: 2 },
             { entry_offset_bps: 50, closed_trades: 2 },
             { entry_offset_bps: 100, closed_trades: 1 },
+          ],
+          by_model_pins: [{ pin_digest: null, closed_trades: 6 }],
+        },
+      ],
+    });
+  });
+
+  it('counts toward G1 only trades under the current pins of their book, an undigested entry as current (#1747)', () => {
+    open();
+    book('debate/primary', 'primary');
+    book('signals/primary', 'primary', 'signals');
+    book('signals/no-veto', 'no-veto', 'signals');
+    book('trend/primary', 'primary', 'trend');
+    const debate = pinDigest(ALL_PINS);
+    const judge = pinDigest([JUDGE_PIN]);
+    const none = pinDigest([]);
+    let trip = 0;
+    const roundTrip = (bookId: string, entry: Record<string, unknown>) => {
+      trip += 1;
+      const instrument = `N${trip}`;
+      exitOrder(`${trip}-entry`, bookId, 'entry', entry, instrument);
+      fillOf(`${trip}-in`, `${trip}-entry`, bookId, 'entry', instrument);
+      exitOrder(`${trip}-exit`, bookId, 'exit', {}, instrument);
+      fillOf(`${trip}-out`, `${trip}-exit`, bookId, 'exit', instrument);
+    };
+    roundTrip('debate/primary', AT_OFFSET);
+    roundTrip('debate/primary', { ...AT_OFFSET, pin_digest: debate });
+    roundTrip('debate/primary', { ...AT_OFFSET, pin_digest: debate });
+    roundTrip('debate/primary', { ...AT_OFFSET, pin_digest: 'ffffffffffffffff' });
+    roundTrip('debate/primary', { ...AT_OFFSET, pin_digest: '0000000000000000' });
+    roundTrip('debate/primary', { price: 20, pin_digest: debate });
+    roundTrip('signals/primary', { ...AT_OFFSET, pin_digest: judge });
+    roundTrip('signals/primary', { ...AT_OFFSET, pin_digest: debate });
+    roundTrip('signals/no-veto', { ...AT_OFFSET, pin_digest: none });
+    roundTrip('signals/no-veto', { ...AT_OFFSET, pin_digest: judge });
+    roundTrip('trend/primary', AT_OFFSET);
+    roundTrip('trend/primary', { ...AT_OFFSET, pin_digest: none });
+    expect(read().trade_count).toEqual({
+      status: 'fed',
+      target: 100,
+      books: [
+        {
+          book_id: 'debate/primary',
+          variant: 'primary',
+          closed_trades: 3,
+          by_entry_offset: [
+            { entry_offset_bps: 0, closed_trades: 1 },
+            { entry_offset_bps: 50, closed_trades: 5 },
+          ],
+          by_model_pins: [
+            { pin_digest: null, closed_trades: 1 },
+            { pin_digest: '0000000000000000', closed_trades: 1 },
+            { pin_digest: debate, closed_trades: 3 },
+            { pin_digest: 'ffffffffffffffff', closed_trades: 1 },
+          ].sort((a, b) => (a.pin_digest ?? '').localeCompare(b.pin_digest ?? '')),
+        },
+        {
+          book_id: 'signals/primary',
+          variant: 'primary',
+          closed_trades: 1,
+          by_entry_offset: [{ entry_offset_bps: 50, closed_trades: 2 }],
+          by_model_pins: [
+            { pin_digest: debate, closed_trades: 1 },
+            { pin_digest: judge, closed_trades: 1 },
+          ].sort((a, b) => (a.pin_digest ?? '').localeCompare(b.pin_digest ?? '')),
+        },
+        {
+          book_id: 'signals/no-veto',
+          variant: 'no-veto',
+          closed_trades: 1,
+          by_entry_offset: [{ entry_offset_bps: 50, closed_trades: 2 }],
+          by_model_pins: [
+            { pin_digest: judge, closed_trades: 1 },
+            { pin_digest: none, closed_trades: 1 },
+          ].sort((a, b) => (a.pin_digest ?? '').localeCompare(b.pin_digest ?? '')),
+        },
+        {
+          book_id: 'trend/primary',
+          variant: 'primary',
+          closed_trades: 1,
+          by_entry_offset: [{ entry_offset_bps: 50, closed_trades: 2 }],
+          by_model_pins: [
+            { pin_digest: null, closed_trades: 1 },
+            { pin_digest: none, closed_trades: 1 },
           ],
         },
       ],
