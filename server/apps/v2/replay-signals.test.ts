@@ -111,12 +111,14 @@ describe('signalsGuard', () => {
 });
 
 describe('journalledVeto', () => {
+  const SETTLED = AT.toISOString();
+
   it('answers each attempt from its own journalled verdict', async () => {
     const { db, signals, id } = journal();
     signals.recordVeto(id, { kind: 'unavailable', reason: 'llm_call_failed: upstream 503' });
     signals.claimVeto(id, 2);
     signals.recordRetryVeto(id, { kind: 'veto', reason: 'stop inside noise' });
-    const veto = journalledVeto(db);
+    const veto = journalledVeto(db, SETTLED);
 
     await expect(veto(id, 1, {} as never)).resolves.toEqual({
       kind: 'unavailable',
@@ -132,14 +134,14 @@ describe('journalledVeto', () => {
     const { db, signals, id } = journal();
     signals.recordVeto(id, INTERRUPTED_VETO);
 
-    await expect(journalledVeto(db)(id, 1, {} as never)).resolves.toBe(INTERRUPTED_VETO);
+    await expect(journalledVeto(db, SETTLED)(id, 1, {} as never)).resolves.toBe(INTERRUPTED_VETO);
   });
 
   it('keeps a verdict that only shares the interrupted reason as the verdict it was', async () => {
     const { db, signals, id } = journal();
     signals.recordVeto(id, { kind: 'veto', reason: INTERRUPTED_VETO.reason });
 
-    await expect(journalledVeto(db)(id, 1, {} as never)).resolves.toEqual({
+    await expect(journalledVeto(db, SETTLED)(id, 1, {} as never)).resolves.toEqual({
       kind: 'veto',
       reason: INTERRUPTED_VETO.reason,
     });
@@ -148,8 +150,42 @@ describe('journalledVeto', () => {
   it('refuses an attempt with no journalled verdict rather than calling a model', async () => {
     const { db, id } = journal();
 
-    await expect(journalledVeto(db)(id, 1, {} as never)).rejects.toThrow(
-      `replay: no journalled attempt 1 veto verdict for signal ${id}, and the replay makes no LLM call`,
+    await expect(journalledVeto(db, SETTLED)(id, 1, {} as never)).rejects.toThrow(
+      `replay: no journalled attempt 1 veto verdict for signal ${id} by ${SETTLED}, and the replay makes no LLM call`,
+    );
+  });
+
+  it('accepts a verdict recorded at the settle instant itself', async () => {
+    const { db, clock, signals, id } = journal();
+    signals.recordVeto(id, { kind: 'unavailable', reason: 'llm_call_failed: upstream 503' });
+    clock.advanceTo(new Date(AT.getTime() + 5_000));
+    signals.claimVeto(id, 2);
+    signals.recordRetryVeto(id, { kind: 'pass', reason: 'ok' });
+    const retrySettled = clock.now().toISOString();
+
+    await expect(journalledVeto(db, SETTLED)(id, 1, {} as never)).resolves.toMatchObject({
+      kind: 'unavailable',
+    });
+    await expect(journalledVeto(db, retrySettled)(id, 2, {} as never)).resolves.toEqual({
+      kind: 'pass',
+      reason: 'ok',
+    });
+  });
+
+  it('refuses a verdict recorded after the pass settled, on either attempt', async () => {
+    const { db, clock, signals, id } = journal();
+    signals.recordVeto(id, { kind: 'unavailable', reason: 'llm_call_failed: upstream 503' });
+    clock.advanceTo(new Date(AT.getTime() + 5_000));
+    signals.claimVeto(id, 2);
+    signals.recordRetryVeto(id, { kind: 'pass', reason: 'ok' });
+    const before = new Date(AT.getTime() - 1).toISOString();
+    const beforeRetry = new Date(AT.getTime() + 4_999).toISOString();
+
+    await expect(journalledVeto(db, before)(id, 1, {} as never)).rejects.toThrow(
+      `replay: no journalled attempt 1 veto verdict for signal ${id} by ${before}`,
+    );
+    await expect(journalledVeto(db, beforeRetry)(id, 2, {} as never)).rejects.toThrow(
+      `replay: no journalled attempt 2 veto verdict for signal ${id} by ${beforeRetry}`,
     );
   });
 });

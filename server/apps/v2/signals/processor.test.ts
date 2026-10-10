@@ -1908,7 +1908,31 @@ describe('replay of a signals day (#2096)', () => {
       key: `${id}#2`,
       field: 'outcome',
       journalled: expect.stringMatching(/^processed: veto pass: /),
-      replayed: `failed: replay: no journalled attempt 2 veto verdict for signal ${id}, and the replay makes no LLM call`,
+      replayed: `failed: replay: no journalled attempt 2 veto verdict for signal ${id} by ${LATER.toISOString()}, and the replay makes no LLM call`,
+    });
+  });
+
+  it('shows a first verdict journalled after its pass settled as a divergence, not identical', async () => {
+    const { replay, id } = journalled;
+
+    const result = await replayFromFiles(
+      tampered(
+        replay,
+        `UPDATE v2_signal_vetoes SET recorded_at = '${new Date(LATER.getTime() - 1).toISOString()}'
+          WHERE signal_id = '${id}'`,
+        'v2_signal_vetoes_no_update',
+      ),
+    );
+
+    expect(result.divergences).toContainEqual({
+      kind: 'row_field',
+      stage: 'signal_events',
+      key: `${id}#1`,
+      field: 'outcome',
+      journalled: expect.stringMatching(/^failed: veto llm_call_failed/),
+      replayed: expect.stringMatching(
+        new RegExp(`^failed: replay: no journalled attempt 1 veto verdict for signal ${id} by `),
+      ),
     });
   });
 
