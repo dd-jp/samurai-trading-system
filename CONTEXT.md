@@ -84,7 +84,7 @@ Live capital ≤ £1,500 / (backtest maximum drawdown × 1.5). Capital is derive
 ### Proof
 
 **Trial**
-One configuration tried, anywhere: a backtest variant, a shadow comparison, a model swap, a stop on or off. Every trial increments a global, append-only **trial counter**, and DSR is deflated over all of them. A pinned model version changing is a new trial and restarts that sleeve's paper evaluation.
+One configuration tried, anywhere: a backtest variant, a shadow comparison, a model swap, a stop on or off. Every trial increments a global, append-only **trial counter**, and DSR is deflated over all of them. A pinned model version changing is a new trial and restarts the closed-trade count of each book whose own pins changed; books that use no model, such as arm 2 and the no-veto shadows, never restart.
 
 **Gate**
 The pre-declared conditions a sleeve passes before live capital: backtest beats its benchmark after a 40% Sharpe haircut with **DSR ≥ 0.95** and **PBO ≤ 0.10** on 10+ years; 8–12 weeks of paper **in band**; 4 consecutive **fault-free weeks**; then the **approval request**. The debate sleeve substitutes its arm-2 forward test for the backtest clause.
