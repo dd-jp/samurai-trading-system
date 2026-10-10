@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { rateFor } from '../../../shared/llm/index.js';
-import { ALL_PINS, DEBATER_PINS, JUDGE_PIN } from './models.js';
+import { ALL_PINS, DEBATER_PINS, JUDGE_PIN, type ModelPin, pinDigest } from './models.js';
 
 describe('model pins', () => {
   it('never puts a Fable model in a seat', () => {
@@ -35,5 +36,41 @@ describe('model pins', () => {
       ['deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-pro-20260813'],
       ['anthropic/claude-opus-5.5', 'anthropic/claude-opus-5.5-20260921'],
     ]);
+  });
+});
+
+describe('pinDigest (#1747, David 2026-10-10)', () => {
+  const sha16 = (text: string) => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
+  it('hashes each pin as seat, wire and configured slug, sorted by seat, to 16 hex', () => {
+    expect(pinDigest([JUDGE_PIN, ...DEBATER_PINS])).toBe(
+      sha16(
+        JSON.stringify(
+          [...ALL_PINS]
+            .sort((a, b) => (a.seat < b.seat ? -1 : 1))
+            .map(({ seat, wire, canonicalSlug }) => ({
+              seat,
+              wire,
+              canonicalSlug: canonicalSlug ?? null,
+            })),
+        ),
+      ),
+    );
+    expect(pinDigest([...ALL_PINS].reverse())).toBe(pinDigest(ALL_PINS));
+    expect(pinDigest([])).toBe(sha16('[]'));
+  });
+
+  it('writes an absent slug as null', () => {
+    const pin: ModelPin = { seat: 'sonnet', wire: 'w', priced: 'p', canonicalSlug: undefined };
+    expect(pinDigest([pin])).toBe(
+      sha16(JSON.stringify([{ seat: 'sonnet', wire: 'w', canonicalSlug: null }])),
+    );
+  });
+
+  it('moves on a wire or configured slug change, never on the priced id', () => {
+    const base = pinDigest([JUDGE_PIN]);
+    expect(pinDigest([{ ...JUDGE_PIN, wire: 'anthropic/other' }])).not.toBe(base);
+    expect(pinDigest([{ ...JUDGE_PIN, canonicalSlug: 'anthropic/other-1' }])).not.toBe(base);
+    expect(pinDigest([{ ...JUDGE_PIN, priced: 'anthropic/other' }])).toBe(base);
   });
 });

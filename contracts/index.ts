@@ -153,6 +153,7 @@ export type {
   LossBudgetBookWire,
   LossBudgetWire,
   MarkWire,
+  ModelPinsTradesWire,
   NextCycleWire,
   NotYetFedWire,
   PanelWire,

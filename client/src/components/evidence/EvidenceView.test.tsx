@@ -65,6 +65,40 @@ describe('EvidenceView (P5–P8)', () => {
     expect(panel.textContent).toContain('One-sided 95% test vs arm 2: Not yet fed: arm 2 (#1773).');
   });
 
+  it('splits the closed trades by entry offset and by model pins (#1815, #1747)', async () => {
+    await shown(evidence());
+    const panel = await screen.findByRole('region', { name: 'Debate G1 progress' });
+    const cells = within(within(panel).getByRole('row', { name: /debate\/primary/ })).getAllByRole(
+      'cell',
+    );
+    expect(cells.slice(-2).map((cell) => cell.textContent)).toEqual([
+      '0 bps: 3, 50 bps: 12',
+      'no digest: 4, 0123456789abcdef: 11',
+    ]);
+  });
+
+  it('names an untagged offset', async () => {
+    await shown(
+      evidence({
+        trade_count: {
+          status: 'fed',
+          target: 100,
+          books: [
+            {
+              book_id: 'debate/primary',
+              variant: 'primary',
+              closed_trades: 1,
+              by_entry_offset: [{ entry_offset_bps: null, closed_trades: 1 }],
+              by_model_pins: [{ pin_digest: null, closed_trades: 1 }],
+            },
+          ],
+        },
+      }),
+    );
+    const panel = await screen.findByRole('region', { name: 'Debate G1 progress' });
+    expect(panel.textContent).toContain('no offset: 1');
+  });
+
   it('shows the band and gate as owned by their steps (P7, P8)', async () => {
     await shown(evidence());
     const band = await screen.findByRole('region', { name: 'Live-vs-backtest band' });

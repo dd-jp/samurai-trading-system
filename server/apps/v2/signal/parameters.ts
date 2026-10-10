@@ -13,6 +13,7 @@ import {
   saxoCfdBorrow,
 } from '../data/index.js';
 import type { VolTargetSizing } from '../risk/index.js';
+import { ALL_PINS, JUDGE_PIN, type ModelPin, pinDigest } from './models.js';
 
 export const UNSET: unique symbol = Symbol('unset');
 
@@ -241,6 +242,20 @@ export const SLEEVE_SPECS_BY_ID: Readonly<Record<string, SleeveSpec>> = {
   [ARM2_SLEEVE_ID]: ARM2_SLEEVE_SPEC,
   [SIGNALS_SLEEVE_ID]: SIGNALS_SLEEVE_SPEC,
 };
+
+// David 2026-10-04 and 2026-10-10 (#1747): a book resets only on its own pins; a no-veto shadow
+// calls no model, so it never resets
+export const SLEEVE_PINS_BY_ID: Readonly<Record<string, readonly ModelPin[]>> = {
+  [DEBATE_SLEEVE_ID]: ALL_PINS,
+  [ARM2_SLEEVE_ID]: [],
+  [SIGNALS_SLEEVE_ID]: [JUDGE_PIN],
+};
+
+export function bookPinDigest(sleeveId: string, variant: string): string | undefined {
+  const pins = SLEEVE_PINS_BY_ID[sleeveId];
+  if (pins === undefined) return undefined;
+  return pinDigest(variant === 'no-veto' ? [] : pins);
+}
 
 export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;
 

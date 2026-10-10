@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export type DebaterSeat = 'sonnet' | 'gpt' | 'deepseek';
 
 export interface ModelPin {
@@ -39,6 +41,14 @@ export const JUDGE_PIN: ModelPin = {
 export const DEBATER_PINS: readonly ModelPin[] = [SONNET_5_PIN, GPT_5_5_PIN, DEEPSEEK_V4_PRO_PIN];
 
 export const ALL_PINS: readonly ModelPin[] = [...DEBATER_PINS, JUDGE_PIN];
+
+// David 2026-10-10 (#1747): the configured slug only, since an observed one flips (#1787)
+export function pinDigest(pins: readonly ModelPin[]): string {
+  const keyed = [...pins]
+    .sort((a, b) => (a.seat < b.seat ? -1 : 1))
+    .map(({ seat, wire, canonicalSlug }) => ({ seat, wire, canonicalSlug: canonicalSlug ?? null }));
+  return createHash('sha256').update(JSON.stringify(keyed)).digest('hex').slice(0, 16);
+}
 
 export const DEBATER_MAX_TOKENS = 1024;
 export const JUDGE_MAX_TOKENS = 2048;

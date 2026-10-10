@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { SAXO_CFD_COMMISSION, SAXO_CFD_FINANCING, SAXO_CFD_SPREAD } from '../data/index.js';
+import { ALL_PINS, DEBATER_PINS, JUDGE_PIN, pinDigest } from './models.js';
 import {
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
+  ARM2_SLEEVE_ID,
+  bookPinDigest,
   CFD_BORROW_MODEL,
   CFD_COST_MODEL,
   CFD_ENTRY_GATES,
@@ -14,6 +17,8 @@ import {
   CYCLE_LEVEL_PARAMETERS,
   cfdEntryRefusal,
   DEBATE_RISK_FRACTION,
+  DEBATE_SLEEVE_ID,
+  DEBATE_SLEEVE_SPEC,
   DEBATE_TARGET_ATR_MULTIPLE,
   DEBATE_TIME_STOP_TRADING_DAYS,
   DECLARED_PARAMETERS,
@@ -29,6 +34,10 @@ import {
   RECONCILE_CASH_TOLERANCE_GBP,
   requireSet,
   SAXO_APPROPRIATENESS_TEST_TAKEN,
+  SIGNALS_SLEEVE_ID,
+  SIGNALS_SLEEVE_SPEC,
+  SLEEVE_PINS_BY_ID,
+  SLEEVE_SPECS_BY_ID,
   UNSET,
   UnsetParameterError,
   VOL_TARGET_SIZING,
@@ -226,5 +235,34 @@ describe('parameters', () => {
 
   it('the Saxo appropriateness test is recorded as taken (doc 66 ruling (l), #1774 (b))', () => {
     expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(true);
+  });
+});
+
+describe('sleeve pin sets (#1747, David 2026-10-04 and 2026-10-10)', () => {
+  it('declares a pin set for every sleeve that has a spec', () => {
+    expect(Object.keys(SLEEVE_PINS_BY_ID).sort()).toEqual(Object.keys(SLEEVE_SPECS_BY_ID).sort());
+  });
+
+  it('pins every debate book to all three debaters, the idle rotation seat included, and the judge', () => {
+    expect(DEBATER_PINS.map((pin) => pin.seat)).toEqual(['sonnet', 'gpt', 'deepseek']);
+    for (const { variant } of DEBATE_SLEEVE_SPEC.books) {
+      expect(bookPinDigest(DEBATE_SLEEVE_ID, variant)).toBe(pinDigest(ALL_PINS));
+    }
+  });
+
+  it('pins the signals primary to the judge alone, so a debater swap leaves it alone', () => {
+    expect(bookPinDigest(SIGNALS_SLEEVE_ID, 'primary')).toBe(pinDigest([JUDGE_PIN]));
+  });
+
+  it('gives arm 2 and every no-veto book the empty set, so they never reset', () => {
+    const none = pinDigest([]);
+    expect(bookPinDigest(ARM2_SLEEVE_ID, 'technical-only')).toBe(none);
+    expect(SIGNALS_SLEEVE_SPEC.books.map((book) => book.variant)).toContain('no-veto');
+    expect(bookPinDigest(SIGNALS_SLEEVE_ID, 'no-veto')).toBe(none);
+    expect(bookPinDigest(DEBATE_SLEEVE_ID, 'no-veto')).toBe(none);
+  });
+
+  it('has no digest for a sleeve with no declared pins', () => {
+    expect(bookPinDigest('trend', 'primary')).toBeUndefined();
   });
 });

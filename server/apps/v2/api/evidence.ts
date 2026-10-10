@@ -4,6 +4,7 @@ import {
   type EntryOffsetTradesWire,
   type EquityPointWire,
   type EvidenceWire,
+  type ModelPinsTradesWire,
   type NotYetFedWire,
   type PanelWire,
   type PerformanceWire,
@@ -15,6 +16,7 @@ import { type StoreHandle, toStoredTimestamp } from '../../../shared/store/index
 import { CLOSE_LEGS_SQL, entryOffsetOfPayload, entryPayloadOfClose } from '../entry-offset.js';
 import { annualisedSharpe, maxDrawdown, moments } from '../evidence/index.js';
 import { ENTRY_LIMIT_OFFSET } from '../risk/index.js';
+import { bookPinDigest } from '../signal/index.js';
 
 const G1_CLOSED_TRADES = 100;
 
@@ -28,16 +30,17 @@ interface BookRow {
   variant: string;
 }
 
-interface OffsetRow extends EntryOffsetTradesWire {
+interface TaggedRow extends EntryOffsetTradesWire, ModelPinsTradesWire {
   book_id: string;
 }
 
-const CLOSED_TRADES_BY_ENTRY_OFFSET = `
+const CLOSED_TRADES_BY_ENTRY_TAGS = `
   WITH closes AS (
     SELECT book_id, instrument, client_order_id, MIN(rowid) AS at FROM v2_fills
      WHERE ${CLOSE_LEGS_SQL} GROUP BY book_id, client_order_id
   ), tagged AS (
-    SELECT book_id, ${entryOffsetOfPayload('entry_payload')} AS entry_offset_bps
+    SELECT book_id, ${entryOffsetOfPayload('entry_payload')} AS entry_offset_bps,
+           json_extract(entry_payload, '$.pin_digest') AS pin_digest
       FROM (
         SELECT c.book_id, ${entryPayloadOfClose({
           bookId: 'c.book_id',
@@ -48,27 +51,36 @@ const CLOSED_TRADES_BY_ENTRY_OFFSET = `
           FROM closes c
       )
   )
-  SELECT book_id, entry_offset_bps, COUNT(*) AS closed_trades FROM tagged
-   GROUP BY book_id, entry_offset_bps ORDER BY book_id, entry_offset_bps`;
+  SELECT book_id, entry_offset_bps, pin_digest, COUNT(*) AS closed_trades FROM tagged
+   GROUP BY book_id, entry_offset_bps, pin_digest
+   ORDER BY book_id, entry_offset_bps, pin_digest`;
 
 function inCurrentSample({ entry_offset_bps }: EntryOffsetTradesWire): boolean {
   return entry_offset_bps === null || entry_offset_bps === ENTRY_LIMIT_OFFSET.capBps;
 }
 
-function closedTradesBook(
-  book: Omit<BookRow, 'sleeve_id'>,
-  rows: readonly OffsetRow[],
-): ClosedTradesBookWire {
-  const byEntryOffset = rows
-    .filter((row) => row.book_id === book.book_id)
-    .map(({ entry_offset_bps, closed_trades }) => ({ entry_offset_bps, closed_trades }));
+function totalsBy<K>(rows: readonly TaggedRow[], keyOf: (row: TaggedRow) => K): [K, number][] {
+  const totals = new Map<K, number>();
+  for (const row of rows) totals.set(keyOf(row), (totals.get(keyOf(row)) ?? 0) + row.closed_trades);
+  return [...totals];
+}
+
+function closedTradesBook(book: BookRow, rows: readonly TaggedRow[]): ClosedTradesBookWire {
+  const own = rows.filter((row) => row.book_id === book.book_id);
+  const current = bookPinDigest(book.sleeve_id, book.variant) ?? null;
+  const counted = own.filter(
+    (row) => inCurrentSample(row) && (row.pin_digest === null || row.pin_digest === current),
+  );
   return {
     book_id: book.book_id,
     variant: book.variant,
-    closed_trades: byEntryOffset
-      .filter(inCurrentSample)
-      .reduce((total, row) => total + row.closed_trades, 0),
-    by_entry_offset: byEntryOffset,
+    closed_trades: counted.reduce((total, row) => total + row.closed_trades, 0),
+    by_entry_offset: totalsBy(own, (row) => row.entry_offset_bps).map(
+      ([entry_offset_bps, closed_trades]) => ({ entry_offset_bps, closed_trades }),
+    ),
+    by_model_pins: totalsBy(own, (row) => row.pin_digest)
+      .sort(([a], [b]) => (a ?? '').localeCompare(b ?? ''))
+      .map(([pin_digest, closed_trades]) => ({ pin_digest, closed_trades })),
   };
 }
 
@@ -153,11 +165,11 @@ export class EvidenceReader {
   #tradeCount(): PanelWire<TradeCountWire> {
     const books = this.db
       .prepare(
-        `SELECT book_id, variant FROM v2_books
+        `SELECT book_id, sleeve_id, variant FROM v2_books
           ORDER BY sleeve_id, variant <> 'primary', book_id`,
       )
-      .all() as Omit<BookRow, 'sleeve_id'>[];
-    const rows = this.db.prepare(CLOSED_TRADES_BY_ENTRY_OFFSET).all() as OffsetRow[];
+      .all() as BookRow[];
+    const rows = this.db.prepare(CLOSED_TRADES_BY_ENTRY_TAGS).all() as TaggedRow[];
     return books.length === 0
       ? { status: 'empty' }
       : {

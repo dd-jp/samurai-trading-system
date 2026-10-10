@@ -64,7 +64,12 @@ import {
   type StepThrow,
   type ThrowFailure,
 } from './reconcile.js';
-import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
+import {
+  bookPinDigest,
+  CYCLE_LEVEL_PARAMETERS,
+  isSet,
+  UnsetParameterError,
+} from './signal/index.js';
 import {
   bracketExit,
   type LimitEntryOutcome,
@@ -1558,7 +1563,7 @@ class Cycle {
       this.deps.journal.recordOrder({
         ...row,
         outcome: refused,
-        payload: this.entryPayload(decision, approval, side, approval.refusal, false),
+        payload: this.entryPayload(book, decision, approval, side, approval.refusal, false),
       });
       return refused;
     }
@@ -1568,7 +1573,7 @@ class Cycle {
     this.deps.journal.recordOrder({
       ...row,
       outcome: 'pending',
-      payload: this.entryPayload(decision, approval, side, '', sent),
+      payload: this.entryPayload(book, decision, approval, side, '', sent),
     });
     const submission = await this.deps.executor.submit(approval.order);
     this.count(submission.outcome);
@@ -1576,6 +1581,7 @@ class Cycle {
       clientOrderId,
       submission.outcome,
       this.entryPayload(
+        book,
         decision,
         approval,
         side,
@@ -1587,6 +1593,7 @@ class Cycle {
   }
 
   entryPayload(
+    book: BookSpec,
     decision: SleeveDecision,
     approval: EntryApproval,
     side: OrderSide,
@@ -1618,6 +1625,7 @@ class Cycle {
       stop: decision.stop_price,
       target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
       approval: approval.order?.approvalId,
+      pin_digest: bookPinDigest(book.sleeve, book.variant),
     };
   }
 

@@ -838,7 +838,7 @@ David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/17
    - `by_model_pins` sits next to `by_entry_offset`.
    - Sharpe, drawdown and equity stay whole-book (ruling 2).
 
-Not built yet. The build is in progress on the branch feat/1747-pin-digest and has not merged; until it does, a pin change still resets nothing.
+Built in [#2110](https://github.com/dd-jp/samurai-trading-system/pull/2110): each entry's payload carries `pin_digest` (`pinDigest` in `server/apps/v2/signal/models.ts`, pin sets in `SLEEVE_PINS_BY_ID` in `server/apps/v2/signal/parameters.ts`), and `server/apps/v2/api/evidence.ts` counts G1 under the current digest and serves `by_model_pins`.
 
 ## Still open
 
