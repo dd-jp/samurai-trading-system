@@ -278,7 +278,7 @@ Each item needs an automated test or a recorded drill with its pass condition. B
 | Area | Item | Pass condition |
 |---|---|---|
 | Backtest | Look-ahead canary | The edge survives shifting the signal one bar later (an edge that collapses points to look-ahead; corrected 2026-10-07, doc 66); the walk-forward edge over the benchmark sits above the 95th percentile of 200 matched random-entry runs (corrected 2026-10-08, doc 66) |
-| Backtest | Cost stress | Result reported at 1× and 2× modelled cost; 2× must not flip the sign, or the sleeve is flagged |
+| Backtest | Cost stress | Result reported at 1× and 2× modelled cost; 2× must not flip the sign, or the sleeve is flagged *(2026-10-09, doc 66: a flip of the out-of-sample Sharpe or total return from positive to ≤ 0 fails the trial or candidate; 2026-10-09, doc 66, "flip if either flips": the flip is read on the 2× run's own picks and on the 1× picks priced at 2×, and either one fails it)* |
 | Backtest | Regime split | Per-period table (incl. 2020 crash, 2022 drawdown); no single period carries the result alone |
 | Backtest | Locked final holdout | A final time slice the research loop can never read; read once, at promotion |
 | Backtest | Data sanity | Coverage invariant per series (postmortem §2); adjusted-price jumps, gaps, zero-volume days flagged |

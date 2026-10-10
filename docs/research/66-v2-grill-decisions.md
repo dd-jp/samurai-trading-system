@@ -604,6 +604,8 @@ Choices the rulings do not cover, made in the build and awaiting David's confirm
 - the path-noise comparison uses the fixed 0.25 rather than recomputing it;
 - no cost-stress rerun.
 
+*Answered 2026-10-08 (rulings below): every choice above is accepted as built, and the 2× cost rerun is added.*
+
 Limits of the backtest:
 
 - the macro calendar covers only 2026–2027, so every earlier day is a fail-closed macro day at half size, in both arms;
@@ -611,6 +613,12 @@ Limits of the backtest:
 - with no CFD route, arm 2 is long-only in the backtest.
 
 The trial has not been run and is not counted.
+
+## Rulings of 2026-10-07 — corporate-action feed (#2025)
+
+David ruled on [#2025](https://github.com/dd-jp/samurai-trading-system/issues/2025#issuecomment-6044069725) on 2026-10-07, after the feed comparison posted there.
+
+1. **Buy EODHD EOD All World ($19.99 a month) as the corporate-action source for both venues.** Alpaca's free `/v1/corporate-actions` stays as the US cross-check. EODHD's terms page is read once before paying; it must cover personal use and storing derived data. Whether the spend counts against the loss cap was left open, and ruled on 2026-10-08 (ruling 5 below: it does not).
 
 ## Rulings of 2026-10-08 — look-ahead canary, random half (#1747)
 
@@ -677,6 +685,41 @@ Build choices David ruled on the same day (2026-10-08, #2024):
 
 *Built 2026-10-08 (#2024):* ruling 2's floor in `server/apps/v2/signals/processor.ts`, after the stale-close check. The check of ruling 4 is not built.
 
+## Rulings of 2026-10-08 — vol-target trial defaults and 2× cost, data sanity defaults, data spend (#1860, #2074, #2025)
+
+David ruled on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/1860#issuecomment-6069853785), PR [#2074](https://github.com/dd-jp/samurai-trading-system/pull/2074#issuecomment-6069854171) and [#2025](https://github.com/dd-jp/samurai-trading-system/issues/2025#issuecomment-6069861198) on 2026-10-08.
+
+1. **The vol-target trial's build defaults are accepted as built (#1860).** These are the choices listed under the 2026-10-07 rulings above: the start on 2016-01-04, the £10,000 start capital, PBO by CSCV over the pair {baseline, trial} in 16 folds with a 10-day embargo, DSR and the drawdown check over the full window, a year inside the cap when its loss is at most the cap times 30%, and the path noise fixed at 0.25.
+2. **The trial runs doc 67's 2× modelled-cost rerun, as candidates do (#1860).** The rerun uses the same trial hash, so it is not a new counted trial.
+3. **The one-bar-delay canary does not bind the trial (#1860).** The look-ahead canary applies to candidates only, and this is a sizing trial on arm 2's own entries.
+4. **Both data-sanity defaults are accepted as built (#2074).** A 1.35× adjusted close-to-close jump flags a suspect bar *(the ruling's text said such a bar is excluded; corrected 2026-10-09, below: it is reported only, not excluded)*. For mean reversion the universe checked is the union of constituents across the window, which keeps the test survivorship-safe.
+5. **Data spend does not count against the loss cap (#2025).** The EODHD feed picked on 2026-10-07 (with Alpaca's corporate actions as the US cross-check) costs about £180 a year. The £1,500 cap stays a net trading loss, marked to market. Data spend and LLM spend are separate operating budgets (opex): tracked and reported, never deducted from the cap. Data spend also sits outside the ~$30 a month LLM cap.
+
+*Built 2026-10-08 (#1860), ruling 2* (`server/apps/v2/backtest-cli.ts`). Build notes (not rulings):
+
+- `npm run v2:backtest -- vol-target-sizing` now runs the trial twice: once at 1× modelled cost and once at 2×. The report carries `verdict` (1×), `stressed` (2×) and `signFlipped`. Both passes use `simulateBacktest`'s existing `costMultiple`, as the candidate runners do. It scales the spread, impact and fee legs together, in both arms, and stays out of the trial hash, so the rerun resolves to the same trial and the ledger count does not move. The backtest has no CFD route, so no CFD financing or borrow accrues. Saxo's 0.12% a year custody fee is a separate accrual and stays at 1×, as noted under candidate 1. Arm 2 trades US names at Alpaca in the backtest, so it is not charged.
+- `signFlipped` is true when the 2× pass flips `beatsBaselineOutOfSampleAfterHaircut`, the trial's counterpart of the candidates' `beatsBenchmarkAfterHaircut`. As for candidates, it is reported beside the verdict and does not enter `pass`. Doc 67's row says a flip flags the sleeve. Whether a flag fails the trial is not stated in the ruling, so it is left to David (below). *(Superseded 2026-10-09, below: the flip is the trial's own Sharpe or return sign, and it fails the trial and candidates.)*
+- The code comments that called these defaults "awaiting David" now cite this ruling.
+- **A run on the snapshot bars, not the counted run.** On 2026-10-09 the trial ran on the bar store `npm run bars:snapshot` restores (the last commit that tracked it, `ff29a732`), against a scratch research ledger, which holds only Session B's 8 rows, so the trial is number 9 there. The Mac's store and ledger are the counted ones; its trial count is higher, which lowers the DSR. Both passes took 42 minutes on a shared 4-vCPU container. FAIL at both cost levels:
+
+  | | 1× cost | 2× cost |
+  |---|---|---|
+  | Trial OOS Sharpe (after the 40% haircut) | 0.125 (0.075) | −0.225 (−0.135) |
+  | Unscaled arm 2 OOS Sharpe | 0.207 | 0.097 |
+  | Trial / arm 2 max drawdown | 21.0% / 23.8% | 22.5% / 24.9% |
+  | Trial / arm 2 total return | +4.8% / +11.1% | −4.5% / +5.2% |
+  | DSR (9 trials) | 0.12 | 0.05 |
+  | PBO (pair) | 0.87 | 0.71 |
+  | Years inside the cap, both arms | all | all |
+  | Checks passed | lower drawdown only | lower drawdown only |
+
+  `signFlipped` is false: the haircut check fails at both levels *(under the 2026-10-09 rule below it is true, a second failing check)*. The trial's own return and out-of-sample Sharpe do change sign at 2×, while unscaled arm 2 stays positive. The 1× gap to the baseline (−0.08) is inside the 0.25 path noise; the 2× gap (−0.32) is beyond it. The data-sanity block checked 722 series and flagged 148.
+
+Awaiting David *(both answered 2026-10-09, below)*:
+
+- **Does a 2× sign flip fail the trial, and which sign?** "As candidates do" is built as a reported flag on the haircut check, not a gated check, which matches the candidate runners. Candidate 1's run note above, though, counts the flip as one of the gate's checks. Doc 67's row says only "the sign". On the snapshot run the haircut check does not flip, but the trial's return and Sharpe do. Each reading is a one-line change.
+- **Ruling 4's "excluded".** The data-sanity block only reports a suspect bar; it does not drop it from the backtest. The ingest hygiene (`server/providers/bar-store/bar-hygiene.ts`) is a separate path. If David means the backtest should drop flagged bars, that is a build, and it changes candidate verdicts.
+
 ## Rulings of 2026-10-09 — random canary spill (#1747)
 
 David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/1747) on 2026-10-09: spill into the next fold. Later the same day he answered the two points the spill run left open (rulings 2 and 3), then two points from the PR review (rulings 4 and 5), then how a run over the tolerance counts (ruling 6), and last kept the draw bound (ruling 7).
@@ -741,6 +784,33 @@ David answered the review of PR #2097 (findings F1 and F2), recorded on [#2024](
 - Migration 0100 adds two append-only tables; 0099 is untouched. `v2_signal_veto_claims` holds one row per `(signal_id, attempt)`, attempt 1 or 2, written before the call; a trigger refuses an attempt-2 claim until the first verdict is in `v2_signal_vetoes`. `v2_signal_veto_retry_verdicts` holds the second verdict, keyed by the signal and tied by a foreign key to its attempt-2 claim. The first verdict stays in `v2_signal_vetoes`.
 - A restart that finds attempt 1 claimed with no verdict journals the first verdict as `unavailable` (`llm_call_failed: the call was interrupted before its verdict was journalled`) and runs attempt 2 in the same pass, since that pass is already a later one. A restart that finds attempt 2 claimed with no verdict journals the same reason as the final verdict and makes no call.
 - The spend cap is checked inside the veto call, after the claim, so a capped attempt still writes its claim and then its final verdict, with no LLM call.
+
+## Rulings of 2026-10-09 — a 2× cost flip fails, suspect bars stay report-only (#1860, #2074)
+
+David answered the two points left awaiting him under the 2026-10-08 rulings above, on [#1860](https://github.com/dd-jp/samurai-trading-system/issues/1860) and PR [#2074](https://github.com/dd-jp/samurai-trading-system/pull/2074). Later the same day he answered finding 5 of the PR [#2098](https://github.com/dd-jp/samurai-trading-system/pull/2098#issuecomment-6085533478) review (ruling 3).
+
+1. **A 2× cost flip fails (#1860).** A trial or candidate fails if its own out-of-sample Sharpe or its total return is positive at 1× modelled cost and ≤ 0 at 2×. This binds the vol-target trial and every S2 candidate. It replaces the reported-only flag on the haircut check. Candidate 1's run note treated a flip of that check as a gate check; a flip is now a gate check, but of the Sharpe and return signs.
+2. **Suspect bars stay report-only (#2074).** A bar whose adjusted close-to-close move is beyond 1.35× is flagged in the data-sanity block and stays in the backtest. A sample of the flagged bars is reviewed before David decides on exclusion. The 2026-10-08 ruling 4's "excluded" is corrected above.
+3. **Flip if either flips (#1860).** The flip in ruling 1 is read twice: (a) on the 2× run's own picks, as first built, and (b) on the trials the 1× run picked, its full-window pick and each walk-forward fold's pick, re-evaluated at 2× cost. Either reading flipping, on the out-of-sample Sharpe or the total return, fails the trial or candidate. This closes the gap the review found: trial A picked at 1× could flip at 2× while the 2× run picked trial B, which stayed positive, and the check passed.
+
+*Built 2026-10-09 (#1860), ruling 1* (`server/apps/v2/cost-stress.ts`, wired in `server/apps/v2/backtest-cli.ts`). Build notes (not rulings):
+
+- The 1× verdict carries a new check, `holdsSignAtDoubledCost`, which `pass` requires; the 2× verdict is reported as before and carries no such check. `signFlipped` now means the ruled flip, not a change in the haircut check.
+- For the trial, "its own" figures are the scaled arm's `sharpeOutOfSample` and its `totalReturn` over the whole window, the two figures quoted in the snapshot run above. For a candidate, the out-of-sample Sharpe is the walk-forward path's `strategySharpe` (before the haircut), and the total return is that of the trial each pass selects, over the whole window. The selection can differ between the two passes *(ruling 3 adds the 1× selection priced at 2×)*.
+- A value of exactly 0 at 2× counts as a flip; a value at or below 0 at 1× cannot flip.
+- *Built 2026-10-09, ruling 3* (`costStress` and `baselinePicksAt` in `server/apps/v2/cost-stress.ts`). The 1×-picks reading comes from the 2× run's per-trial results, which already hold every trial's returns and equity, so no third backtest runs. Its out-of-sample Sharpe is the annualised Sharpe of the 1× fold picks' 2× returns over the same walk-forward test folds (fold 0 only trains); its total return is the 1× full-window pick's 2× equity. Cost stays out of the trial hash, so the two passes stay one counted trial. The 1× verdict carries `costStress`: the 1× figures, both 2× readings, and a `flipped` list naming each reading (`ownPicks` or `baselinePicks`) and measure that flipped. `signFlipped` is true when that list is not empty.
+- The vol-target trial runs a single trial, so its 1× pick priced at 2× is the 2× run's own reading and the two readings coincide.
+- On the snapshot run above, the trial's Sharpe goes from 0.125 to −0.225 and its return from +4.8% to −4.5%, so `holdsSignAtDoubledCost` fails alongside the haircut, DSR and PBO checks. The verdict stays FAIL.
+- No candidate's verdict changes. Candidates 1 and 2 fail at 1× on other checks, and a new check cannot lift a FAIL. Candidate 1's walk-forward Sharpe is negative at 1×, and candidate 2's walk-forward Sharpe is negative at 1× while its selected trial's return stays positive at 2× (£1,782 and £1,659 on a £1,400 book), so neither flips on the Sharpe, and candidate 2 does not flip on the return. Candidate 1's selected-trial return at each level is not in its run note, so whether it flips on the return is not known; the verdict is FAIL either way. Candidate 3 has not run.
+
+## Rulings of 2026-10-09 — split cross-checks (#2025)
+
+David ruled on [#2025](https://github.com/dd-jp/samurai-trading-system/issues/2025#issuecomment-6085738230) on 2026-10-09.
+
+1. **Bar-step detection stays, as an alert only.** Once the EODHD feed triggers split rescaling, `SPLIT_STEP_THRESHOLD` bar-step detection becomes a third cross-check beside EODHD and Alpaca. A bar step with no matching EODHD split raises an alert and never rescales on its own. This updates the 2026-10-01 ruling 7, which kept the threshold as it is until the feed is bought.
+2. **On a disagreement, alert and block entries.** When EODHD and Alpaca disagree on a split, or an EODHD read comes back `uncovered` or `conflict`, the system raises an alert and never rescales. It blocks new entries on that instrument until the sources agree or David clears it. Exits and broker-resting stops still run.
+
+Neither is built. PR [#2100](https://github.com/dd-jp/samurai-trading-system/pull/2100) added only the EODHD splits reader and its coverage check (`server/apps/v2/data/eodhd-splits.ts`) and does not wire them in.
 
 ## Still open
 
