@@ -5,14 +5,12 @@ import { digest } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
 import type { SignalPayload } from './payload.js';
-import type { SignalVeto } from './veto.js';
+import type { SignalVeto, SignalVetoAttempt } from './veto.js';
 import type { SignalWindow } from './window.js';
 
 export const SIGNAL_LIST_MAX = 200;
 
 export type SignalVetoVerdict = 'pass' | 'veto';
-
-export type SignalVetoAttempt = 1 | 2;
 
 interface SignalRow {
   signal_id: string;

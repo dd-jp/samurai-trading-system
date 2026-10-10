@@ -758,6 +758,7 @@ describe('main', () => {
           calls: 0,
           orders: 0,
           fills: 0,
+          signals: 0,
           skipped: [],
           divergences: [
             {
@@ -930,6 +931,7 @@ describe('formatReplay', () => {
     calls: 3,
     orders: 4,
     fills: 1,
+    signals: 2,
     skipped: [],
     divergences,
   });
@@ -962,7 +964,7 @@ describe('formatReplay', () => {
         '\n',
       ),
     ).toEqual([
-      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills',
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills, 2 signal events',
       'INPUT CHANGED (2 inputs changed since the day, 4 divergences); every changed input:',
       'UP: bars changed since 2026-09-30',
       '  journalled: sha256 e3b0c44298fc, 2 bars 2026-09-28..2026-09-29',
@@ -998,7 +1000,7 @@ describe('formatReplay', () => {
       { stage: 'carry', migration: 94 },
     ] as const;
     const head = [
-      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills',
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills, 2 signal events',
       'rescales: not compared, the day ran before migration 0087',
       'carry: not compared, the day ran before migration 0094',
     ].join('\n');
@@ -1022,7 +1024,7 @@ describe('formatReplay', () => {
 
   it('says identical when nothing diverged', () => {
     expect(formatReplay(result([]), (text) => text)).toBe(
-      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills\nidentical',
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills, 2 signal events\nidentical',
     );
   });
 
@@ -1032,6 +1034,14 @@ describe('formatReplay', () => {
       'no debate or arm 2 decision and no mark is journalled for 2026-09-30',
     ],
     [{ kind: 'decision_missing', bookId: 'b', instrument: 'UP' }, 'b UP: journalled, not replayed'],
+    [
+      { kind: 'signals_not_replayed', tradingDate: '2026-09-30', reason: 'unmarked', events: 2 },
+      '2026-09-30: 2 signal events are journalled but the day has no mark, so the signals passes are not replayed; review them by hand',
+    ],
+    [
+      { kind: 'signals_not_replayed', tradingDate: '2026-09-30', reason: 'before_mark', events: 3 },
+      "2026-09-30: a signal event of the 3 journalled precedes the day's mark, so the signals passes are not replayed; review them by hand",
+    ],
     [
       {
         kind: 'input_changed_since',
@@ -1172,6 +1182,7 @@ describe('main redaction', () => {
           calls: 1,
           orders: 0,
           fills: 0,
+          signals: 0,
           skipped: [],
           divergences: [
             {
