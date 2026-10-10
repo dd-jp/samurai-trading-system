@@ -45,7 +45,7 @@ export const ALL_PINS: readonly ModelPin[] = [...DEBATER_PINS, JUDGE_PIN];
 // David 2026-10-10 (#1747): the configured slug only, since an observed one flips (#1787)
 export function pinDigest(pins: readonly ModelPin[]): string {
   const keyed = [...pins]
-    .sort((a, b) => a.seat.localeCompare(b.seat))
+    .sort((a, b) => (a.seat < b.seat ? -1 : 1))
     .map(({ seat, wire, canonicalSlug }) => ({ seat, wire, canonicalSlug: canonicalSlug ?? null }));
   return createHash('sha256').update(JSON.stringify(keyed)).digest('hex').slice(0, 16);
 }
