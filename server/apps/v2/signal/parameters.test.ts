@@ -53,7 +53,7 @@ const SET_PARAMETERS: readonly Parameter<unknown>[] = [
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
   RECONCILE_CASH_TOLERANCE_GBP,
-  ...CFD_COST_PARAMETERS,
+  ...CFD_GATE_PARAMETERS,
 ];
 
 describe('parameters', () => {
@@ -155,10 +155,10 @@ describe('parameters', () => {
     expect(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR).toBe(0.02);
   });
 
-  it('with the cost models set, only the resting stop (#1916) still refuses a CFD entry', () => {
+  it('sets the resting stop as verified (#1916, SIM drill 2026-10-09), so every CFD entry gate admits', () => {
     expect(CFD_RESTING_STOP_VERIFIED.ticket).toBe('#1916');
-    expect(isSet(CFD_RESTING_STOP_VERIFIED)).toBe(false);
-    expect(cfdEntryRefusal()).toBe('cfd_resting_stop_unverified');
+    expect(CFD_RESTING_STOP_VERIFIED.value).toBe(true);
+    expect(cfdEntryRefusal()).toBeUndefined();
   });
 
   describe('declaredCfdCosts', () => {
@@ -218,7 +218,9 @@ describe('parameters', () => {
     });
 
     it('names the first unset gate in order when several are missing', () => {
-      expect(cfdEntryRefusal([...CFD_ENTRY_GATES].reverse())).toBe('cfd_resting_stop_unverified');
+      const allUnset = CFD_ENTRY_GATES.map((gate) => setGate(gate, UNSET));
+      expect(cfdEntryRefusal(allUnset)).toBe('cfd_cost_model_unset');
+      expect(cfdEntryRefusal([...allUnset].reverse())).toBe('cfd_resting_stop_unverified');
     });
   });
 
