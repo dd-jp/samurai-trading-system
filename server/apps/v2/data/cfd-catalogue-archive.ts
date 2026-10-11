@@ -1,16 +1,7 @@
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { type CfdCatalogue, loadCfdCatalogue } from './cfd-catalogue.js';
-
-const SNAPSHOT_FILE = /^(\d{4}-\d{2}-\d{2})\.json$/;
-
-export function cfdCatalogueArchiveDirFor(cataloguePath: string): string {
-  return `${cataloguePath.replace(/\.json$/, '')}-archive`;
-}
-
-export function cfdCatalogueArchivePath(archiveDir: string, asOf: string): string {
-  return join(archiveDir, `${asOf}.json`);
-}
+import { existsSync } from 'node:fs';
+import type { StoreHandle } from '../../../shared/store/index.js';
+import { guardedStore, openReadOnlyStore, toStoredTimestamp } from '../../../shared/store/index.js';
+import { type CfdCatalogue, parseCfdCatalogueBytes } from './cfd-catalogue.js';
 
 export interface CfdSnapshotIdentity {
   readonly asOf: string;
@@ -43,20 +34,58 @@ export class CfdCatalogueArchive {
   }
 }
 
-function archivedSnapshot(archiveDir: string, name: string, asOf: string): CfdCatalogue {
-  const snapshot = loadCfdCatalogue(join(archiveDir, name)) as CfdCatalogue;
-  if (snapshot.asOf !== asOf) {
-    throw new Error(`CFD catalogue archive: ${name} holds a snapshot as of ${snapshot.asOf}`);
+export type SnapshotRecording = 'recorded' | 'held';
+
+export function recordCfdCatalogueSnapshot(
+  db: StoreHandle,
+  bytes: Uint8Array,
+  recordedAt: Date,
+): SnapshotRecording {
+  const body = Buffer.from(bytes);
+  const { asOf } = parseCfdCatalogueBytes(body);
+  const store = guardedStore(db, 'v2');
+  return store
+    .transaction((): SnapshotRecording => {
+      const held = store
+        .prepare('SELECT body FROM v2_cfd_catalogue_snapshots WHERE as_of = ?')
+        .get(asOf) as { body: Buffer } | undefined;
+      if (held === undefined) {
+        store
+          .prepare(
+            'INSERT INTO v2_cfd_catalogue_snapshots (as_of, body, recorded_at) VALUES (?, ?, ?)',
+          )
+          .run(asOf, body, toStoredTimestamp(recordedAt));
+        return 'recorded';
+      }
+      if (held.body.equals(body)) return 'held';
+      throw new Error(`CFD catalogue archive: ${asOf} is already recorded with different bytes`);
+    })
+    .immediate();
+}
+
+function storedSnapshot(row: { as_of: string; body: Buffer }): CfdCatalogue {
+  const snapshot = parseCfdCatalogueBytes(row.body);
+  if (snapshot.asOf !== row.as_of) {
+    throw new Error(
+      `CFD catalogue archive: row ${row.as_of} holds a snapshot as of ${snapshot.asOf}`,
+    );
   }
   return snapshot;
 }
 
-export function loadCfdCatalogueArchive(archiveDir: string): CfdCatalogueArchive {
-  if (!existsSync(archiveDir)) return new CfdCatalogueArchive([]);
-  const snapshots: CfdCatalogue[] = [];
-  for (const name of readdirSync(archiveDir)) {
-    const asOf = SNAPSHOT_FILE.exec(name)?.[1];
-    if (asOf !== undefined) snapshots.push(archivedSnapshot(archiveDir, name, asOf));
+export function cfdCatalogueArchiveOf(db: StoreHandle): CfdCatalogueArchive {
+  const rows = db
+    .prepare('SELECT as_of, body FROM v2_cfd_catalogue_snapshots ORDER BY as_of')
+    .all() as { as_of: string; body: Buffer }[];
+  return new CfdCatalogueArchive(rows.map(storedSnapshot));
+}
+
+export function loadCfdCatalogueArchive(storePath: string): CfdCatalogueArchive {
+  if (!existsSync(storePath)) return new CfdCatalogueArchive([]);
+  const db = openReadOnlyStore(storePath);
+  try {
+    return cfdCatalogueArchiveOf(db);
+  } finally {
+    db.close();
   }
-  return new CfdCatalogueArchive(snapshots);
 }

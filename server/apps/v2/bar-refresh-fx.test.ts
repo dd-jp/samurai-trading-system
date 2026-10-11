@@ -31,6 +31,7 @@ vi.mock('./cfd-catalogue-refresh.js', async (importOriginal) => {
   };
 });
 
+const TARGET = { path: 'x/catalogue.json', storePath: 'x/v2.sqlite' };
 const SILENT: Logger = { log: () => undefined };
 const ENV = { ALPACA_API_KEY: 'k', ALPACA_API_SECRET: 's' };
 
@@ -63,7 +64,7 @@ describe('barRefreshFor BoE FX leg', () => {
   it('requests XUDLUSS for the given file on a non-dry run', async () => {
     const { constituents, fx } = fixture();
     const boe = recordingFetch();
-    barRefreshFor(false, ENV, '2026-09-25', constituents, SILENT, 'x/catalogue.json', {
+    barRefreshFor(false, ENV, '2026-09-25', constituents, SILENT, TARGET, {
       path: fx,
       fetch: boe.fetch,
     });
@@ -75,7 +76,7 @@ describe('barRefreshFor BoE FX leg', () => {
     const { constituents, fx } = fixture();
     const boe = recordingFetch();
     vi.mocked(inSequence).mockClear();
-    const refresh = barRefreshFor(true, ENV, '2026-09-25', constituents, SILENT, 'x', {
+    const refresh = barRefreshFor(true, ENV, '2026-09-25', constituents, SILENT, TARGET, {
       path: fx,
       fetch: boe.fetch,
     });

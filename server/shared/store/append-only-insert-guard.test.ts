@@ -37,6 +37,19 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    table: 'v2_cfd_catalogue_snapshots',
+    seed: `INSERT INTO v2_cfd_catalogue_snapshots (as_of, body, recorded_at)
+      VALUES ('2026-10-12', X'7B7D', '2026-10-12T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same as_of',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_cfd_catalogue_snapshots (as_of, body, recorded_at)
+          VALUES ('2026-10-12', X'5B5D', '2026-10-12T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
     table: 'v2_cash_anchors',
     seed: `INSERT INTO v2_cash_anchors (${CASH_ANCHOR_COLUMNS})
       VALUES (1, 'alpaca', 'anchor', 'USD', 12000, 7, 'go-live', '2026-10-01', '2026-10-01T07:00:00.000Z', 'live')`,

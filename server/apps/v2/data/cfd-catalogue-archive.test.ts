@@ -1,13 +1,16 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { openSharedStore } from '../../../shared/store/index.js';
+import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { CfdCatalogue } from './cfd-catalogue.js';
 import {
   CfdCatalogueArchive,
-  cfdCatalogueArchiveDirFor,
-  cfdCatalogueArchivePath,
+  cfdCatalogueArchiveOf,
   loadCfdCatalogueArchive,
+  recordCfdCatalogueSnapshot,
 } from './cfd-catalogue-archive.js';
 
 const FIRST = '2026-10-12';
@@ -36,8 +39,8 @@ function text(asOf: string): string {
   });
 }
 
-function archiveDir(): string {
-  return join(mkdtempSync(join(tmpdir(), 'cfd-archive-')), 'catalogue-archive');
+function sha256(content: Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
 }
 
 describe('CfdCatalogueArchive.inForceOn (#2105)', () => {
@@ -94,51 +97,102 @@ describe('CfdCatalogueArchive.inForceWithin (#2105)', () => {
   });
 });
 
-describe('loadCfdCatalogueArchive (#2105)', () => {
-  it('reads every dated snapshot file and ignores other entries', () => {
-    const dir = archiveDir();
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(cfdCatalogueArchivePath(dir, FIRST), text(FIRST));
-    writeFileSync(cfdCatalogueArchivePath(dir, SECOND), text(SECOND));
-    writeFileSync(join(dir, `${SECOND}.json.123.tmp`), 'partial');
-    writeFileSync(join(dir, 'notes.txt'), 'x');
-    writeFileSync(join(dir, 'copy-2026-10-14.json'), text('2026-10-14'));
-    const archive = loadCfdCatalogueArchive(dir);
-    expect(archive.firstAsOf).toBe(FIRST);
-    expect(archive.inForceOn('2026-10-14')?.asOf).toBe(FIRST);
-    expect(archive.inForceOn('2026-10-14')?.lookup('AAPL')?.uic).toBe(211);
-    expect(archive.inForceWithin(FIRST, SECOND).map((identity) => identity.asOf)).toEqual([
-      FIRST,
-      SECOND,
+const RECORDED_AT = new Date('2026-10-12T07:00:00.000Z');
+
+function bytes(asOf: string): Buffer {
+  return Buffer.from(text(asOf));
+}
+
+describe('recordCfdCatalogueSnapshot (#2118)', () => {
+  it('records the exact bytes under their asOf, stamped with the time recorded', () => {
+    const db = migratedMemoryStore();
+    expect(recordCfdCatalogueSnapshot(db, bytes(FIRST), RECORDED_AT)).toBe('recorded');
+    expect(
+      db.prepare('SELECT as_of, body, recorded_at FROM v2_cfd_catalogue_snapshots').all(),
+    ).toEqual([{ as_of: FIRST, body: bytes(FIRST), recorded_at: '2026-10-12T07:00:00.000Z' }]);
+  });
+
+  it('is a no-op for the same asOf and bytes', () => {
+    const db = migratedMemoryStore();
+    recordCfdCatalogueSnapshot(db, bytes(FIRST), RECORDED_AT);
+    expect(recordCfdCatalogueSnapshot(db, bytes(FIRST), new Date())).toBe('held');
+    expect(db.prepare('SELECT recorded_at FROM v2_cfd_catalogue_snapshots').all()).toEqual([
+      { recorded_at: '2026-10-12T07:00:00.000Z' },
     ]);
   });
 
-  it('is empty when no refresh has archived yet', () => {
-    expect(loadCfdCatalogueArchive(archiveDir()).firstAsOf).toBeUndefined();
-  });
-
-  it('refuses a file whose name is not its asOf', () => {
-    const dir = archiveDir();
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(cfdCatalogueArchivePath(dir, FIRST), text(SECOND));
-    expect(() => loadCfdCatalogueArchive(dir)).toThrow(
-      `${FIRST}.json holds a snapshot as of ${SECOND}`,
+  it('refuses the same asOf with other bytes and keeps the first', () => {
+    const db = migratedMemoryStore();
+    recordCfdCatalogueSnapshot(db, bytes(FIRST), RECORDED_AT);
+    const reformatted = Buffer.from(`${text(FIRST)}\n`);
+    expect(() => recordCfdCatalogueSnapshot(db, reformatted, RECORDED_AT)).toThrow(
+      `CFD catalogue archive: ${FIRST} is already recorded with different bytes`,
     );
+    expect(cfdCatalogueArchiveOf(db).inForceOn(FIRST)?.sha256).toBe(sha256(bytes(FIRST)));
   });
 
-  it('refuses a snapshot that does not parse', () => {
-    const dir = archiveDir();
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(cfdCatalogueArchivePath(dir, FIRST), '{}');
-    expect(() => loadCfdCatalogueArchive(dir)).toThrow(/expected \{ asOf, instruments/);
+  it('refuses a snapshot that does not parse or carries an invalid asOf, and records nothing', () => {
+    const db = migratedMemoryStore();
+    expect(() => recordCfdCatalogueSnapshot(db, Buffer.from('{}'), RECORDED_AT)).toThrow(
+      /expected \{ asOf, instruments/,
+    );
+    expect(() => recordCfdCatalogueSnapshot(db, bytes('2026-02-30'), RECORDED_AT)).toThrow(
+      /expected \{ asOf, instruments/,
+    );
+    expect(cfdCatalogueArchiveOf(db).firstAsOf).toBeUndefined();
   });
 });
 
-describe('cfdCatalogueArchiveDirFor', () => {
-  it('archives beside the catalogue file', () => {
-    expect(cfdCatalogueArchiveDirFor('data/saxo-cfd-catalogue.json')).toBe(
-      'data/saxo-cfd-catalogue-archive',
+describe('cfdCatalogueArchiveOf (#2118)', () => {
+  it('reads every recorded snapshot with the digest of its bytes', () => {
+    const db = migratedMemoryStore();
+    recordCfdCatalogueSnapshot(db, bytes(SECOND), RECORDED_AT);
+    recordCfdCatalogueSnapshot(db, bytes(FIRST), RECORDED_AT);
+    const archive = cfdCatalogueArchiveOf(db);
+    expect(archive.firstAsOf).toBe(FIRST);
+    expect(archive.inForceOn('2026-10-14')?.lookup('AAPL')?.uic).toBe(211);
+    expect(archive.inForceWithin(FIRST, SECOND)).toEqual([
+      { asOf: FIRST, sha256: sha256(bytes(FIRST)) },
+      { asOf: SECOND, sha256: sha256(bytes(SECOND)) },
+    ]);
+  });
+
+  it('refuses a row whose key is not its snapshot asOf', () => {
+    const db = migratedMemoryStore();
+    db.prepare(
+      'INSERT INTO v2_cfd_catalogue_snapshots (as_of, body, recorded_at) VALUES (?, ?, ?)',
+    ).run(FIRST, bytes(SECOND), 't');
+    expect(() => cfdCatalogueArchiveOf(db)).toThrow(
+      `CFD catalogue archive: row ${FIRST} holds a snapshot as of ${SECOND}`,
     );
-    expect(cfdCatalogueArchiveDirFor('/tmp/catalogue')).toBe('/tmp/catalogue-archive');
+  });
+
+  it('keeps a key that is not a date out of the table, and the rows append-only', () => {
+    const db = migratedMemoryStore();
+    const insert = db.prepare(
+      'INSERT INTO v2_cfd_catalogue_snapshots (as_of, body, recorded_at) VALUES (?, ?, ?)',
+    );
+    expect(() => insert.run('latest', bytes(FIRST), 't')).toThrow(/CHECK constraint/);
+    recordCfdCatalogueSnapshot(db, bytes(FIRST), RECORDED_AT);
+    expect(() => db.exec('DELETE FROM v2_cfd_catalogue_snapshots')).toThrow(/append-only/);
+    expect(() => db.exec("UPDATE v2_cfd_catalogue_snapshots SET recorded_at = 'x'")).toThrow(
+      /append-only/,
+    );
+  });
+});
+
+describe('loadCfdCatalogueArchive (#2118)', () => {
+  it('is empty when the store does not exist yet', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'cfd-archive-')), 'v2.sqlite');
+    expect(loadCfdCatalogueArchive(path).firstAsOf).toBeUndefined();
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('reads the snapshots a store holds', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'cfd-archive-')), 'v2.sqlite');
+    const db = openSharedStore(path);
+    recordCfdCatalogueSnapshot(db, bytes(FIRST), RECORDED_AT);
+    db.close();
+    expect(loadCfdCatalogueArchive(path).inForceOn(SECOND)?.asOf).toBe(FIRST);
   });
 });

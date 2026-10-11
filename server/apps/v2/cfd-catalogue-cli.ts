@@ -9,27 +9,32 @@ import {
   refreshCfdCatalogue,
 } from './cfd-catalogue-refresh.js';
 import { CFD_CATALOGUE_PATH, currentConstituents } from './data/index.js';
-import { CONSTITUENTS_PATH } from './index.js';
+import { CONSTITUENTS_PATH, V2_STORE_PATH } from './index.js';
 
 export const CFD_CATALOGUE_USAGE =
-  'usage: cfd-catalogue [--out PATH] [--token PATH] [--date YYYY-MM-DD] [--constituents PATH]';
+  'usage: cfd-catalogue [--out PATH] [--store PATH] [--token PATH] [--date YYYY-MM-DD] [--constituents PATH]';
 
 export interface CfdCatalogueArgs {
   readonly out: string;
+  readonly storePath: string;
   readonly tokenPath: string | undefined;
   readonly date: string;
   readonly constituentsPath: string;
 }
 
-const FLAGS = new Set(['out', 'token', 'date', 'constituents']);
+const FLAGS = new Set(['out', 'store', 'token', 'date', 'constituents']);
 
-function flags(argv: readonly string[]): Map<string, string> {
+export function parseFlags(
+  argv: readonly string[],
+  allowed: ReadonlySet<string>,
+  usage: string,
+): Map<string, string> {
   const parsed = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
     const name = /^--(\w+)$/.exec(argv[index] ?? '')?.[1];
     const value = argv[index + 1];
-    if (name === undefined || !FLAGS.has(name) || value === undefined) {
-      throw new Error(CFD_CATALOGUE_USAGE);
+    if (name === undefined || !allowed.has(name) || value === undefined) {
+      throw new Error(usage);
     }
     parsed.set(name, value);
   }
@@ -37,9 +42,10 @@ function flags(argv: readonly string[]): Map<string, string> {
 }
 
 export function parseCfdCatalogueArgs(argv: readonly string[], today: string): CfdCatalogueArgs {
-  const parsed = flags(argv);
+  const parsed = parseFlags(argv, FLAGS, CFD_CATALOGUE_USAGE);
   return {
     out: parsed.get('out') ?? CFD_CATALOGUE_PATH,
+    storePath: parsed.get('store') ?? V2_STORE_PATH,
     tokenPath: parsed.get('token'),
     date: parsed.get('date') ?? today,
     constituentsPath: parsed.get('constituents') ?? CONSTITUENTS_PATH,
@@ -80,7 +86,8 @@ export async function main(
   const session = connect(args.tokenPath, logger);
   try {
     const scopes = cfdScopes(constituents);
-    return summarise(await refreshCfdCatalogue(session.api, scopes, args.date, args.out, logger));
+    const target = { path: args.out, storePath: args.storePath };
+    return summarise(await refreshCfdCatalogue(session.api, scopes, args.date, target, logger));
   } finally {
     await session.stop();
   }
