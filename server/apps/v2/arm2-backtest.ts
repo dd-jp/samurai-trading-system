@@ -17,12 +17,12 @@ import {
   cfdEntryRefusal,
   createArm2Sleeve,
   requireSet,
+  VOL_TARGET_TRIAL_SLEEVE_ID,
 } from './signal/index.js';
 
 export const ARM2_BACKTEST_SPEC: SleeveSpec = { ...ARM2_SLEEVE_SPEC, validation: 'backtest' };
 
 export const VOL_TARGET_TRIAL_CANDIDATE_ID = 'vol-target-sizing';
-export const VOL_TARGET_TRIAL_SLEEVE_ID = 'arm2-vol-target';
 // David 2026-10-07 (#1860 rulings 1-2): each entry's own realised vol, 25% a year over 20 days
 export const VOL_TARGET_TRIAL_SIZING: VolTargetSizing = {
   annualTargetVol: 0.25,

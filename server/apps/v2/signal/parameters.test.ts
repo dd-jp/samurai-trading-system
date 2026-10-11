@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SAXO_CFD_COMMISSION, SAXO_CFD_FINANCING, SAXO_CFD_SPREAD } from '../data/index.js';
+import { CROSS_ASSET_TREND_CANDIDATE_ID } from './cross-asset-trend.js';
+import { MEAN_REVERSION_CANDIDATE_ID } from './mean-reversion.js';
 import { ALL_PINS, DEBATER_PINS, JUDGE_PIN, pinDigest } from './models.js';
 import {
   ALPACA_SHORT_EQUITY_FLOOR_USD,
@@ -42,8 +44,10 @@ import {
   UNSET,
   UnsetParameterError,
   VOL_TARGET_SIZING,
+  VOL_TARGET_TRIAL_SLEEVE_ID,
   withheldParameters,
 } from './parameters.js';
+import { VOL_TARGET_INDEX_CANDIDATE_ID } from './vol-target-index.js';
 
 const CFD_GATE_PARAMETERS = [
   CFD_COST_MODEL,
@@ -258,9 +262,16 @@ describe('parameters', () => {
     });
   });
 
-  it('allows CFD routes to the debate sleeve and arm 2 only (doc 66 (f), #1858)', () => {
-    expect(CFD_SLEEVE_IDS).toEqual(['debate', 'arm2']);
-    expect(CFD_SLEEVE_IDS).not.toContain(SIGNALS_SLEEVE_ID);
+  it('allows CFD routes to the debate sleeve and arm 2 only (doc 66 (f), #1858, #2105)', () => {
+    expect(CFD_SLEEVE_IDS).toEqual(['debate', 'arm2', VOL_TARGET_TRIAL_SLEEVE_ID]);
+    for (const cfdFree of [
+      SIGNALS_SLEEVE_ID,
+      CROSS_ASSET_TREND_CANDIDATE_ID,
+      MEAN_REVERSION_CANDIDATE_ID,
+      VOL_TARGET_INDEX_CANDIDATE_ID,
+    ]) {
+      expect(CFD_SLEEVE_IDS).not.toContain(cfdFree);
+    }
   });
 
   it('the Saxo appropriateness test is recorded as taken (doc 66 ruling (l), #1774 (b))', () => {

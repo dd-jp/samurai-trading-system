@@ -196,6 +196,7 @@ export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
 };
 
 export const ARM2_SLEEVE_ID = 'arm2';
+export const VOL_TARGET_TRIAL_SLEEVE_ID = 'arm2-vol-target';
 
 // #1773: arm 2 never routes a real order (its only book variant is not 'primary', so
 // `V2OrderExecutor.simulates()` always simulates it), so its capital share is notional —
@@ -239,8 +240,13 @@ export const SIGNALS_SLEEVE_SPEC: SleeveSpec = {
   ],
 };
 
-// doc 66 (f), #1858: the rules-based candidates and the signals sleeve stay CFD-free
-export const CFD_SLEEVE_IDS: readonly string[] = [DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID];
+// doc 66 (f), #1858: the rules-based candidates and the signals sleeve stay CFD-free. David
+// 2026-10-11 (#2105): the vol-target trial arm counts as arm 2, so it shorts as its baseline does
+export const CFD_SLEEVE_IDS: readonly string[] = [
+  DEBATE_SLEEVE_ID,
+  ARM2_SLEEVE_ID,
+  VOL_TARGET_TRIAL_SLEEVE_ID,
+];
 
 // A sleeve missing here is a build gap, not a trading-state check
 export const SLEEVE_SPECS_BY_ID: Readonly<Record<string, SleeveSpec>> = {

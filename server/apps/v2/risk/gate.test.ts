@@ -287,7 +287,7 @@ describe('V2RiskGate', () => {
 
   it('refuses a CFD entry for a sleeve not allowed CFDs before any venue refusal (#1858)', () => {
     const admitting = gate({ cfdSleeveIds: ['debate', 'arm2'] });
-    for (const sleeve of ['signals', 'mean-reversion', 'arm2-vol-target']) {
+    for (const sleeve of ['signals', 'mean-reversion', 'cross-asset-trend']) {
       const book = { ...primary, id: `${sleeve}/primary`, sleeve };
       for (const venue of ['saxo_cfd_gbp', 'saxo_cfd_usd'] as const) {
         expect(admitting.approveEntry(request({ book, decision: { ...cfdShort, venue } }))).toEqual(

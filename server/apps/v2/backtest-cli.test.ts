@@ -6,7 +6,7 @@ import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { BarSeries, DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
-import { VOL_TARGET_TRIAL_SIZING, VOL_TARGET_TRIAL_SLEEVE_ID } from './arm2-backtest.js';
+import { VOL_TARGET_TRIAL_SIZING } from './arm2-backtest.js';
 import {
   resolveCliOptions,
   runCrossAssetTrendAgainst,
@@ -26,7 +26,11 @@ import {
   parseBoeGbpUsdCsv,
 } from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
-import { CROSS_ASSET_TREND_TIDMS, VOL_TARGET_INDEX_TIDMS } from './signal/index.js';
+import {
+  CROSS_ASSET_TREND_TIDMS,
+  VOL_TARGET_INDEX_TIDMS,
+  VOL_TARGET_TRIAL_SLEEVE_ID,
+} from './signal/index.js';
 import { researchStorePath, TrialLedger } from './trial-ledger.js';
 
 interface Composition {

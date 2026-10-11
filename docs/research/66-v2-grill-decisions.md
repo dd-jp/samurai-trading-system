@@ -868,6 +868,7 @@ David ruled on [#2105](https://github.com/dd-jp/samurai-trading-system/issues/21
 1. **Archive forward.** Every refresh of the Saxo CFD catalogue is archived by its `asOf` date instead of overwriting the last one. That archive is the point-in-time history.
 2. **Fail closed before it.** A backtest date before the first archived snapshot refuses CFD shorts with `cfd_not_backtested`. Nothing is inferred from later snapshots, and a free borrow is never assumed. A date on or after it uses the snapshot in force on that date.
 3. **Arm 2 gap accepted.** The gap this leaves between arm 2's paper results and its backtest is an accepted known limit, recorded in the debate sleeve spec and the ADR. A dated proxy can be revisited later as a new decision.
+4. **The vol-target trial arm counts as arm 2** ([#2105](https://github.com/dd-jp/samurai-trading-system/issues/2105#issuecomment-6114224482)). David: *"`arm2-vol-target` is treated as arm 2 for the CFD sleeve gate."* It is the vol-target trial arm of arm 2, so both arms of that trial get the CFD access arm 2 has and the trial is not compared lopsidedly against its `arm2` baseline. The alternatives were to keep the trial CFD-free or to accept the asymmetry as a known limit. The rules-based candidates and the signals sleeve stay CFD-free.
 
 Build notes (not rulings):
 
@@ -875,6 +876,7 @@ Build notes (not rulings):
 - The snapshot in force on a date is the latest one whose `asOf` is on or before it (`server/apps/v2/data/cfd-catalogue-archive.ts`). `createDatedVenueRouter` (`server/apps/v2/data/venue-routes.ts`) routes by that snapshot with the paper router's checks, the 3-day age included, so an archive gap longer than 3 days reads `no_catalogue` as paper would; with none in force it is the closed router. A backtest short is carried at the borrow its in-force snapshot quotes.
 - The arm 2 backtest sleeve takes the archive (`server/apps/v2/arm2-backtest.ts`), and the vol-target trial CLI loads it. The snapshots in force inside a run's window are part of its trial identity, and are omitted when there are none, so #1860's recorded trial (2016-01-04 to 2025-09-24, before any snapshot) keeps its hash.
 - The archive is gitignored like the catalogue file, and Litestream backs up only the SQLite store, so the archive lives on the Mac alone.
+- Ruling 4 is built by adding `arm2-vol-target` to `CFD_SLEEVE_IDS` (`server/apps/v2/signal/parameters.ts`), the risk gate's list of sleeves allowed CFD routes, where its id now lives. No sleeve with that id is registered outside the backtest. Before the first snapshot both arms refuse CFD shorts in the sleeve, so #1860's recorded trial is unchanged and keeps its hash.
 
 ## Still open
 

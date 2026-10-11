@@ -59,6 +59,7 @@ export {
   SIGNALS_SLEEVE_SPEC,
   SLEEVE_SPECS_BY_ID,
   VOL_TARGET_SIZING,
+  VOL_TARGET_TRIAL_SLEEVE_ID,
   withheldParameters,
 } from './parameters.js';
 export {

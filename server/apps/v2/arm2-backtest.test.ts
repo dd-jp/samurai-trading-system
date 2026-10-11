@@ -1,16 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import type { MarketData, Sleeve } from '../../../contracts/index.js';
+import type { BookSpec, MarketData, Sleeve, SleeveDecision } from '../../../contracts/index.js';
 import type { BarSeries, DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import {
   ARM2_BACKTEST_SPEC,
   arm2BacktestSleeve,
   VOL_TARGET_TRIAL_SIZING,
-  VOL_TARGET_TRIAL_SLEEVE_ID,
   volTargetTrialArms,
 } from './arm2-backtest.js';
-import { addDays, CfdCatalogue, CfdCatalogueArchive } from './data/index.js';
-import { ARM2_ENTRY_THRESHOLDS, ARM2_SLEEVE_SPEC, createArm2Sleeve } from './signal/index.js';
+import type { BacktestTrial } from './backtest.js';
+import {
+  addDays,
+  BarsMarketData,
+  CfdCatalogue,
+  CfdCatalogueArchive,
+  isCfdVenue,
+  parseBoeGbpUsdCsv,
+} from './data/index.js';
+import { V2RiskGate } from './risk/index.js';
+import {
+  ARM2_ENTRY_THRESHOLDS,
+  ARM2_SLEEVE_SPEC,
+  CFD_SLEEVE_IDS,
+  cfdEntryRefusal,
+  createArm2Sleeve,
+  VOL_TARGET_TRIAL_SLEEVE_ID,
+} from './signal/index.js';
 
 function trending(symbol: string, days: number, drift = 0.001): BarSeries {
   const bars: DailyBar[] = [];
@@ -134,5 +149,79 @@ describe('volTargetTrialArms (#1860)', () => {
       arm2_entry_thresholds: ARM2_ENTRY_THRESHOLDS.value,
     });
     expect(arms.baseline.config).toEqual({ benchmark: 'arm2' });
+  });
+
+  it('#2105 ruling 2026-10-11: gives the trial arm the CFD verdict its arm 2 baseline gets', async () => {
+    const snapshot = new CfdCatalogue({
+      asOf: tradingDate,
+      instruments: [
+        {
+          symbol: 'DOWN',
+          saxoSymbol: 'DOWN:xnys',
+          uic: 7,
+          assetType: 'CfdOnStock',
+          currency: 'USD',
+          priceToContractFactor: 1,
+          tradable: true,
+          shortTradeDisabled: false,
+          borrowCostPerDay: 0.005 / 360,
+        },
+      ],
+    });
+    const priced = new BarsMarketData(bars, parseBoeGbpUsdCsv('DATE,XUDLUSS\n29 Dec 2023,1.27\n'));
+    const arms = volTargetTrialArms({
+      bars,
+      constituents: () => ['DOWN'],
+      cfdCatalogues: new CfdCatalogueArchive([snapshot]),
+    });
+    const risk = new V2RiskGate({
+      books: { lastDay: () => undefined },
+      capital: {
+        inForce: () => ({
+          year: 2024,
+          effectiveFrom: '2024-01-01',
+          startCapitalGbp: 10_000,
+          lossCapGbp: 1_500,
+        }),
+      },
+      cfdSleeveIds: CFD_SLEEVE_IDS,
+      market: priced,
+      spec: () => ARM2_BACKTEST_SPEC,
+      venueRefusal: (venue) => (isCfdVenue(venue) ? cfdEntryRefusal() : undefined),
+      volTarget: VOL_TARGET_TRIAL_SIZING,
+    });
+    const verdict = async (arm: BacktestTrial) => {
+      const sleeve = arm.sleeve(priced);
+      const output = await sleeve.decide({ tradingDate, macroDay: false, dryRun: true }, ['DOWN']);
+      const decision = output.decisions[0] as SleeveDecision;
+      const book: BookSpec = {
+        id: `${sleeve.id}/technical-only`,
+        sleeve: sleeve.id,
+        variant: 'technical-only',
+        instantiated: true,
+      };
+      const approval = risk.approveEntry({
+        book,
+        decision,
+        clientOrderId: sleeve.id,
+        tradingDate,
+        equityGbp: 3_000,
+        macroDay: false,
+      });
+      return {
+        action: decision.action,
+        venue: decision.venue,
+        refusal: 'refusal' in approval ? approval.refusal : undefined,
+        side: approval.order?.side,
+      };
+    };
+    const baseline = await verdict(arms.baseline);
+    expect(baseline).toEqual({
+      action: 'enter_short',
+      venue: 'saxo_cfd_usd',
+      refusal: undefined,
+      side: 'sell',
+    });
+    expect(await verdict(arms.trial)).toEqual(baseline);
   });
 });
