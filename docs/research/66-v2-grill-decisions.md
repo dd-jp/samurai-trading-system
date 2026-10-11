@@ -840,6 +840,19 @@ David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/17
 
 Built in [#2110](https://github.com/dd-jp/samurai-trading-system/pull/2110): each entry's payload carries `pin_digest` (`pinDigest` in `server/apps/v2/signal/models.ts`, pin sets in `SLEEVE_PINS_BY_ID` in `server/apps/v2/signal/parameters.ts`), and `server/apps/v2/api/evidence.ts` counts G1 under the current digest and serves `by_model_pins`.
 
+## Rulings of 2026-10-10 — the signals replay's veto read is bounded by the pass's settle (#2096)
+
+David ruled on [#2096](https://github.com/dd-jp/samurai-trading-system/issues/2096#issuecomment-6099038452) on 2026-10-10, answering the item the PR #2106 review left for him (finding F1). The spec is `docs/specs/signals-sleeve-spec.md`.
+
+1. **The veto read is bounded by the pass's settle time.** When the signals replay re-runs a pass, `journalledVeto` accepts only verdicts recorded at or before that pass's settle time. A live pass that failed before its veto was journalled then shows as a divergence instead of replaying identical.
+
+*Built 2026-10-10 ([#2096](https://github.com/dd-jp/samurai-trading-system/issues/2096)).* Build notes (not rulings):
+
+- No migration. The settle instant is the `recorded_at` of the pass's settled `v2_signal_events` row; the verdict instant is the `recorded_at` of its row in `v2_signal_vetoes` (first attempt) or `v2_signal_veto_retry_verdicts` (retry). All three are written by the same clock as fixed-width ISO-8601 UTC, so the bound is a text comparison, and a verdict at exactly the settle instant is accepted.
+- A verdict recorded after the settle is reported as missing: the replayed pass fails with `replay: no journalled attempt N veto verdict for signal <id> by <settle>`, which shows as a divergence on that signal event. On-time first and retry verdicts replay identical, as before.
+- The bound applies only where the replay calls the veto. A first verdict that an earlier replayed pass already wrote to the copy is reused by the processor as live, so a retry pass reads only its own second attempt from the journal, bounded by its own settle.
+- A live failure after the veto and before the decision is written still replays identical when the replayed pass reaches the quote read; this stays in the spec's known limits.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
