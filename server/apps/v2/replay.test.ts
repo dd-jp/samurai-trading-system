@@ -30,6 +30,7 @@ import {
   divergencesOf,
   formatReplay,
   type JournalledDecision,
+  journalledCfdEntryRefusal,
   journalledLseRefusal,
   type ReplayResult,
   redactor,
@@ -53,10 +54,10 @@ const OPEN_EVERY_DAY: VenueSessionGate = {
   timeStopPausedVenues: () => [],
 };
 
-function rising(): DailyBar[] {
+function rising(slope = 0.001): DailyBar[] {
   const bars: DailyBar[] = [];
   for (let i = 0; i <= 260; i += 1) {
-    const close = 20 * (1 + 0.001 * i);
+    const close = 20 * (1 + slope * i);
     bars.push({
       date: dateAt(i),
       open: close,
@@ -91,12 +92,19 @@ const FIXTURE_NEWS: NewsSource = {
 
 const scripted = (pin: ModelPin) => new ScriptedTransport(pin, answer);
 
+interface SeededDay {
+  readonly files?: Partial<typeof files>;
+  readonly cfdEntryRefusal?: () => string | undefined;
+}
+
 async function seedDay(
   name: string,
   transportFor: (pin: ModelPin) => AnthropicMessagesClient,
   newsSource: NewsSource = FIXTURE_NEWS,
   prepare: (seed: StoreHandle) => void = () => {},
+  day: SeededDay = {},
 ): Promise<ReplayCliOptions> {
+  const base = { ...files, ...day.files };
   const storePath = join(directory, `${name}.sqlite`);
   const seed = openSharedStore(storePath);
   new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
@@ -107,12 +115,13 @@ async function seedDay(
   prepare(seed);
   seed.close();
   const root = composeV2Root({
-    tradingDate: files.tradingDate,
-    barStoreRoot: files.barStoreRoot,
-    constituentsPath: files.constituentsPath,
-    fxPath: files.fxPath,
-    spreadsPath: files.spreadsPath,
-    cfdCataloguePath: files.cfdCataloguePath,
+    tradingDate: base.tradingDate,
+    barStoreRoot: base.barStoreRoot,
+    constituentsPath: base.constituentsPath,
+    fxPath: base.fxPath,
+    spreadsPath: base.spreadsPath,
+    cfdCataloguePath: base.cfdCataloguePath,
+    cfdEntryRefusal: day.cfdEntryRefusal,
     dryRun: true,
     storePath,
     clock: new SimulatedClock(new Date(`${TRADING_DATE}T07:30:00.000Z`)),
@@ -126,7 +135,7 @@ async function seedDay(
   } finally {
     root.close();
   }
-  return { ...files, storePath, venueSessions: OPEN_EVERY_DAY };
+  return { ...base, storePath, venueSessions: OPEN_EVERY_DAY };
 }
 
 beforeAll(async () => {
@@ -901,6 +910,93 @@ describe('journalledLseRefusal', () => {
     expect(journalledLseRefusal(db, '2026-09-30')).toBe('other wording');
     expect(journalledLseRefusal(db, '2026-10-01')).toBeUndefined();
     db.close();
+  });
+});
+
+describe('journalledCfdEntryRefusal', () => {
+  it('reads the first CFD entry gate the day refused, in gate order, from parameter rows only', () => {
+    const db = migratedMemoryStore();
+    const insert = db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES (?, ?, ?, '#1916', 'm', 'now')`,
+    );
+    insert.run('2026-09-29', 'parameter', 'CFD_RESTING_STOP_VERIFIED');
+    insert.run('2026-09-29', 'parameter', 'CFD_COST_MODEL');
+    insert.run('2026-09-30', 'parameter', 'CFD_RESTING_STOP_VERIFIED');
+    insert.run('2026-09-30', 'parameter', 'G18_SOCIAL_SOURCE');
+    insert.run('2026-10-01', 'entry', 'CFD_COST_MODEL');
+    insert.run('2026-10-01', 'parameter', 'G18_SOCIAL_SOURCE');
+    expect(journalledCfdEntryRefusal(db, '2026-09-29')).toBe('cfd_cost_model_unset');
+    expect(journalledCfdEntryRefusal(db, '2026-09-30')).toBe('cfd_resting_stop_unverified');
+    expect(journalledCfdEntryRefusal(db, '2026-10-01')).toBeUndefined();
+    expect(journalledCfdEntryRefusal(db, '2026-10-02')).toBeUndefined();
+    db.close();
+  });
+});
+
+describe('replay of a day the CFD entry gate refused (#2104)', { timeout: 30_000 }, () => {
+  let gated: ReplayCliOptions;
+
+  function shortReasons(path: string): unknown[] {
+    const db = new BetterSqlite3(path, { readonly: true });
+    try {
+      return db
+        .prepare(
+          `SELECT DISTINCT d.reason FROM v2_decisions d JOIN v2_books b ON b.book_id = d.book_id
+            WHERE b.sleeve_id = 'arm2' AND d.instrument = 'DN'`,
+        )
+        .all();
+    } finally {
+      db.close();
+    }
+  }
+
+  beforeAll(async () => {
+    const barStoreRoot = join(directory, 'parquet-falling');
+    const store = await ParquetBarStore.open(barStoreRoot);
+    await store.write('alpaca', [
+      { symbol: 'DN', bars: rising(-0.001) },
+      { symbol: 'SPY', bars: rising() },
+    ]);
+    store.close();
+    const constituentsPath = join(directory, 'constituents-falling.csv');
+    writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,DN\n');
+    gated = await seedDay('cfd-gated', scripted, FIXTURE_NEWS, () => {}, {
+      files: { barStoreRoot, constituentsPath },
+      cfdEntryRefusal: () => 'cfd_resting_stop_unverified',
+    });
+    const db = new BetterSqlite3(gated.storePath);
+    db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES (?, 'parameter', 'CFD_RESTING_STOP_VERIFIED', '#1916', 'unset', 'now')`,
+    ).run(TRADING_DATE);
+    db.close();
+  }, 30_000);
+
+  it('replays identical under the all-set gates of today from the journalled refusal', async () => {
+    expect(shortReasons(gated.storePath)).toEqual([
+      { reason: 'short_unavailable:cfd_resting_stop_unverified' },
+    ]);
+    const result = await replayFromFiles(gated);
+    expect(result.decisions).toBeGreaterThan(0);
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('diverges on the reason once the journalled refusal is gone', async () => {
+    const storePath = join(directory, 'cfd-gated-unjournalled.sqlite');
+    copyFileSync(gated.storePath, storePath);
+    const db = new BetterSqlite3(storePath);
+    db.exec(`DELETE FROM v2_refusals WHERE parameter = 'CFD_RESTING_STOP_VERIFIED'`);
+    db.close();
+    const result = await replayFromFiles({ ...gated, storePath });
+    expect(result.divergences).toContainEqual({
+      kind: 'decision_field',
+      bookId: expect.stringContaining('arm2'),
+      instrument: 'DN',
+      field: 'reason',
+      journalled: 'short_unavailable:cfd_resting_stop_unverified',
+      replayed: 'short_unavailable:no_catalogue',
+    });
   });
 });
 

@@ -55,7 +55,7 @@ import { journalledSpendCap } from './replay-spend-cap.js';
 import {
   ARM2_SLEEVE_ID,
   buildLlmPanel,
-  cfdEntryRefusal,
+  CFD_ENTRY_GATES,
   commonPrefixLength,
   DEBATE_SLEEVE_ID,
   declaredCfdCosts,
@@ -129,7 +129,6 @@ export interface ReplayInputs {
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly market: BarsMarketData;
   readonly catalogue: CfdCatalogue | undefined;
-  readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   readonly halfSpreadBps: (instrument: string) => number;
   readonly cfdCosts?: CfdCosts | undefined;
   readonly venueSessions?: VenueSessionGate | undefined;
@@ -155,6 +154,10 @@ const LSE_REFUSAL_SQL = `
    WHERE trading_date = ? AND scope = 'data' AND parameter = 'SAXO_SESSION'
    ORDER BY refusal_id LIMIT 1`;
 
+const PARAMETER_REFUSALS_SQL = `
+  SELECT DISTINCT parameter FROM v2_refusals
+   WHERE trading_date = ? AND scope = 'parameter'`;
+
 function journalledDecisions(db: StoreHandle, tradingDate: string): readonly JournalledDecision[] {
   const rows = db.prepare(DECISIONS_SQL).all(tradingDate) as JournalledDecision[];
   return rows.filter((row) => REPLAYED_SLEEVES.includes(row.sleeve_id));
@@ -170,6 +173,20 @@ export function journalledLseRefusal(db: StoreHandle, tradingDate: string): stri
   return row?.message.startsWith(LSE_REFUSAL_PREFIX)
     ? row.message.slice(LSE_REFUSAL_PREFIX.length)
     : row?.message;
+}
+
+export function journalledCfdEntryRefusal(
+  db: StoreHandle,
+  tradingDate: string,
+): string | undefined {
+  const rows = db.prepare(PARAMETER_REFUSALS_SQL).all(tradingDate) as { parameter: string }[];
+  const refused = new Set(rows.map((row) => row.parameter));
+  return CFD_ENTRY_GATES.find(({ parameter }) => refused.has(parameter.name))?.refusal;
+}
+
+function cfdGateOf(inputs: ReplayInputs): () => string | undefined {
+  const refusal = journalledCfdEntryRefusal(inputs.db, inputs.tradingDate);
+  return () => refusal;
 }
 
 function fieldsOf(decision: SleeveDecision): Record<string, unknown> {
@@ -304,7 +321,7 @@ function replaySleeves(
     news: journalledNewsSource(new SqliteNewsLedger(inputs.db), loggedNewsSource(calls)),
     clock: { now: () => new Date(`${inputs.tradingDate}T00:00:00.000Z`) },
     logger,
-    router: venueRouterFor(inputs.catalogue, inputs.cfdEntryRefusal ?? cfdEntryRefusal),
+    router: venueRouterFor(inputs.catalogue, cfdGateOf(inputs)),
     lseLegRefusal: journalledLseRefusal(inputs.db, inputs.tradingDate),
   });
 }
@@ -330,7 +347,6 @@ interface ReplayCycle {
 function replayComposition(replay: ReplayCycle): CycleComposition {
   const { inputs, copy, day } = replay;
   const { db, tradingDate, market } = inputs;
-  const gate = inputs.cfdEntryRefusal ?? cfdEntryRefusal;
   let composition: CycleComposition | undefined;
   composition = composeCycle({
     db: copy,
@@ -344,7 +360,7 @@ function replayComposition(replay: ReplayCycle): CycleComposition {
     halfSpreadBps: inputs.halfSpreadBps,
     cfdCosts: inputs.cfdCosts ?? declaredCfdCosts(),
     quotedCfdBorrowPerDay: quotedBorrowPerDayFrom(inputs.catalogue),
-    cfdEntryRefusal: gate,
+    cfdEntryRefusal: cfdGateOf(inputs),
     brokerMode: day.brokerMode,
     venueSessions: journalledSessions(
       db,
