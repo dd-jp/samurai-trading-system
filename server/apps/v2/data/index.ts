@@ -21,6 +21,13 @@ export {
   loadCfdCatalogue,
   parseCfdCatalogue,
 } from './cfd-catalogue.js';
+export type { CfdSnapshotIdentity } from './cfd-catalogue-archive.js';
+export {
+  CfdCatalogueArchive,
+  cfdCatalogueArchiveDirFor,
+  cfdCatalogueArchivePath,
+  loadCfdCatalogueArchive,
+} from './cfd-catalogue-archive.js';
 export {
   SAXO_CFD_COMMISSION,
   SAXO_CFD_FINANCING,
@@ -55,7 +62,7 @@ export { AlpacaNewsSource, NO_NEWS, newsFailureReason, newsForVenue } from './ne
 export { SqliteNewsLedger } from './news-ledger.js';
 export { realisedVolatility } from './realised-vol.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
-export { CLOSED_VENUE_ROUTER, createVenueRouter } from './venue-routes.js';
+export { CLOSED_VENUE_ROUTER, createDatedVenueRouter, createVenueRouter } from './venue-routes.js';
 export type { SitOutCode, VenueSessionGate } from './venue-sessions.js';
 export { bothVenuesClosed, sessionDay, TABLE_VENUE_SESSIONS } from './venue-sessions.js';
 export type { QuoteCurrency } from './venues.js';

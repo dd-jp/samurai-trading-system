@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Venue } from '../../../../contracts/index.js';
 import { CfdCatalogue, type CfdInstrument } from './cfd-catalogue.js';
-import { CLOSED_VENUE_ROUTER, createVenueRouter, type VenueRouterDeps } from './venue-routes.js';
+import { CfdCatalogueArchive } from './cfd-catalogue-archive.js';
+import {
+  CLOSED_VENUE_ROUTER,
+  createDatedVenueRouter,
+  createVenueRouter,
+  type VenueRouterDeps,
+} from './venue-routes.js';
 
 const TODAY = '2026-09-29';
 const MAX_BORROW = 0.02;
@@ -190,5 +196,62 @@ describe('VenueRouter short refusals', () => {
       instrument({ symbol: 'AAPL', assetType: 'CfdOnIndex', tradable: false }),
     ]);
     expect(short(typed)).toEqual({ refusal: 'asset_type_mismatch' });
+  });
+});
+
+describe('createDatedVenueRouter (#2105)', () => {
+  const FIRST = '2026-10-12';
+  const SECOND = '2026-10-15';
+  const first = new CfdCatalogue({ asOf: FIRST, instruments: [instrument({ symbol: 'AAPL' })] });
+  const archive = new CfdCatalogueArchive([
+    first,
+    new CfdCatalogue({
+      asOf: SECOND,
+      instruments: [instrument({ symbol: 'AAPL', shortTradeDisabled: true })],
+    }),
+  ]);
+  const dated = createDatedVenueRouter(archive, {
+    entryRefusal: () => undefined,
+    maxBorrowRatePerYear: MAX_BORROW,
+  });
+  const short = (tradingDate: string) => dated.route('AAPL', 'alpaca', 'short', tradingDate);
+
+  it('refuses every CFD route the day before the first snapshot as not backtested', () => {
+    expect(short('2026-10-11')).toEqual({ refusal: 'cfd_not_backtested' });
+    expect(short('2016-01-04')).toEqual({ refusal: 'cfd_not_backtested' });
+  });
+
+  it('still routes a cash long before the first snapshot', () => {
+    expect(dated.route('AAPL', 'alpaca', 'long', '2026-10-11')).toEqual({ venue: 'alpaca' });
+  });
+
+  it('routes by the first snapshot on its own day', () => {
+    expect(short(FIRST)).toEqual({ venue: 'saxo_cfd_usd' });
+  });
+
+  it('reads the earlier snapshot between two, and the later one from its day', () => {
+    expect(short('2026-10-14')).toEqual({ venue: 'saxo_cfd_usd' });
+    expect(short(SECOND)).toEqual({ refusal: 'ShortTradeDisabled' });
+  });
+
+  it('ages the snapshot in force as paper does, so a gap in the archive reads no_catalogue', () => {
+    const lone = createDatedVenueRouter(new CfdCatalogueArchive([first]), {
+      entryRefusal: () => undefined,
+      maxBorrowRatePerYear: MAX_BORROW,
+    });
+    expect(lone.route('AAPL', 'alpaca', 'short', '2026-10-15')).toEqual({ venue: 'saxo_cfd_usd' });
+    expect(lone.route('AAPL', 'alpaca', 'short', '2026-10-16')).toEqual({
+      refusal: 'no_catalogue',
+    });
+  });
+
+  it('applies the CFD entry gates once a snapshot is in force', () => {
+    const gated = createDatedVenueRouter(archive, {
+      entryRefusal: () => 'cfd_borrow_model_unset',
+      maxBorrowRatePerYear: MAX_BORROW,
+    });
+    expect(gated.route('AAPL', 'alpaca', 'short', FIRST)).toEqual({
+      refusal: 'cfd_borrow_model_unset',
+    });
   });
 });

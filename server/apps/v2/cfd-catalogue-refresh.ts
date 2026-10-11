@@ -16,7 +16,13 @@ import {
   UNLIMITED,
   withinTimeLimit,
 } from './bar-refresh-core.js';
-import { type CfdInstrument, parseCfdCatalogue, type QuoteCurrency } from './data/index.js';
+import {
+  type CfdInstrument,
+  cfdCatalogueArchiveDirFor,
+  cfdCatalogueArchivePath,
+  parseCfdCatalogue,
+  type QuoteCurrency,
+} from './data/index.js';
 import {
   connectUnlessLost,
   ledgerFor,
@@ -341,7 +347,12 @@ export async function refreshCfdCatalogue(
   limit: TimeLimit = UNLIMITED,
 ): Promise<CfdCatalogueRefreshReport> {
   const report = await buildCfdCatalogue(api, scopes, asOf);
-  await limit.atomic(async () => writeAtomically(path, catalogueText(report)));
+  const text = catalogueText(report);
+  // Archived first (#2105): a file the cycle reads is always one the backtest can date
+  await limit.atomic(async () => {
+    writeAtomically(cfdCatalogueArchivePath(cfdCatalogueArchiveDirFor(path), asOf), text);
+    writeAtomically(path, text);
+  });
   logReport(report, path, logger);
   return report;
 }

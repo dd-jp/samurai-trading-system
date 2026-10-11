@@ -38,6 +38,7 @@ export {
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   CFD_SLEEVE_IDS,
   CFD_SPREAD_MODEL,
+  type CfdEntryGate,
   CYCLE_LEVEL_PARAMETERS,
   cfdEntryRefusal,
   DEBATE_SLEEVE_ID,
@@ -59,6 +60,7 @@ export {
   SIGNALS_SLEEVE_SPEC,
   SLEEVE_SPECS_BY_ID,
   VOL_TARGET_SIZING,
+  VOL_TARGET_TRIAL_SLEEVE_ID,
   withheldParameters,
 } from './parameters.js';
 export {

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -16,7 +16,12 @@ import {
   universeSymbolOf,
   writeAtomically,
 } from './cfd-catalogue-refresh.js';
-import { createVenueRouter, loadCfdCatalogue } from './data/index.js';
+import {
+  cfdCatalogueArchiveDirFor,
+  createVenueRouter,
+  loadCfdCatalogue,
+  loadCfdCatalogueArchive,
+} from './data/index.js';
 import { readKeepAliveState } from './execution/saxo/saxo-keepalive-state.js';
 import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
 import { SaxoTokenRefresher, StaticSaxoTokenSource } from './execution/saxo/saxo-token-source.js';
@@ -476,7 +481,7 @@ describe('refreshCfdCatalogue', () => {
     expect(entries[0]?.message).toContain('dropped ISF');
   });
 
-  it('keeps the previous file when the new snapshot is refused', async () => {
+  it('keeps the previous file when the new snapshot is refused, and archives nothing', async () => {
     const path = tempPath();
     writeAtomically(path, 'previous');
     const { logger } = recorder();
@@ -484,6 +489,38 @@ describe('refreshCfdCatalogue', () => {
       refreshCfdCatalogue(fakeSaxo().api, cfdScopes(['MSFT'], []), AS_OF, path, logger),
     ).rejects.toThrow(/no instruments/);
     expect(readFileSync(path, 'utf8')).toBe('previous');
+    expect(existsSync(cfdCatalogueArchiveDirFor(path))).toBe(false);
+  });
+
+  it('#2105: archives every refresh by its asOf, byte for byte the file the cycle reads', async () => {
+    const path = tempPath();
+    const archiveDir = cfdCatalogueArchiveDirFor(path);
+    const { logger } = recorder();
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, '2026-09-29', path, logger);
+    const first = readFileSync(path, 'utf8');
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, path, logger);
+    expect(readdirSync(archiveDir).sort()).toEqual(['2026-09-29.json', '2026-09-30.json']);
+    expect(readFileSync(join(archiveDir, '2026-09-29.json'), 'utf8')).toBe(first);
+    expect(readFileSync(join(archiveDir, '2026-09-30.json'), 'utf8')).toBe(
+      readFileSync(path, 'utf8'),
+    );
+    const archive = loadCfdCatalogueArchive(archiveDir);
+    expect(archive.firstAsOf).toBe('2026-09-29');
+    expect(archive.inForceOn(AS_OF)?.sha256).toBe(loadCfdCatalogue(path)?.sha256);
+  });
+
+  it('#2105: leaves the live file untouched when the archive write fails', async () => {
+    const path = tempPath();
+    const { logger } = recorder();
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, '2026-09-29', path, logger);
+    const before = readFileSync(path, 'utf8');
+    const archiveDir = cfdCatalogueArchiveDirFor(path);
+    rmSync(archiveDir, { recursive: true });
+    writeFileSync(archiveDir, 'not a directory');
+    await expect(
+      refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, path, logger),
+    ).rejects.toThrow();
+    expect(readFileSync(path, 'utf8')).toBe(before);
   });
 });
 
