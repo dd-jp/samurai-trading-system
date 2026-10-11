@@ -44,7 +44,6 @@ import {
   UNSET,
   UnsetParameterError,
   VOL_TARGET_SIZING,
-  VOL_TARGET_TRIAL_SLEEVE_ID,
   withheldParameters,
 } from './parameters.js';
 import { VOL_TARGET_INDEX_CANDIDATE_ID } from './vol-target-index.js';
@@ -263,7 +262,7 @@ describe('parameters', () => {
   });
 
   it('allows CFD routes to the debate sleeve and arm 2 only (doc 66 (f), #1858, #2105)', () => {
-    expect(CFD_SLEEVE_IDS).toEqual(['debate', 'arm2', VOL_TARGET_TRIAL_SLEEVE_ID]);
+    expect(CFD_SLEEVE_IDS).toEqual(['debate', 'arm2', 'arm2-vol-target']);
     for (const cfdFree of [
       SIGNALS_SLEEVE_ID,
       CROSS_ASSET_TREND_CANDIDATE_ID,
