@@ -1,12 +1,21 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { FetchResult } from '../../providers/bar-store/index.js';
 import { SaxoReadOnlyApi } from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
+import { openSharedStore } from '../../shared/store/index.js';
 import {
   buildCfdCatalogue,
+  type CfdCatalogueTarget,
   type CfdReferenceApi,
   type CfdScope,
   catalogueText,
@@ -16,12 +25,7 @@ import {
   universeSymbolOf,
   writeAtomically,
 } from './cfd-catalogue-refresh.js';
-import {
-  cfdCatalogueArchiveDirFor,
-  createVenueRouter,
-  loadCfdCatalogue,
-  loadCfdCatalogueArchive,
-} from './data/index.js';
+import { createVenueRouter, loadCfdCatalogue, loadCfdCatalogueArchive } from './data/index.js';
 import { readKeepAliveState } from './execution/saxo/saxo-keepalive-state.js';
 import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
 import { SaxoTokenRefresher, StaticSaxoTokenSource } from './execution/saxo/saxo-token-source.js';
@@ -126,6 +130,14 @@ const SCOPES = cfdScopes(['AAPL', 'TSCO', 'BRK.B', 'MSFT'], ['ISF', 'VMID', 'SGL
 
 function tempPath(): string {
   return join(mkdtempSync(join(tmpdir(), 'cfd-catalogue-')), 'nested', 'catalogue.json');
+}
+
+function storeFor(path: string): string {
+  return join(path, '..', '..', 'v2.sqlite');
+}
+
+function targetAt(path: string): CfdCatalogueTarget {
+  return { path, storePath: storeFor(path) };
 }
 
 describe('universeSymbolOf', () => {
@@ -436,7 +448,7 @@ describe('refreshCfdCatalogue', () => {
   it('writes a catalogue the router reads, and logs the summary', async () => {
     const path = tempPath();
     const { entries, logger } = recorder();
-    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, path, logger);
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, targetAt(path), logger);
     const router = createVenueRouter({
       catalogue: loadCfdCatalogue(path),
       entryRefusal: () => undefined,
@@ -471,7 +483,7 @@ describe('refreshCfdCatalogue', () => {
       fakeSaxo(fixture).api,
       cfdScopes(['ISF', 'AAPL'], ['ISF']),
       AS_OF,
-      tempPath(),
+      targetAt(tempPath()),
       logger,
     );
     expect(entries.map((entry) => [entry.event, entry.level])).toEqual([
@@ -481,44 +493,72 @@ describe('refreshCfdCatalogue', () => {
     expect(entries[0]?.message).toContain('dropped ISF');
   });
 
-  it('keeps the previous file when the new snapshot is refused, and archives nothing', async () => {
+  it('keeps the previous file when the new snapshot is refused, and records nothing', async () => {
     const path = tempPath();
     writeAtomically(path, 'previous');
     const { logger } = recorder();
     await expect(
-      refreshCfdCatalogue(fakeSaxo().api, cfdScopes(['MSFT'], []), AS_OF, path, logger),
+      refreshCfdCatalogue(fakeSaxo().api, cfdScopes(['MSFT'], []), AS_OF, targetAt(path), logger),
     ).rejects.toThrow(/no instruments/);
     expect(readFileSync(path, 'utf8')).toBe('previous');
-    expect(existsSync(cfdCatalogueArchiveDirFor(path))).toBe(false);
+    expect(existsSync(storeFor(path))).toBe(false);
   });
 
-  it('#2105: archives every refresh by its asOf, byte for byte the file the cycle reads', async () => {
+  it('#2118: records every refresh by its asOf in the store, byte for byte the file the cycle reads', async () => {
     const path = tempPath();
-    const archiveDir = cfdCatalogueArchiveDirFor(path);
     const { logger } = recorder();
-    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, '2026-09-29', path, logger);
-    const first = readFileSync(path, 'utf8');
-    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, path, logger);
-    expect(readdirSync(archiveDir).sort()).toEqual(['2026-09-29.json', '2026-09-30.json']);
-    expect(readFileSync(join(archiveDir, '2026-09-29.json'), 'utf8')).toBe(first);
-    expect(readFileSync(join(archiveDir, '2026-09-30.json'), 'utf8')).toBe(
-      readFileSync(path, 'utf8'),
-    );
-    const archive = loadCfdCatalogueArchive(archiveDir);
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, '2026-09-29', targetAt(path), logger);
+    const first = readFileSync(path);
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, targetAt(path), logger);
+    const db = openSharedStore(storeFor(path));
+    try {
+      const rows = db
+        .prepare('SELECT as_of, body FROM v2_cfd_catalogue_snapshots ORDER BY as_of')
+        .all() as { as_of: string; body: Buffer }[];
+      expect(rows.map((row) => row.as_of)).toEqual(['2026-09-29', AS_OF]);
+      expect(rows[0]?.body.equals(first)).toBe(true);
+      expect(rows[1]?.body.equals(readFileSync(path))).toBe(true);
+    } finally {
+      db.close();
+    }
+    const archive = loadCfdCatalogueArchive(storeFor(path));
     expect(archive.firstAsOf).toBe('2026-09-29');
     expect(archive.inForceOn(AS_OF)?.sha256).toBe(loadCfdCatalogue(path)?.sha256);
   });
 
-  it('#2105: leaves the live file untouched when the archive write fails', async () => {
+  it('#2118: a second refresh with the same asOf and bytes is a no-op', async () => {
     const path = tempPath();
     const { logger } = recorder();
-    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, '2026-09-29', path, logger);
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, targetAt(path), logger);
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, targetAt(path), logger);
+    expect(loadCfdCatalogueArchive(storeFor(path)).inForceWithin(AS_OF, AS_OF)).toEqual([
+      { asOf: AS_OF, sha256: loadCfdCatalogue(path)?.sha256 },
+    ]);
+  });
+
+  it('#2118: refuses the same asOf with other bytes and leaves the live file untouched', async () => {
+    const path = tempPath();
+    const { logger } = recorder();
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, targetAt(path), logger);
     const before = readFileSync(path, 'utf8');
-    const archiveDir = cfdCatalogueArchiveDirFor(path);
-    rmSync(archiveDir, { recursive: true });
-    writeFileSync(archiveDir, 'not a directory');
+    const repriced = { ...FIXTURE, prices: { ...FIXTURE.prices, 211: price(211, US_BORROW * 2) } };
     await expect(
-      refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, path, logger),
+      refreshCfdCatalogue(fakeSaxo(repriced).api, SCOPES, AS_OF, targetAt(path), logger),
+    ).rejects.toThrow(`${AS_OF} is already recorded with different bytes`);
+    expect(readFileSync(path, 'utf8')).toBe(before);
+    expect(loadCfdCatalogueArchive(storeFor(path)).inForceOn(AS_OF)?.sha256).toBe(
+      loadCfdCatalogue(path)?.sha256,
+    );
+  });
+
+  it('#2118: leaves the live file untouched when the store cannot be written', async () => {
+    const path = tempPath();
+    const { logger } = recorder();
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, '2026-09-29', targetAt(path), logger);
+    const before = readFileSync(path, 'utf8');
+    const blocked = { path, storePath: join(path, '..') };
+    await expect(
+      refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, blocked, logger),
     ).rejects.toThrow();
     expect(readFileSync(path, 'utf8')).toBe(before);
   });
@@ -532,7 +572,14 @@ describe('cfdCatalogueRefreshFor', () => {
     const { entries, logger } = recorder();
     const leg = cfdCatalogueRefreshFor(
       { K: 'v' },
-      { tradingDate: AS_OF, constituents: ['AAPL'], path, logger, connect, tokenPath: tempPath() },
+      {
+        tradingDate: AS_OF,
+        constituents: ['AAPL'],
+        ...targetAt(path),
+        logger,
+        connect,
+        tokenPath: tempPath(),
+      },
     );
     expect(await leg.run()).toEqual({ attempted: 0, updated: [], noNewBars: [], failed: [] });
     expect(connect).toHaveBeenCalledWith({ K: 'v' }, logger, expect.any(AbortSignal));
@@ -550,7 +597,7 @@ describe('cfdCatalogueRefreshFor', () => {
       {
         tradingDate: AS_OF,
         constituents: ['MSFT'],
-        path,
+        ...targetAt(path),
         logger,
         tokenPath: tempPath(),
         connect: () => ({ api: fakeSaxo({ ...FIXTURE, listings: {} }).api, stop }),
@@ -571,7 +618,7 @@ describe('cfdCatalogueRefreshFor', () => {
       {
         tradingDate: AS_OF,
         constituents: [],
-        path: tempPath(),
+        ...targetAt(tempPath()),
         logger,
         tokenPath: tempPath(),
         connect: () => {
@@ -585,11 +632,12 @@ describe('cfdCatalogueRefreshFor', () => {
 
   it('defaults to a live session, which refuses without Saxo config', async () => {
     const { entries, logger } = recorder();
-    const path = join(mkdtempSync(join(tmpdir(), 'cfd-live-')), 'c.json');
+    const path = join(mkdtempSync(join(tmpdir(), 'cfd-live-')), 'nested', 'c.json');
+    mkdirSync(join(path, '..'));
     writeFileSync(path, 'untouched');
     await cfdCatalogueRefreshFor(
       {},
-      { tradingDate: AS_OF, constituents: [], path, logger, tokenPath: tempPath() },
+      { tradingDate: AS_OF, constituents: [], ...targetAt(path), logger, tokenPath: tempPath() },
     ).run();
     expect(entries.map((entry) => entry.event)).toEqual(['v2_cfd_catalogue_refresh_failed']);
     expect(readFileSync(path, 'utf8')).toBe('untouched');
@@ -618,7 +666,7 @@ describe('cfdCatalogueRefreshFor', () => {
         {
           tradingDate: AS_OF,
           constituents: ['AAPL'],
-          path: tempPath(),
+          ...targetAt(tempPath()),
           logger,
           connect,
           tokenPath,
@@ -669,7 +717,14 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
     const { entries, logger } = recorder();
     const leg = cfdCatalogueRefreshFor(
       {},
-      { tradingDate: AS_OF, constituents: ['AAPL'], path, logger, connect, timeLimitMs: 20 },
+      {
+        tradingDate: AS_OF,
+        constituents: ['AAPL'],
+        ...targetAt(path),
+        logger,
+        connect,
+        timeLimitMs: 20,
+      },
     );
     const started = Date.now();
     expect(await leg.run()).toEqual({ attempted: 0, updated: [], noNewBars: [], failed: [] });
@@ -702,7 +757,7 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
       {
         tradingDate: AS_OF,
         constituents: ['AAPL'],
-        path,
+        ...targetAt(path),
         logger,
         connect: () => ({ api: late, stop }),
         timeLimitMs: 20,
@@ -760,7 +815,7 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
       {
         tradingDate: AS_OF,
         constituents: ['AAPL'],
-        path,
+        ...targetAt(path),
         logger,
         connect,
         tokenPath,
@@ -812,7 +867,7 @@ describe('cfdCatalogueRefreshFor time cap (#2027)', () => {
       {
         tradingDate: AS_OF,
         constituents: ['AAPL'],
-        path: tempPath(),
+        ...targetAt(tempPath()),
         logger,
         connect: () => ({ api: hung, stop }),
         timeLimitMs: 20,

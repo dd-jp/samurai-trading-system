@@ -1375,6 +1375,7 @@ describe('a Saxo session lost during the bar refresh (#1902)', () => {
             tradingDate: TRADING_DATE,
             constituents: [],
             path: join(mkdtempSync(join(tmpdir(), 'cfd-')), 'catalogue.json'),
+            storePath: join(mkdtempSync(join(tmpdir(), 'cfd-')), 'v2.sqlite'),
             logger,
             tokenPath: path,
           }),

@@ -45,10 +45,8 @@ import {
   BarsMarketData,
   type BarsSource,
   CALENDAR_REFERENCE,
-  CFD_CATALOGUE_PATH,
   CfdCatalogueArchive,
   calendarReferenceFor,
-  cfdCatalogueArchiveDirFor,
   currentConstituents,
   type DataSanityReport,
   dataSanity,
@@ -64,6 +62,7 @@ import {
   halfSpreadLookup,
   SAXO_SPREADS_PATH,
   SPREADS_PATH,
+  V2_STORE_PATH,
 } from './index.js';
 import { delayedBars, delayedTrial } from './look-ahead-canary.js';
 import {
@@ -112,7 +111,7 @@ export interface BacktestCliOptions {
   readonly spreadsPath?: string;
   readonly saxoSpreadsPath?: string;
   readonly constituentsPath?: string;
-  readonly cfdCatalogueArchiveDir?: string;
+  readonly cfdSnapshotStorePath?: string;
   readonly logger?: Logger;
 }
 
@@ -548,9 +547,7 @@ export function runVolTargetTrial(
       research.ledger,
       options.logger,
       VOL_TARGET_TRIAL_WINDOW,
-      loadCfdCatalogueArchive(
-        cliOptions.cfdCatalogueArchiveDir ?? cfdCatalogueArchiveDirFor(CFD_CATALOGUE_PATH),
-      ),
+      loadCfdCatalogueArchive(cliOptions.cfdSnapshotStorePath ?? V2_STORE_PATH),
     ),
   );
 }

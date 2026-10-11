@@ -872,11 +872,22 @@ David ruled on [#2105](https://github.com/dd-jp/samurai-trading-system/issues/21
 
 Build notes (not rulings):
 
-- The refresh (`server/apps/v2/cfd-catalogue-refresh.ts`) writes each snapshot to `data/saxo-cfd-catalogue-archive/<asOf>.json` <!-- cite-exempt: untracked — gitignored local archive --> before it rewrites `data/saxo-cfd-catalogue.json` <!-- cite-exempt: untracked — gitignored local snapshot -->, with the same bytes, so every file a paper cycle reads is in the archive and its digest matches the one the cycle journals. A second refresh with the same `asOf` replaces that day's file. No migration: the archive sits beside the file the cycle already reads.
+- The refresh (`server/apps/v2/cfd-catalogue-refresh.ts`) records each snapshot in the v2 store's `v2_cfd_catalogue_snapshots` table before it rewrites `data/saxo-cfd-catalogue.json` <!-- cite-exempt: untracked — gitignored local snapshot -->, with the same bytes, so every file a paper cycle reads is in the archive and its digest matches the one the cycle journals. *Amended 2026-10-11 (#2118, below):* the archive was first a directory of `<asOf>.json` files beside the catalogue file; it now lives in SQLite.
 - The snapshot in force on a date is the latest one whose `asOf` is on or before it (`server/apps/v2/data/cfd-catalogue-archive.ts`). `createDatedVenueRouter` (`server/apps/v2/data/venue-routes.ts`) routes by that snapshot with the paper router's checks, the 3-day age included, so an archive gap longer than 3 days reads `no_catalogue` as paper would; with none in force it is the closed router. A backtest short is carried at the borrow its in-force snapshot quotes.
-- The arm 2 backtest sleeve takes the archive (`server/apps/v2/arm2-backtest.ts`), and the vol-target trial CLI loads it. The snapshots in force inside a run's window are part of its trial identity, and are omitted when there are none, so #1860's recorded trial (2016-01-04 to 2025-09-24, before any snapshot) keeps its hash.
-- The archive is gitignored like the catalogue file, and Litestream backs up only the SQLite store, so the archive lives on the Mac alone.
+- The arm 2 backtest sleeve takes the archive (`server/apps/v2/arm2-backtest.ts`), and the vol-target trial CLI loads it from the v2 store. The snapshots in force inside a run's window are part of its trial identity, and are omitted when there are none, so #1860's recorded trial (2016-01-04 to 2025-09-24, before any snapshot) keeps its hash.
+- ~~The archive is gitignored like the catalogue file, and Litestream backs up only the SQLite store, so the archive lives on the Mac alone.~~ Superseded by the #2118 ruling below: the archive is in the SQLite store, so Litestream backs it up.
 - Ruling 4 is built by adding `arm2-vol-target` to `CFD_SLEEVE_IDS` (`server/apps/v2/signal/parameters.ts`), the risk gate's list of sleeves allowed CFD routes, where its id now lives. No sleeve with that id is registered outside the backtest. Before the first snapshot both arms refuse CFD shorts in the sleeve, so #1860's recorded trial is unchanged and keeps its hash.
+
+## Ruling of 2026-10-11 — CFD catalogue snapshot backup (#2118)
+
+Ruling 2026-10-11 (#2118): CFD catalogue snapshots live in SQLite so Litestream backs them up. David chose option (a) on [#2118](https://github.com/dd-jp/samurai-trading-system/issues/2118) over an off-machine sync of the archive directory and over committing the snapshots to the repo.
+
+Build notes (not rulings):
+
+- Migration 0102 adds `v2_cfd_catalogue_snapshots` (`as_of` primary key, `body` holding the exact bytes of the catalogue file, `recorded_at`), append-only like the other v2 ledgers. A snapshot's digest is the sha256 of `body`, so the trial identity of #2105 is unchanged.
+- The refresh records the row first and then writes the live file, so a failed insert leaves the file the cycle reads as it was. Recording the same `asOf` with the same bytes again is a no-op; the same `asOf` with other bytes fails loudly, and the refresh leg logs `v2_cfd_catalogue_refresh_failed` and keeps the earlier file. A second refresh on the same day with changed Saxo data therefore no longer replaces that day's snapshot.
+- The dated router, the arm 2 backtest and the trial identity read the snapshots from the store (`server/apps/v2/data/cfd-catalogue-archive.ts`); the semantics of #2105 are unchanged. #1860's recorded trial, before any snapshot, keeps its hash.
+- `npm run v2:cfd-catalogue-import` (`server/apps/v2/cfd-catalogue-import.ts`) imports any `data/saxo-cfd-catalogue-archive/<asOf>.json` <!-- cite-exempt: untracked — gitignored local archive the import reads --> files the first build wrote. It validates every file before it records any, refuses a file whose name is not its `asOf` or whose `asOf` is not a valid date, ignores other names, and is idempotent. The directory stays gitignored until the import has run on the Mac and it is removed.
 
 ## Still open
 

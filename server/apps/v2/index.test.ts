@@ -868,6 +868,7 @@ describe('composeV2Root', () => {
         tradingDate: ENTRY_DATE,
         constituents: ['AAPL'],
         path: join(fixtures.directory, 'cfd-catalogue.json'),
+        storePath,
         logger,
         connect: () => ({
           api: { cfdInstrumentPage: never, cfdInstrumentDetails: never, cfdInfoPrices: never },

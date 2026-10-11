@@ -20,13 +20,14 @@ export {
   CfdCatalogue,
   loadCfdCatalogue,
   parseCfdCatalogue,
+  parseCfdCatalogueBytes,
 } from './cfd-catalogue.js';
 export type { CfdSnapshotIdentity } from './cfd-catalogue-archive.js';
 export {
   CfdCatalogueArchive,
-  cfdCatalogueArchiveDirFor,
-  cfdCatalogueArchivePath,
+  cfdCatalogueArchiveOf,
   loadCfdCatalogueArchive,
+  recordCfdCatalogueSnapshot,
 } from './cfd-catalogue-archive.js';
 export {
   SAXO_CFD_COMMISSION,

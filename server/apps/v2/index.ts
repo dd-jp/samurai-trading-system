@@ -96,6 +96,7 @@ import type { SignalStore } from './signals/store.js';
 import { panelVeto } from './signals/veto.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
+export const CYCLE_CFD_CATALOGUE = { path: CFD_CATALOGUE_PATH, storePath: V2_STORE_PATH };
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
 export const CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const SPREADS_PATH = 'data/bars/alpaca-spreads.csv';
@@ -738,7 +739,15 @@ export async function main(
               env,
               clock,
               logger,
-              barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
+              barRefresh ??
+                barRefreshFor(
+                  dryRun,
+                  env,
+                  tradingDate,
+                  CONSTITUENTS_PATH,
+                  logger,
+                  CYCLE_CFD_CATALOGUE,
+                ),
               alerts.notify,
             ),
           backup,
