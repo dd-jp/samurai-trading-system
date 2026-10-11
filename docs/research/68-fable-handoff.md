@@ -509,7 +509,7 @@ the report, no PR.
 
 Only after G11 (research-loop design) is ruled and a trade journal exists. Its prompt, written
 then, ends with an EVAL line like the others. Any session that records a counted trial, this one
-or a Step 1b candidate run, then posts the ledger's `chain_head` from `npm run v2:trials` on
+or one running a Step 1b candidate, then posts the ledger's `chain_head` from `npm run v2:trials` on
 [#2114](https://github.com/dd-jp/samurai-trading-system/issues/2114) (doc 66, 2026-10-11).
 
 ## David's own to-dos (Fable cannot do these)
