@@ -853,6 +853,14 @@ David ruled on [#2096](https://github.com/dd-jp/samurai-trading-system/issues/20
 - The bound applies only where the replay calls the veto. A first verdict that an earlier replayed pass already wrote to the copy is reused by the processor as live, so a retry pass reads only its own second attempt from the journal, bounded by its own settle.
 - A live failure after the veto and before the decision is written still replays identical when the replayed pass reaches the quote read; this stays in the spec's known limits.
 
+## Rulings of 2026-10-11 — trial chain-head anchor (#1747)
+
+David ruled on [#1747](https://github.com/dd-jp/samurai-trading-system/issues/1747#issuecomment-6110060234) on 2026-10-11, on the limit #2103 left open: the trial ledger's hash chain (`server/apps/v2/trial-ledger.ts`) cannot show a cut of its last rows, a rewrite of the whole chain or a removal of every link by itself.
+
+1. **The chain head is anchored on one GitHub issue.** After each counted research run, the session runs `npm run v2:trials` and posts the printed `chain_head` as a comment on one dedicated issue for the trial ledger. That record sits outside the store, and it is what lets a rewrite or a truncation of the chain's tail be caught.
+
+The issue is [#2114](https://github.com/dd-jp/samurai-trading-system/issues/2114), and its body holds the procedure (build notes, not rulings): each comment gives the date, the run and the trials it recorded, `trials_counted` and `chain_head`; canary runs are not counted (2026-10-05 ruling 5) and are not anchored; past comments are never edited or deleted. A store is checked against the latest comment: its count must be at least the anchored count, and the link it holds for the anchored trial must equal the anchored head. A store that fails is flagged to David on #1747, and no counted run records to it until he rules. The check is by hand; no code reads the issue.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
