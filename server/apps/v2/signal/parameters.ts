@@ -236,6 +236,9 @@ export const SIGNALS_SLEEVE_SPEC: SleeveSpec = {
   ],
 };
 
+// doc 66 (f), #1858: the rules-based candidates and the signals sleeve stay CFD-free
+export const CFD_SLEEVE_IDS: readonly string[] = [DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID];
+
 // A sleeve missing here is a build gap, not a trading-state check
 export const SLEEVE_SPECS_BY_ID: Readonly<Record<string, SleeveSpec>> = {
   [DEBATE_SLEEVE_ID]: DEBATE_SLEEVE_SPEC,

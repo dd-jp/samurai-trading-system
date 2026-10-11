@@ -60,7 +60,7 @@ describe('VenueRouter short refusals', () => {
     r.route(symbol, home, 'short', TODAY);
 
   it('fails closed on the closed router', () => {
-    expect(short(CLOSED_VENUE_ROUTER)).toEqual({ refusal: 'cfd_cost_model_unset' });
+    expect(short(CLOSED_VENUE_ROUTER)).toEqual({ refusal: 'cfd_not_backtested' });
   });
 
   it('refuses with the injected entry refusal before looking at anything else', () => {

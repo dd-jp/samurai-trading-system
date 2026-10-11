@@ -56,6 +56,7 @@ const held: Position = {
 
 const gate = new V2RiskGate({
   books: { lastDay: () => undefined },
+  cfdSleeveIds: ['debate'],
   capital: {
     inForce: () => ({
       year: 2026,

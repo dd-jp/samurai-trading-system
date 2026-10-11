@@ -178,7 +178,7 @@ describe('actionFor', () => {
 
   it('sideRoute fails closed with no router: a short is refused, a long stays at home', () => {
     expect(sideRoute(undefined, 'AAPL', 'alpaca', '2026-09-25')('short')).toEqual({
-      refusal: 'cfd_cost_model_unset',
+      refusal: 'cfd_not_backtested',
     });
     expect(sideRoute(undefined, 'AAPL', 'alpaca', '2026-09-25')('long')).toEqual({
       venue: 'alpaca',
@@ -709,7 +709,7 @@ describe('createDebateSleeve', () => {
     const short = (await decideAll(make(bearish), context)).decisions[0];
     expect(short).toMatchObject({
       action: 'skip',
-      reason: 'short_unavailable:cfd_cost_model_unset',
+      reason: 'short_unavailable:cfd_not_backtested',
       venue: 'alpaca',
       direction: 'bearish',
     });

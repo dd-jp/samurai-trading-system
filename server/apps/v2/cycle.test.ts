@@ -57,7 +57,7 @@ import { Journal } from './journal/index.js';
 import { storeView } from './reconcile.js';
 import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import { refreshSaxoBars } from './saxo-bar-refresh.js';
-import { CYCLE_LEVEL_PARAMETERS, isSet, SleeveRegistry } from './signal/index.js';
+import { CFD_SLEEVE_IDS, CYCLE_LEVEL_PARAMETERS, isSet, SleeveRegistry } from './signal/index.js';
 import { ALL_PINS, pinDigest } from './signal/models.js';
 
 const UNSET_CYCLE_PARAMETERS = CYCLE_LEVEL_PARAMETERS.filter((parameter) => !isSet(parameter));
@@ -360,6 +360,7 @@ function harness(
     risk: new V2RiskGate({
       books,
       capital,
+      cfdSleeveIds: CFD_SLEEVE_IDS,
       market,
       spec: (sleeveId) => (sleeveId === sleeve.id ? spec : (secondSleeve?.spec ?? spec)),
       venueRefusal: () => undefined,
@@ -3602,6 +3603,39 @@ describe('#1849: CFD short venue path', () => {
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toMatchObject({
       venue: 'saxo_cfd_usd',
       side: 'buy',
+    });
+  });
+});
+
+describe('#1858: CFD routes only for the debate sleeve and arm 2', () => {
+  it('refuses and journals a CFD short from any other sleeve, and lets the debate one through', async () => {
+    const spec: SleeveSpec = { ...TEST_SPEC, capitalShare: 0.5 };
+    const signalsShort = { ...shortAapl, sleeve_id: 'signals', instrument: 'SHRT' };
+    const signals: Sleeve = {
+      id: 'signals',
+      spec,
+      universe: () => ({ instruments: ['SHRT'], refusals: [] }),
+      decide: () => Promise.resolve({ decisions: [signalsShort], refusals: [] }),
+    };
+    const deps = harness([shortAapl], true, undefined, [2026], spec, SPREAD_ONLY, 1_500, signals);
+
+    await runCycle(deps, '2026-09-25');
+
+    expect(orders(deps, 'signals/primary')).toEqual([]);
+    expect(orders(deps, 'debate/primary')).toMatchObject([{ side: 'sell' }]);
+    const db = (
+      deps.journal as unknown as { db: { prepare: (s: string) => { all: () => unknown[] } } }
+    ).db;
+    expect(
+      db
+        .prepare(
+          "SELECT parameter, ticket, book_id FROM v2_refusals WHERE message LIKE '%cfd_sleeve_not_allowed' ORDER BY book_id",
+        )
+        .all(),
+    ).toContainEqual({
+      parameter: 'CFD_VENUE_ROUTE',
+      ticket: '#1858',
+      book_id: 'signals/primary',
     });
   });
 });
