@@ -39,7 +39,13 @@ import {
 import { main, parseReplayArgs, type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore } from './risk/index.js';
 import type { LoggedCall, ModelPin } from './signal/index.js';
-import { ReplayLog, ScriptedTransport } from './signal/index.js';
+import {
+  CFD_ENTRY_GATES,
+  cfdEntryRefusal,
+  ReplayLog,
+  ScriptedTransport,
+  withheldParameters,
+} from './signal/index.js';
 
 vi.mock('../../shared/store/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../shared/store/index.js')>();
@@ -930,6 +936,27 @@ describe('journalledCfdEntryRefusal', () => {
     expect(journalledCfdEntryRefusal(db, '2026-09-30')).toBe('cfd_resting_stop_unverified');
     expect(journalledCfdEntryRefusal(db, '2026-10-01')).toBeUndefined();
     expect(journalledCfdEntryRefusal(db, '2026-10-02')).toBeUndefined();
+    db.close();
+  });
+});
+
+describe('a CFD entry gate set to false', () => {
+  it('journals the cycle refusal replay reads back as the live refusal', () => {
+    const gates = CFD_ENTRY_GATES.map((gate) =>
+      gate.parameter.name === 'CFD_RESTING_STOP_VERIFIED'
+        ? { ...gate, parameter: { ...gate.parameter, value: false } }
+        : gate,
+    );
+    const db = migratedMemoryStore();
+    const insert = db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES ('2026-09-29', 'parameter', ?, ?, ?, 'now')`,
+    );
+    for (const row of withheldParameters(gates.map(({ parameter }) => parameter))) {
+      insert.run(row.parameter, row.ticket, row.message);
+    }
+    expect(cfdEntryRefusal(gates)).toBe('cfd_resting_stop_unverified');
+    expect(journalledCfdEntryRefusal(db, '2026-09-29')).toBe(cfdEntryRefusal(gates));
     db.close();
   });
 });

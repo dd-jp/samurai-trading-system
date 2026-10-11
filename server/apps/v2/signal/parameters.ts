@@ -128,11 +128,14 @@ export const CFD_ENTRY_GATES: readonly CfdEntryGate[] = [
   { parameter: CFD_RESTING_STOP_VERIFIED, refusal: 'cfd_resting_stop_unverified' },
 ];
 
+function withholds(parameter: Parameter<unknown>): boolean {
+  return parameter.value === UNSET || parameter.value === false;
+}
+
 export function cfdEntryRefusal(
   gates: readonly CfdEntryGate[] = CFD_ENTRY_GATES,
 ): string | undefined {
-  return gates.find(({ parameter }) => parameter.value === UNSET || parameter.value === false)
-    ?.refusal;
+  return gates.find(({ parameter }) => withholds(parameter))?.refusal;
 }
 
 type CfdCostParameters = { readonly [K in keyof CfdCosts]: Parameter<CfdCosts[K]> };
@@ -279,3 +282,24 @@ export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
 ];
+
+export interface WithheldParameter {
+  readonly parameter: string;
+  readonly ticket: string;
+  readonly message: string;
+}
+
+// A gate set to false refuses exactly as an unset one does, so it is journalled too: replay reads
+// the CFD entry gate back from these rows (#2104)
+export function withheldParameters(
+  parameters: readonly Parameter<unknown>[] = CYCLE_LEVEL_PARAMETERS,
+): WithheldParameter[] {
+  return parameters.filter(withholds).map(({ name, ticket, value }) => ({
+    parameter: name,
+    ticket,
+    message:
+      value === false
+        ? `${name} is false: needs David (${ticket})`
+        : new UnsetParameterError(name, ticket).message,
+  }));
+}

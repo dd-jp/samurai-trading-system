@@ -57,8 +57,8 @@ export {
   SIGNALS_SLEEVE_ID,
   SIGNALS_SLEEVE_SPEC,
   SLEEVE_SPECS_BY_ID,
-  UnsetParameterError,
   VOL_TARGET_SIZING,
+  withheldParameters,
 } from './parameters.js';
 export {
   commonPrefixLength,

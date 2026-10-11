@@ -41,6 +41,7 @@ import {
   UNSET,
   UnsetParameterError,
   VOL_TARGET_SIZING,
+  withheldParameters,
 } from './parameters.js';
 
 const CFD_GATE_PARAMETERS = [
@@ -224,6 +225,29 @@ describe('parameters', () => {
         gate.parameter.name === 'CFD_RESTING_STOP_VERIFIED' ? setGate(gate, false) : gate,
       );
       expect(cfdEntryRefusal(gates)).toBe('cfd_resting_stop_unverified');
+    });
+
+    it('withholds a false gate as it withholds an unset one, naming each (#2104)', () => {
+      const gates = allSet.map((gate) =>
+        gate.parameter.name === 'CFD_RESTING_STOP_VERIFIED'
+          ? setGate(gate, false)
+          : gate.parameter.name === 'CFD_COST_MODEL'
+            ? setGate(gate, UNSET)
+            : gate,
+      );
+      expect(withheldParameters(gates.map(({ parameter }) => parameter))).toEqual([
+        {
+          parameter: 'CFD_COST_MODEL',
+          ticket: '#1850',
+          message: 'CFD_COST_MODEL is not set: needs David (#1850)',
+        },
+        {
+          parameter: 'CFD_RESTING_STOP_VERIFIED',
+          ticket: '#1916',
+          message: 'CFD_RESTING_STOP_VERIFIED is false: needs David (#1916)',
+        },
+      ]);
+      expect(withheldParameters(allSet.map(({ parameter }) => parameter))).toEqual([]);
     });
 
     it('names the first unset gate in order when several are missing', () => {
