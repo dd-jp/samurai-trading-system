@@ -17,7 +17,12 @@ import {
 import type { CanaryLog } from './canary-log.js';
 import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
-import { addDays, CALENDAR_REFERENCE } from './data/index.js';
+import {
+  addDays,
+  CALENDAR_REFERENCE,
+  type CfdCatalogueArchive,
+  type CfdSnapshotIdentity,
+} from './data/index.js';
 import { walkForwardPath } from './evidence/index.js';
 import {
   bookTrades,
@@ -84,6 +89,9 @@ export interface BacktestInput {
   // must resolve to the SAME trial hash as its 1x baseline, not a new permanent ledger entry
   readonly costMultiple?: number | undefined;
   readonly volTarget?: VolTargetSizing | undefined;
+  // #2105: must be the archive the trial sleeves route by, or a short is carried at another
+  // snapshot's borrow than the one that admitted it
+  readonly cfdCatalogues?: CfdCatalogueArchive | undefined;
   // The input's trials, in their order, one bar later (doc 66, 2026-10-07 rulings on #1747)
   readonly shiftCanary?: ShiftCanaryInput | undefined;
   readonly randomCanary?: RandomCanaryInput | undefined;
@@ -290,6 +298,22 @@ export function volTargetIdentity(sizing: VolTargetSizing | undefined): {
   return sizing === undefined ? {} : { volTarget: sizing };
 }
 
+// #2105: a snapshot in force inside the window changes what a CFD route admits, so the snapshots
+// are part of the trial; none in force, they are omitted so earlier trials keep their hashes
+export function cfdCatalogueIdentity(input: Pick<BacktestInput, 'cfdCatalogues' | 'from' | 'to'>): {
+  cfdCatalogues?: readonly CfdSnapshotIdentity[];
+} {
+  const snapshots = input.cfdCatalogues?.inForceWithin(input.from, input.to) ?? [];
+  return snapshots.length === 0 ? {} : { cfdCatalogues: snapshots };
+}
+
+export function datedCfdBorrowPerDay(
+  archive: CfdCatalogueArchive | undefined,
+  today: () => string,
+): (instrument: string) => number | undefined {
+  return (instrument) => archive?.inForceOn(today())?.lookup(instrument)?.borrowCostPerDay;
+}
+
 function volTargetOf(input: BacktestInput): VolTargetSizing | undefined {
   return input.volTarget ?? declaredVolTarget();
 }
@@ -308,6 +332,7 @@ function trialConfigs(
     lossCapGbp: input.lossCapGbp,
     ...entryOffsetIdentity(ENTRY_LIMIT_OFFSET),
     ...volTargetIdentity(volTargetOf(input)),
+    ...cfdCatalogueIdentity(input),
     benchmark: { id: benchmark.id, spec: benchmark.spec, config: input.benchmark.config },
   };
   return input.trials.map((trial, index) => ({
@@ -362,6 +387,7 @@ async function simulate(
       brokerMode: 'paper',
       halfSpreadBps: input.halfSpreadBps,
       cfdCosts: declaredCfdCosts(),
+      quotedCfdBorrowPerDay: datedCfdBorrowPerDay(input.cfdCatalogues, () => today.current),
       costMultiple: input.costMultiple,
       volTarget: volTargetOf(input),
     });

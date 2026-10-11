@@ -19,7 +19,12 @@ import { walkForwardRanges } from './backtest-verdict.js';
 import { CanaryLog } from './canary-log.js';
 import type { CycleCompositionOptions } from './compose.js';
 import { baselinePicksAt, candidateOutcome, costStress } from './cost-stress.js';
-import { BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
+import {
+  BarsMarketData,
+  CfdCatalogue,
+  CfdCatalogueArchive,
+  parseBoeGbpUsdCsv,
+} from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
 import { CROSS_ASSET_TREND_TIDMS, VOL_TARGET_INDEX_TIDMS } from './signal/index.js';
 import { researchStorePath, TrialLedger } from './trial-ledger.js';
@@ -653,5 +658,27 @@ describe('candidate trial hashes', () => {
       1,
     );
     expect(hashes, NEW_TRIAL).toEqual(['8a6c1e64731b2058']);
+  });
+
+  it('#2105: makes an archived CFD catalogue inside the window a new vol-target trial', async () => {
+    const archive = new CfdCatalogueArchive([
+      new CfdCatalogue({ asOf: '2020-06-01', instruments: [] }),
+    ]);
+    const hashes = await recordedHashes(
+      (market, bars, research) =>
+        runVolTargetTrialAgainst(
+          market,
+          bars,
+          () => [],
+          () => 5,
+          research.ledger,
+          quiet,
+          undefined,
+          archive,
+        ),
+      1,
+    );
+    expect(hashes).toHaveLength(1);
+    expect(hashes).not.toEqual(['8a6c1e64731b2058']);
   });
 });

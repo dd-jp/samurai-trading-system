@@ -45,10 +45,14 @@ import {
   BarsMarketData,
   type BarsSource,
   CALENDAR_REFERENCE,
+  CFD_CATALOGUE_PATH,
+  CfdCatalogueArchive,
   calendarReferenceFor,
+  cfdCatalogueArchiveDirFor,
   currentConstituents,
   type DataSanityReport,
   dataSanity,
+  loadCfdCatalogueArchive,
   MultiVenueBarsSource,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
@@ -108,6 +112,7 @@ export interface BacktestCliOptions {
   readonly spreadsPath?: string;
   readonly saxoSpreadsPath?: string;
   readonly constituentsPath?: string;
+  readonly cfdCatalogueArchiveDir?: string;
   readonly logger?: Logger;
 }
 
@@ -464,6 +469,7 @@ interface VolTargetTrialRun {
   readonly ledger: TrialLedger;
   readonly logger: Logger;
   readonly window: VolTargetTrialWindow;
+  readonly cfdCatalogues: CfdCatalogueArchive;
 }
 
 async function volTargetTrialPass(
@@ -488,6 +494,7 @@ async function volTargetTrialPass(
     calendarReference: CALENDAR_REFERENCE,
     costMultiple,
     volTarget: VOL_TARGET_TRIAL_SIZING,
+    cfdCatalogues: run.cfdCatalogues,
   });
   const verdict = volTargetVerdict({
     dates: simulation.dates,
@@ -512,9 +519,10 @@ export async function runVolTargetTrialAgainst(
   ledger: TrialLedger,
   logger: Logger,
   window: VolTargetTrialWindow = VOL_TARGET_TRIAL_WINDOW,
+  cfdCatalogues: CfdCatalogueArchive = new CfdCatalogueArchive([]),
 ): Promise<VolTargetTrialReport> {
-  const arms = volTargetTrialArms({ bars, constituents: constituentsFor });
-  const run = { arms, market, halfSpreadBps, ledger, logger, window };
+  const arms = volTargetTrialArms({ bars, constituents: constituentsFor, cfdCatalogues });
+  const run = { arms, market, halfSpreadBps, ledger, logger, window, cfdCatalogues };
   const base = await volTargetTrialPass(run, 1);
   const stressed = await volTargetTrialPass(run, COST_STRESS_MULTIPLE);
   const atDoubledCost = trialOutcome(stressed.verdict);
@@ -539,6 +547,10 @@ export function runVolTargetTrial(
       halfSpreadBps,
       research.ledger,
       options.logger,
+      VOL_TARGET_TRIAL_WINDOW,
+      loadCfdCatalogueArchive(
+        cliOptions.cfdCatalogueArchiveDir ?? cfdCatalogueArchiveDirFor(CFD_CATALOGUE_PATH),
+      ),
     ),
   );
 }

@@ -9,14 +9,14 @@ import {
   VOL_TARGET_TRIAL_SLEEVE_ID,
   volTargetTrialArms,
 } from './arm2-backtest.js';
-import { addDays } from './data/index.js';
+import { addDays, CfdCatalogue, CfdCatalogueArchive } from './data/index.js';
 import { ARM2_ENTRY_THRESHOLDS, ARM2_SLEEVE_SPEC, createArm2Sleeve } from './signal/index.js';
 
-function trending(symbol: string, days: number): BarSeries {
+function trending(symbol: string, days: number, drift = 0.001): BarSeries {
   const bars: DailyBar[] = [];
   const origin = Date.UTC(2024, 0, 1);
   for (let i = 0; i < days; i += 1) {
-    const close = 100 * (1 + 0.001 * i);
+    const close = 100 * (1 + drift * i);
     bars.push({
       date: new Date(origin + i * 86_400_000).toISOString().slice(0, 10),
       open: close,
@@ -31,8 +31,11 @@ function trending(symbol: string, days: number): BarSeries {
 }
 
 const UP = trending('UP', 260);
+const DOWN = trending('DOWN', 260, -0.001);
 const SPY = trending('SPY', 260);
-const bars = { load: (symbol: string) => [UP, SPY].find((series) => series.symbol === symbol) };
+const bars = {
+  load: (symbol: string) => [UP, DOWN, SPY].find((series) => series.symbol === symbol),
+};
 const market = { gbpUsdAtYearStart: () => 1.25 } as unknown as MarketData;
 const tradingDate = addDays(UP.bars.at(-1)?.date ?? '', 1);
 
@@ -69,6 +72,45 @@ describe('arm2BacktestSleeve (#1860)', () => {
       (await sleeve.decide(context, ['UP'])).decisions[0]?.inputs_hash;
     expect(await hash(copy)).toHaveLength(64);
     expect(await hash(copy)).toBe(await hash(live));
+  });
+
+  it('#2105: routes a short by the archived catalogue in force, and fails closed before it', async () => {
+    const snapshot = new CfdCatalogue({
+      asOf: tradingDate,
+      instruments: [
+        {
+          symbol: 'DOWN',
+          saxoSymbol: 'DOWN:xnys',
+          uic: 7,
+          assetType: 'CfdOnStock',
+          currency: 'USD',
+          priceToContractFactor: 1,
+          tradable: true,
+          shortTradeDisabled: false,
+          borrowCostPerDay: 0.005 / 360,
+        },
+      ],
+    });
+    const decide = async (cfdCatalogues: CfdCatalogueArchive | undefined) => {
+      const sleeve = arm2BacktestSleeve(
+        { bars, constituents: () => ['DOWN'], cfdCatalogues },
+        'arm2',
+      )(market);
+      const output = await sleeve.decide({ tradingDate, macroDay: false, dryRun: true }, ['DOWN']);
+      return output.decisions[0];
+    };
+    expect(await decide(new CfdCatalogueArchive([snapshot]))).toMatchObject({
+      action: 'enter_short',
+      venue: 'saxo_cfd_usd',
+    });
+    const later = new CfdCatalogue({ asOf: addDays(tradingDate, 1), instruments: [] });
+    for (const archive of [new CfdCatalogueArchive([later]), undefined]) {
+      expect(await decide(archive)).toMatchObject({
+        action: 'skip',
+        venue: 'alpaca',
+        reason: 'short_unavailable:cfd_not_backtested',
+      });
+    }
   });
 
   it('keeps arm 2 itself forward-paper only', () => {

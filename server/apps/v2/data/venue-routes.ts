@@ -1,6 +1,7 @@
 import type { Venue } from '../../../../contracts/index.js';
 import type { CfdAssetType, CfdCatalogue, CfdInstrument } from './cfd-catalogue.js';
 import { borrowCostPerYear } from './cfd-catalogue.js';
+import type { CfdCatalogueArchive } from './cfd-catalogue-archive.js';
 import { isCfdVenue, quoteCurrencyOf } from './venues.js';
 
 // A daily rate times its day count lands an ulp off the quoted annual rate (2%/365 x 365 is
@@ -93,3 +94,19 @@ export const CLOSED_VENUE_ROUTER: VenueRouter = createVenueRouter({
   entryRefusal: () => 'cfd_not_backtested',
   maxBorrowRatePerYear: 0,
 });
+
+// #2105 ruling 2026-10-11: Saxo publishes no catalogue history, so a date before the first
+// archived snapshot is never inferred from a later one
+export function createDatedVenueRouter(
+  archive: Pick<CfdCatalogueArchive, 'inForceOn'>,
+  deps: Omit<VenueRouterDeps, 'catalogue'>,
+): VenueRouter {
+  return {
+    route(symbol, home, side, tradingDate) {
+      const catalogue = archive.inForceOn(tradingDate);
+      const router =
+        catalogue === undefined ? CLOSED_VENUE_ROUTER : createVenueRouter({ ...deps, catalogue });
+      return router.route(symbol, home, side, tradingDate);
+    },
+  };
+}

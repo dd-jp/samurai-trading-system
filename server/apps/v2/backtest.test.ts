@@ -12,6 +12,8 @@ import {
   type BacktestInput,
   type BacktestTrial,
   backtestSessions,
+  cfdCatalogueIdentity,
+  datedCfdBorrowPerDay,
   entryOffsetIdentity,
   fencedMarket,
   randomVolTarget,
@@ -23,7 +25,13 @@ import {
 } from './backtest.js';
 import { capitalCeilingGbp } from './backtest-verdict.js';
 import { CanaryLog } from './canary-log.js';
-import { addDays, BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
+import {
+  addDays,
+  BarsMarketData,
+  CfdCatalogue,
+  CfdCatalogueArchive,
+  parseBoeGbpUsdCsv,
+} from './data/index.js';
 import { delayedTrial } from './look-ahead-canary.js';
 import { ENTRY_LIMIT_OFFSET } from './risk/index.js';
 import { type SessionBLedger, TrialLedger, trialHash } from './trial-ledger.js';
@@ -1000,5 +1008,73 @@ describe('volTargetIdentity (#1860)', () => {
       at({ ...sizing, sleeveIds: ['debate'] }),
       at(sizing),
     ]).toEqual([3, 4, 5, 6, 7, 4]);
+  });
+});
+
+describe('CFD catalogue archive in the backtest (#2105)', () => {
+  const borrowed = (asOf: string, borrowCostPerDay: number) =>
+    new CfdCatalogue({
+      asOf,
+      instruments: [
+        {
+          symbol: 'AAPL',
+          saxoSymbol: 'AAPL:xnas',
+          uic: 211,
+          assetType: 'CfdOnStock',
+          currency: 'USD',
+          priceToContractFactor: 1,
+          tradable: true,
+          shortTradeDisabled: false,
+          borrowCostPerDay,
+        },
+      ],
+    });
+  const archive = new CfdCatalogueArchive([
+    borrowed('2026-10-12', 0.00001),
+    borrowed('2026-10-15', 0.00002),
+  ]);
+
+  it('carries a short at the borrow quoted by the snapshot in force on the simulated day', () => {
+    const today = { current: '2026-10-11' };
+    const borrow = datedCfdBorrowPerDay(archive, () => today.current);
+    expect(borrow('AAPL')).toBeUndefined();
+    today.current = '2026-10-12';
+    expect(borrow('AAPL')).toBe(0.00001);
+    today.current = '2026-10-14';
+    expect(borrow('AAPL')).toBe(0.00001);
+    today.current = '2026-10-15';
+    expect(borrow('AAPL')).toBe(0.00002);
+    expect(borrow('MSFT')).toBeUndefined();
+    expect(datedCfdBorrowPerDay(undefined, () => today.current)('AAPL')).toBeUndefined();
+  });
+
+  it('leaves a window no snapshot reaches hashing as before the archive', () => {
+    const run = { from: '2016-01-04', to: '2025-09-24' };
+    expect(cfdCatalogueIdentity({ ...run, cfdCatalogues: archive })).toEqual({});
+    expect(cfdCatalogueIdentity({ ...run, cfdCatalogues: undefined })).toEqual({});
+  });
+
+  it('makes the snapshots a window reads part of its trial', () => {
+    const shared = ledger();
+    const at = (from: string, to: string, cfdCatalogues = archive) =>
+      shared.record('candidate', {
+        lookback: 5,
+        run: { from, to, ...cfdCatalogueIdentity({ from, to, cfdCatalogues }) },
+      });
+    expect(
+      cfdCatalogueIdentity({ from: '2026-01-02', to: '2026-10-14', cfdCatalogues: archive }),
+    ).toEqual({
+      cfdCatalogues: [{ asOf: '2026-10-12', sha256: borrowed('2026-10-12', 0.00001).sha256 }],
+    });
+    const grown = new CfdCatalogueArchive([
+      borrowed('2026-10-12', 0.00001),
+      borrowed('2026-10-13', 0.00003),
+      borrowed('2026-10-15', 0.00002),
+    ]);
+    expect([
+      at('2026-01-02', '2026-10-14'),
+      at('2026-01-02', '2026-10-14', grown),
+      at('2026-01-02', '2026-10-14'),
+    ]).toEqual([3, 4, 3]);
   });
 });

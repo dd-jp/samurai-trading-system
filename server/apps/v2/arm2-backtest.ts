@@ -1,13 +1,20 @@
 import type { Sleeve, SleeveSpec } from '../../../contracts/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import type { BacktestTrial, SleeveFactory } from './backtest.js';
-import type { BarsSource } from './data/index.js';
+import {
+  type BarsSource,
+  type CfdCatalogueArchive,
+  createDatedVenueRouter,
+  type VenueRouter,
+} from './data/index.js';
 import { venueOf } from './index.js';
 import type { VolTargetSizing } from './risk/index.js';
 import {
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
   ARM2_SLEEVE_SPEC,
+  CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  cfdEntryRefusal,
   createArm2Sleeve,
   requireSet,
 } from './signal/index.js';
@@ -37,13 +44,30 @@ export const VOL_TARGET_TRIAL_EMBARGO = ARM2_SLEEVE_SPEC.sizing.timeStopTradingD
 export interface Arm2BacktestDeps {
   readonly bars: BarsSource;
   readonly constituents: (tradingDate: string) => readonly string[];
+  readonly cfdCatalogues?: CfdCatalogueArchive | undefined;
+}
+
+function datedCfdRouter(archive: CfdCatalogueArchive): VenueRouter {
+  return createDatedVenueRouter(archive, {
+    entryRefusal: () => cfdEntryRefusal(),
+    maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  });
 }
 
 export function arm2BacktestSleeve(deps: Arm2BacktestDeps, id: string): SleeveFactory {
+  const { bars, constituents, cfdCatalogues } = deps;
+  const router = cfdCatalogues === undefined ? undefined : datedCfdRouter(cfdCatalogues);
   return (market): Sleeve => {
     // The clock only stamps the technical view, which neither the inputs hash nor sizing reads
     const clock = new SimulatedClock(new Date(0));
-    const inner = createArm2Sleeve({ ...deps, venueFor: venueOf, market, clock });
+    const inner = createArm2Sleeve({
+      bars,
+      constituents,
+      router,
+      venueFor: venueOf,
+      market,
+      clock,
+    });
     return {
       id,
       spec: ARM2_BACKTEST_SPEC,
