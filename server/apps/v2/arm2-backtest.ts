@@ -13,7 +13,9 @@ import {
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
   ARM2_SLEEVE_SPEC,
+  CFD_ENTRY_GATES,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  type CfdEntryGate,
   cfdEntryRefusal,
   createArm2Sleeve,
   requireSet,
@@ -45,18 +47,20 @@ export interface Arm2BacktestDeps {
   readonly bars: BarsSource;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly cfdCatalogues?: CfdCatalogueArchive | undefined;
+  readonly cfdEntryGates?: readonly CfdEntryGate[] | undefined;
 }
 
-function datedCfdRouter(archive: CfdCatalogueArchive): VenueRouter {
+function datedCfdRouter(archive: CfdCatalogueArchive, gates: readonly CfdEntryGate[]): VenueRouter {
   return createDatedVenueRouter(archive, {
-    entryRefusal: () => cfdEntryRefusal(),
+    entryRefusal: () => cfdEntryRefusal(gates),
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   });
 }
 
 export function arm2BacktestSleeve(deps: Arm2BacktestDeps, id: string): SleeveFactory {
-  const { bars, constituents, cfdCatalogues } = deps;
-  const router = cfdCatalogues === undefined ? undefined : datedCfdRouter(cfdCatalogues);
+  const { bars, constituents, cfdCatalogues, cfdEntryGates = CFD_ENTRY_GATES } = deps;
+  const router =
+    cfdCatalogues === undefined ? undefined : datedCfdRouter(cfdCatalogues, cfdEntryGates);
   return (market): Sleeve => {
     // The clock only stamps the technical view, which neither the inputs hash nor sizing reads
     const clock = new SimulatedClock(new Date(0));

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -507,6 +507,20 @@ describe('refreshCfdCatalogue', () => {
     const archive = loadCfdCatalogueArchive(archiveDir);
     expect(archive.firstAsOf).toBe('2026-09-29');
     expect(archive.inForceOn(AS_OF)?.sha256).toBe(loadCfdCatalogue(path)?.sha256);
+  });
+
+  it('#2105: leaves the live file untouched when the archive write fails', async () => {
+    const path = tempPath();
+    const { logger } = recorder();
+    await refreshCfdCatalogue(fakeSaxo().api, SCOPES, '2026-09-29', path, logger);
+    const before = readFileSync(path, 'utf8');
+    const archiveDir = cfdCatalogueArchiveDirFor(path);
+    rmSync(archiveDir, { recursive: true });
+    writeFileSync(archiveDir, 'not a directory');
+    await expect(
+      refreshCfdCatalogue(fakeSaxo().api, SCOPES, AS_OF, path, logger),
+    ).rejects.toThrow();
+    expect(readFileSync(path, 'utf8')).toBe(before);
   });
 });
 

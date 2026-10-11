@@ -102,8 +102,10 @@ describe('loadCfdCatalogueArchive (#2105)', () => {
     writeFileSync(cfdCatalogueArchivePath(dir, SECOND), text(SECOND));
     writeFileSync(join(dir, `${SECOND}.json.123.tmp`), 'partial');
     writeFileSync(join(dir, 'notes.txt'), 'x');
+    writeFileSync(join(dir, 'copy-2026-10-14.json'), text('2026-10-14'));
     const archive = loadCfdCatalogueArchive(dir);
     expect(archive.firstAsOf).toBe(FIRST);
+    expect(archive.inForceOn('2026-10-14')?.asOf).toBe(FIRST);
     expect(archive.inForceOn('2026-10-14')?.lookup('AAPL')?.uic).toBe(211);
     expect(archive.inForceWithin(FIRST, SECOND).map((identity) => identity.asOf)).toEqual([
       FIRST,

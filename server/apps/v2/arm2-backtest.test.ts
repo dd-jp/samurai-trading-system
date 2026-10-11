@@ -21,11 +21,13 @@ import { V2RiskGate } from './risk/index.js';
 import {
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_SPEC,
+  CFD_ENTRY_GATES,
   CFD_SLEEVE_IDS,
   cfdEntryRefusal,
   createArm2Sleeve,
   VOL_TARGET_TRIAL_SLEEVE_ID,
 } from './signal/index.js';
+import { UNSET } from './signal/parameters.js';
 
 function trending(symbol: string, days: number, drift = 0.001): BarSeries {
   const bars: DailyBar[] = [];
@@ -53,6 +55,25 @@ const bars = {
 };
 const market = { gbpUsdAtYearStart: () => 1.25 } as unknown as MarketData;
 const tradingDate = addDays(UP.bars.at(-1)?.date ?? '', 1);
+
+function shortableDown(): CfdCatalogue {
+  return new CfdCatalogue({
+    asOf: tradingDate,
+    instruments: [
+      {
+        symbol: 'DOWN',
+        saxoSymbol: 'DOWN:xnys',
+        uic: 7,
+        assetType: 'CfdOnStock',
+        currency: 'USD',
+        priceToContractFactor: 1,
+        tradable: true,
+        shortTradeDisabled: false,
+        borrowCostPerDay: 0.005 / 360,
+      },
+    ],
+  });
+}
 
 describe('arm2BacktestSleeve (#1860)', () => {
   it("decides arm 2's entries under its own id with arm 2's spec, validated by backtest", async () => {
@@ -90,22 +111,7 @@ describe('arm2BacktestSleeve (#1860)', () => {
   });
 
   it('#2105: routes a short by the archived catalogue in force, and fails closed before it', async () => {
-    const snapshot = new CfdCatalogue({
-      asOf: tradingDate,
-      instruments: [
-        {
-          symbol: 'DOWN',
-          saxoSymbol: 'DOWN:xnys',
-          uic: 7,
-          assetType: 'CfdOnStock',
-          currency: 'USD',
-          priceToContractFactor: 1,
-          tradable: true,
-          shortTradeDisabled: false,
-          borrowCostPerDay: 0.005 / 360,
-        },
-      ],
-    });
+    const snapshot = shortableDown();
     const decide = async (cfdCatalogues: CfdCatalogueArchive | undefined) => {
       const sleeve = arm2BacktestSleeve(
         { bars, constituents: () => ['DOWN'], cfdCatalogues },
@@ -126,6 +132,31 @@ describe('arm2BacktestSleeve (#1860)', () => {
         reason: 'short_unavailable:cfd_not_backtested',
       });
     }
+  });
+
+  it.each([
+    ['unset', UNSET],
+    ['false', false],
+  ])('#2105: refuses the backtest short while a CFD entry gate is %s', async (_, value) => {
+    const gates = CFD_ENTRY_GATES.map((gate) =>
+      gate.parameter.name === 'CFD_RESTING_STOP_VERIFIED'
+        ? { ...gate, parameter: { ...gate.parameter, value } }
+        : gate,
+    );
+    const sleeve = arm2BacktestSleeve(
+      {
+        bars,
+        constituents: () => ['DOWN'],
+        cfdCatalogues: new CfdCatalogueArchive([shortableDown()]),
+        cfdEntryGates: gates,
+      },
+      'arm2',
+    )(market);
+    const output = await sleeve.decide({ tradingDate, macroDay: false, dryRun: true }, ['DOWN']);
+    expect(output.decisions[0]).toMatchObject({
+      action: 'skip',
+      reason: 'short_unavailable:cfd_resting_stop_unverified',
+    });
   });
 
   it('keeps arm 2 itself forward-paper only', () => {
@@ -152,22 +183,7 @@ describe('volTargetTrialArms (#1860)', () => {
   });
 
   it('#2105 ruling 2026-10-11: gives the trial arm the CFD verdict its arm 2 baseline gets', async () => {
-    const snapshot = new CfdCatalogue({
-      asOf: tradingDate,
-      instruments: [
-        {
-          symbol: 'DOWN',
-          saxoSymbol: 'DOWN:xnys',
-          uic: 7,
-          assetType: 'CfdOnStock',
-          currency: 'USD',
-          priceToContractFactor: 1,
-          tradable: true,
-          shortTradeDisabled: false,
-          borrowCostPerDay: 0.005 / 360,
-        },
-      ],
-    });
+    const snapshot = shortableDown();
     const priced = new BarsMarketData(bars, parseBoeGbpUsdCsv('DATE,XUDLUSS\n29 Dec 2023,1.27\n'));
     const arms = volTargetTrialArms({
       bars,
