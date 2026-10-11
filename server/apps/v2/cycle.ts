@@ -64,12 +64,7 @@ import {
   type StepThrow,
   type ThrowFailure,
 } from './reconcile.js';
-import {
-  bookPinDigest,
-  CYCLE_LEVEL_PARAMETERS,
-  isSet,
-  UnsetParameterError,
-} from './signal/index.js';
+import { bookPinDigest, withheldParameters } from './signal/index.js';
 import {
   bracketExit,
   type LimitEntryOutcome,
@@ -2009,15 +2004,8 @@ function recordFxRefusal(deps: CycleDeps, tradingDate: string, refusals: string[
 
 function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVerdict): string[] {
   const refusals: string[] = [];
-  for (const parameter of CYCLE_LEVEL_PARAMETERS) {
-    if (isSet(parameter)) continue;
-    const { message } = new UnsetParameterError(parameter.name, parameter.ticket);
-    recordRefusal(deps, tradingDate, refusals, {
-      scope: 'parameter',
-      parameter: parameter.name,
-      ticket: parameter.ticket,
-      message,
-    });
+  for (const withheld of withheldParameters()) {
+    recordRefusal(deps, tradingDate, refusals, { scope: 'parameter', ...withheld });
   }
   const capital = deps.risk.capitalRefusal(tradingDate);
   if (capital !== undefined) {
