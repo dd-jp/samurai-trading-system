@@ -1033,6 +1033,115 @@ describe('SaxoHttpBrokerClient', () => {
         'https://gateway.example/port/v1/orders?$skip=500&AccountKey=acct-key&ClientKey=client-key',
       );
     });
+
+    it.each(READERS)(
+      '$name follows the absolute __next shape recorded on SIM 2026-10-09: explicit :443, base path, lowercase params (#2026)',
+      async (reader) => {
+        const query = 'accountkey=acct-key&clientkey=client-key&$top=1&$skiptoken=tok-2';
+        let pages = 0;
+        const fetchMock = vi.fn(async (url: string | URL) => {
+          if (String(url).endsWith('/port/v1/accounts/me')) return jsonResponse(TWO_ACCOUNTS);
+          pages += 1;
+          return jsonResponse(
+            pages === 1
+              ? {
+                  Data: [reader.pinnedRow],
+                  __next: `https://gateway.example:443${reader.pathname}?${query}`,
+                }
+              : { Data: [reader.otherRow] },
+          );
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const rows = await reader.read(pinnedClient());
+
+        expect(rows.map(reader.idOf)).toEqual([reader.idOf(reader.pinnedRow), 'cfd-2']);
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(calledPath(fetchMock, 2)).toBe(`https://gateway.example${reader.pathname}?${query}`);
+      },
+    );
+
+    it.each([
+      [
+        'https://gateway.saxobank.com/sim/openapi',
+        'https://gateway.saxobank.com:443/sim/openapi/port/v1/orders?$skiptoken=t',
+        'https://gateway.saxobank.com/sim/openapi/port/v1/orders?$skiptoken=t&AccountKey=acct-key&ClientKey=client-key',
+      ],
+      [
+        'https://gateway.saxobank.com/openapi',
+        'HTTPS://Gateway.SaxoBank.com:443/openapi/port/v1/orders?accountkey=acct-key&$skiptoken=t',
+        'https://gateway.saxobank.com/openapi/port/v1/orders?accountkey=acct-key&$skiptoken=t&ClientKey=client-key',
+      ],
+      [
+        'https://gateway.example/sim/openapi/',
+        'https://gateway.example/sim/openapi/port/v1/orders?$skiptoken=t#frag',
+        'https://gateway.example/sim/openapi/port/v1/orders?$skiptoken=t&AccountKey=acct-key&ClientKey=client-key',
+      ],
+    ])(
+      'strips the configured gateway %s from an absolute __next %s',
+      async (baseUrl, next, expected) => {
+        let pages = 0;
+        const fetchMock = vi.fn(async (url: string | URL) => {
+          if (String(url).endsWith('/port/v1/accounts/me')) return jsonResponse(TWO_ACCOUNTS);
+          pages += 1;
+          return jsonResponse(pages === 1 ? { Data: [PINNED_ORDER], __next: next } : { Data: [] });
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        await pinnedClient(baseUrl).listOpenOrders();
+
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+        expect(calledPath(fetchMock, 2)).toBe(expected);
+      },
+    );
+
+    it('refuses an absolute __next with lowercase accountkey naming another account', async () => {
+      const fetchMock = singleNextFetch(
+        'https://gateway.example:443/sim/openapi/port/v1/orders?accountkey=other-key',
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(pinnedClient().listOpenOrders()).rejects.toThrow(
+        /__next changed AccountKey between pages \(listOpenOrders\)/,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      'http://gateway.example/sim/openapi/port/v1/orders',
+      'http://gateway.example:443/sim/openapi/port/v1/orders',
+      'wss://gateway.example/sim/openapi/port/v1/orders',
+      'https://gateway.example:8443/sim/openapi/port/v1/orders',
+      'https://evil.example:443/sim/openapi/port/v1/orders',
+      'https://gateway.example.evil.example:443/sim/openapi/port/v1/orders',
+      'https://user@gateway.example:443/sim/openapi/port/v1/orders',
+      'https://user:pw@gateway.example/sim/openapi/port/v1/orders',
+      'https://:pw@gateway.example/sim/openapi/port/v1/orders',
+      'https://gateway.example:443/openapi/port/v1/orders',
+      'https://gateway.example:443/sim/openapiport/v1/orders',
+      'https://gateway.example:443/sim/openapX/port/v1/orders',
+      'https://gateway.example:443/sim/openapi',
+      'https://gateway.example:443/port/v1/orders',
+      'https://gateway.example:443/sim/openapi/../../openapi/port/v1/orders',
+      'https://gateway.example:443/sim/openapi/port/v1/netpositions?$skiptoken=t',
+      'https://gateway.example:443/sim/openapi/port/v1/orders/me',
+      'https://gateway.example:443/sim/openapi//evil.example/port/v1/orders',
+    ])(
+      'refuses an absolute __next %s off the configured gateway, so the bearer never leaves it',
+      async (next) => {
+        const fetchMock = singleNextFetch(next);
+        vi.stubGlobal('fetch', fetchMock);
+
+        await expect(pinnedClient().listOpenOrders()).rejects.toThrow(
+          /__next left the \/port\/v1\/orders route \(listOpenOrders\)/,
+        );
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+          'https://gateway.example/sim/openapi/port/v1/accounts/me',
+          expect.stringMatching(/^https:\/\/gateway\.example\/sim\/openapi\/port\/v1\/orders\?/),
+        ]);
+      },
+    );
   });
 
   it('refuses listOpenOrders, listNetPositions, getBalances and listOrderActivities when the login has two accounts and none is pinned', async () => {

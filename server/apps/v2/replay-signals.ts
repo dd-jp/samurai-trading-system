@@ -70,15 +70,19 @@ export function signalsGuard(
 
 const VETO_TABLES = { 1: 'v2_signal_vetoes', 2: 'v2_signal_veto_retry_verdicts' } as const;
 
-export function journalledVeto(journal: StoreHandle): SignalVetoCall {
+// David 2026-10-10 (#2096): a verdict journalled after the pass settled was not the pass's own, so
+// a live pass that failed before its veto diverges instead of replaying identical
+export function journalledVeto(journal: StoreHandle, settledAt: string): SignalVetoCall {
   return (signalId, attempt) => {
     const row = journal
-      .prepare(`SELECT kind, reason FROM ${VETO_TABLES[attempt]} WHERE signal_id = ?`)
-      .get(signalId) as SignalVeto | undefined;
+      .prepare(
+        `SELECT kind, reason FROM ${VETO_TABLES[attempt]} WHERE signal_id = ? AND recorded_at <= ?`,
+      )
+      .get(signalId, settledAt) as SignalVeto | undefined;
     if (row === undefined) {
       return Promise.reject(
         new Error(
-          `replay: no journalled attempt ${attempt} veto verdict for signal ${signalId}, and the replay makes no LLM call`,
+          `replay: no journalled attempt ${attempt} veto verdict for signal ${signalId} by ${settledAt}, and the replay makes no LLM call`,
         ),
       );
     }
@@ -157,6 +161,7 @@ function depsFor(
   replay: SignalsReplay,
   store: SignalStore,
   quotes: LatestQuoteSource | undefined,
+  settledAt: string,
 ): SignalProcessorDeps {
   const { cycle } = replay;
   return {
@@ -164,7 +169,7 @@ function depsFor(
     latestReconcile: (date, venue) => cycle.journal.latestReconcile(date, venue),
     signals: store,
     faults: cycle.faults,
-    veto: journalledVeto(replay.journal),
+    veto: journalledVeto(replay.journal, settledAt),
     constituents: replay.constituents,
     calendar: { isOpen: () => true },
     quotes,
@@ -199,7 +204,7 @@ export async function replaySignals(
     const since = settledAt.get(event.signal_id) ?? '';
     const quotes = withQuotes ? journalledQuotes(journal, tradingDate, event, since) : undefined;
     await processSignal(
-      depsFor(replay, store, quotes),
+      depsFor(replay, store, quotes, event.recorded_at),
       signalOf(store, event.signal_id),
       tradingDate,
     );

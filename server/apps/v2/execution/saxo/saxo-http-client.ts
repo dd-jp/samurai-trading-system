@@ -91,6 +91,21 @@ function probeUrl(path: string): URL {
   return new URL(path, 'https://saxo-next.invalid');
 }
 
+function isOnGateway(next: URL, gateway: URL, basePath: string): boolean {
+  if (next.origin !== gateway.origin || next.username !== '' || next.password !== '') return false;
+  return next.pathname.startsWith(`${basePath}/`);
+}
+
+function relativeToGateway(next: string, baseUrl: string): string {
+  if (!URL.canParse(next)) return next;
+  const absolute = new URL(next);
+  const gateway = new URL(baseUrl);
+  const basePath = gateway.pathname.replace(/\/$/, '');
+  return isOnGateway(absolute, gateway, basePath)
+    ? `${absolute.pathname.slice(basePath.length)}${absolute.search}`
+    : next;
+}
+
 function nextOnRoute(nextPath: string, route: string, context: string): URL {
   const parsed = /^\/(?![/\\])/.test(nextPath) ? probeUrl(nextPath) : undefined;
   if (parsed?.host !== 'saxo-next.invalid' || parsed.pathname !== route) {
@@ -560,10 +575,6 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
     return this.identity;
   }
 
-  private relativeToGateway(next: string): string {
-    return next.startsWith(this.baseUrl) ? next.slice(this.baseUrl.length) : next;
-  }
-
   private async listAll<T>(
     firstPath: string,
     context: string,
@@ -589,7 +600,7 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
       path =
         page.next === undefined
           ? undefined
-          : keepAccountScope(this.relativeToGateway(page.next), route, identity, context);
+          : keepAccountScope(relativeToGateway(page.next, this.baseUrl), route, identity, context);
     }
     return rows;
   }
