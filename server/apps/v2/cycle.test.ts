@@ -1581,6 +1581,123 @@ describe('runCycle', () => {
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-24-AAPL')?.outcome).toBe('cancelled');
   });
 
+  describe('a fill-day bar missing behind a later bar (#2127)', () => {
+    const quote = { ask: 20.05, bid: 20.01, quoted_at: '2026-09-24T14:00:00.000Z', fill: 20.05 };
+    const id = 'v2-debate-primary-2026-09-24-AAPL';
+
+    function withoutFillDay(deps: Harness) {
+      const real = deps.market.barsBefore;
+      return vi
+        .spyOn(deps.market, 'barsBefore')
+        .mockImplementation((instrument, date, count) =>
+          real(instrument, date, count).filter(
+            (dated) => count >= 10 || dated.date !== '2026-09-24',
+          ),
+        );
+    }
+
+    function fillDayRefusals(deps: Harness) {
+      const db = (
+        deps.journal as unknown as { db: { prepare: (sql: string) => { all: () => unknown[] } } }
+      ).db;
+      return db
+        .prepare(
+          "SELECT trading_date, scope, ticket, message, book_id FROM v2_refusals WHERE parameter = 'FILL_DAY_BAR' ORDER BY trading_date, book_id",
+        )
+        .all();
+    }
+
+    it('does not book a quote fill against the later bar, alerts, and books it once the fill-day bar comes in', async () => {
+      const deps = harness([{ ...longAapl, entry_quote: quote }], true);
+      await runCycle(deps, '2026-09-24');
+      deps.setDecisions([]);
+      deps.barsByDate.set(
+        '2026-09-26',
+        bar('2026-09-25', { open: 19.5, low: 18.9, high: 19.6, close: 19, rawClose: 19 }),
+      );
+      const gap = withoutFillDay(deps);
+      const log = vi.fn();
+      const deferred = await runCycle({ ...deps, logger: { log } }, '2026-09-28');
+      expect(deferred.fills).toBe(0);
+      expect(deps.books.position('debate/primary', 'AAPL')).toBeUndefined();
+      expect(deps.journal.orderFor(id)?.outcome).toBe('refused_dry_run');
+      const message = (book: string) =>
+        `debate/${book} AAPL: simulated entry v2-debate-${book}-2026-09-24-AAPL not booked, its first bar is 2026-09-25, not the fill session 2026-09-24`;
+      expect(fillDayRefusals(deps)).toEqual(
+        ['no-macro-gate', 'primary'].map((book) => ({
+          trading_date: '2026-09-28',
+          scope: 'fill',
+          ticket: '#2127',
+          message: message(book),
+          book_id: `debate/${book}`,
+        })),
+      );
+      expect(log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          level: 'error',
+          event: 'v2_fill_day_bar_missing',
+          message: message('primary'),
+        }),
+      );
+      gap.mockRestore();
+      expect((await runCycle(deps, '2026-09-29')).fills).toBe(2);
+      expect(deps.books.position('debate/primary', 'AAPL')?.avgPriceGbp).toBeCloseTo(20.05 / FX, 9);
+      expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toBeUndefined();
+    });
+
+    it('cancels the entry once it has waited as long as one with no bar', async () => {
+      const deps = harness([{ ...longAapl, entry_quote: quote }], true);
+      await runCycle(deps, '2026-09-24');
+      deps.setDecisions([]);
+      const gap = withoutFillDay(deps);
+      await runCycle(deps, '2026-09-29');
+      expect(deps.journal.orderFor(id)?.outcome).toBe('refused_dry_run');
+      expect((await runCycle(deps, '2026-09-30')).fills).toBe(0);
+      expect(deps.journal.orderFor(id)).toMatchObject({
+        outcome: 'cancelled',
+        payload: { cancelled: '2026-09-30' },
+      });
+      expect(fillDayRefusals(deps)).toContainEqual(
+        expect.objectContaining({
+          trading_date: '2026-09-30',
+          message: expect.stringContaining(`${id} cancelled, its first bar is 2026-09-25`),
+        }),
+      );
+      gap.mockRestore();
+    });
+
+    it('holds a resting limit entry too rather than fill it on the later bar, refusing a second entry meanwhile', async () => {
+      const deps = harness([longAapl], true);
+      await runCycle(deps, '2026-09-24');
+      deps.barsByDate.set('2026-09-26', bar('2026-09-25', { open: 19.6, low: 19.4, high: 20.1 }));
+      const gap = withoutFillDay(deps);
+      const report = await runCycle(deps, '2026-09-28');
+      expect(report).toMatchObject({ entries: 0, fills: 0 });
+      expect(report.refusals).toContainEqual(
+        expect.stringContaining(`${id} not booked, its first bar is 2026-09-25`),
+      );
+      expect(deps.books.position('debate/primary', 'AAPL')).toBeUndefined();
+      expect(deps.journal.orderFor(id)?.outcome).toBe('refused_dry_run');
+      expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL')).toBeUndefined();
+      expect(fillDayRefusals(deps)).toHaveLength(2);
+      gap.mockRestore();
+    });
+
+    it('names no fill session when the first bar falls on a day the calendar closes', async () => {
+      const deps = harness([longAapl], true);
+      await runCycle(deps, '2026-09-26');
+      deps.setDecisions([]);
+      expect((await runCycle(deps, '2026-09-28')).fills).toBe(0);
+      expect(fillDayRefusals(deps)).toContainEqual(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            'its first bar is 2026-09-26, not the fill session none',
+          ),
+        }),
+      );
+    });
+  });
+
   it('fills a bar that dips between the decision close and the offset limit, at the limit (#1815)', async () => {
     const deps = harness([longAapl], true);
     await runCycle(deps, '2026-09-24');

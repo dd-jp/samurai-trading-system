@@ -47,6 +47,7 @@ import {
   addDays,
   CALENDAR_REFERENCE,
   fillFxOf,
+  firstSessionOn,
   isFresh,
   londonDateOf,
   MAX_BAR_AGE_CALENDAR_DAYS,
@@ -977,6 +978,7 @@ class Cycle {
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
     const bars = this.barsSince(order);
+    if (this.fillDayBarMissing(order, bars, daysOpen)) return;
     const ratios = cumulativeSplitRatios(
       this.deps.market.lastBarBefore(order.instrument, order.trading_date),
       bars,
@@ -1003,6 +1005,41 @@ class Cycle {
       ratio: ratios.at(-1) as number,
       date: bars.at(-1)?.date as string,
     });
+  }
+
+  // Postmortem §2 (#2127): the first bar is taken as the fill day, so a later bar must never
+  // stand in for a missing one
+  fillDayBarMissing(order: JournalledOrder, bars: readonly V2Bar[], daysOpen: number): boolean {
+    const [first] = bars;
+    if (first === undefined) return false;
+    const expected = firstSessionOn(order.venue as Venue, order.trading_date, this.tradingDate);
+    if (first.date === expected) return false;
+    this.deferEntry(order, daysOpen > MAX_PENDING_CALENDAR_DAYS, {
+      first: first.date,
+      expected: expected ?? 'none',
+    });
+    return true;
+  }
+
+  deferEntry(
+    order: JournalledOrder,
+    expired: boolean,
+    dates: { readonly first: string; readonly expected: string },
+  ): void {
+    if (expired) this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
+    else this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
+    const message = `${order.book_id} ${order.instrument}: simulated entry ${order.client_order_id} ${expired ? 'cancelled' : 'not booked'}, its first bar is ${dates.first}, not the fill session ${dates.expected}`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'fill',
+      parameter: 'FILL_DAY_BAR',
+      ticket: '#2127',
+      message,
+      book_id: order.book_id,
+      instrument: order.instrument,
+    });
+    this.refusals.push(message);
+    this.log('error', 'v2_fill_day_bar_missing', message);
   }
 
   // The order and its stop are in the units it was priced in, the position book in the latest

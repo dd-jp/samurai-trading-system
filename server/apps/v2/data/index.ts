@@ -72,6 +72,11 @@ export { SqliteSplitReads } from './split-reads.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
 export { CLOSED_VENUE_ROUTER, createDatedVenueRouter, createVenueRouter } from './venue-routes.js';
 export type { SitOutCode, VenueSessionGate } from './venue-sessions.js';
-export { bothVenuesClosed, sessionDay, TABLE_VENUE_SESSIONS } from './venue-sessions.js';
+export {
+  bothVenuesClosed,
+  firstSessionOn,
+  sessionDay,
+  TABLE_VENUE_SESSIONS,
+} from './venue-sessions.js';
 export type { QuoteCurrency } from './venues.js';
 export { isCfdVenue, quoteCurrencyOf } from './venues.js';

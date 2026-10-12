@@ -72,27 +72,31 @@ function answer(request: AnthropicMessageRequest): string {
 let directory: string;
 let options: ReplayCliOptions;
 
-async function writeBars(root: string, hold: DailyBar[]): Promise<void> {
+async function writeBars(
+  root: string,
+  hold: DailyBar[],
+  up: DailyBar[] = rising(2, FILL_DAY),
+): Promise<void> {
   const store = await ParquetBarStore.open(root);
   await store.write('alpaca', [
-    { symbol: 'UP', bars: rising(2, FILL_DAY) },
+    { symbol: 'UP', bars: up },
     { symbol: 'HOLD', bars: hold },
     { symbol: 'SPY', bars: rising(20) },
   ]);
   store.close();
 }
 
-async function runDay(tradingDate: string): Promise<void> {
+async function runDay(tradingDate: string, day: ReplayCliOptions = options): Promise<void> {
   const root = composeV2Root({
     tradingDate,
     dryRun: true,
-    storePath: options.storePath,
-    barStoreRoot: options.barStoreRoot,
-    constituentsPath: options.constituentsPath,
-    fxPath: options.fxPath,
-    spreadsPath: options.spreadsPath,
-    saxoSpreadsPath: options.saxoSpreadsPath,
-    cfdCataloguePath: options.cfdCataloguePath,
+    storePath: day.storePath,
+    barStoreRoot: day.barStoreRoot,
+    constituentsPath: day.constituentsPath,
+    fxPath: day.fxPath,
+    spreadsPath: day.spreadsPath,
+    saxoSpreadsPath: day.saxoSpreadsPath,
+    cfdCataloguePath: day.cfdCataloguePath,
     clock: new SimulatedClock(new Date(`${tradingDate}T07:30:00.000Z`)),
     logger: { log: () => {} },
     venueSessions: OPEN_EVERY_DAY,
@@ -106,17 +110,16 @@ async function runDay(tradingDate: string): Promise<void> {
   }
 }
 
-beforeAll(async () => {
-  directory = mkdtempSync(join(tmpdir(), 'v2-replay-book-'));
-  const barStoreRoot = join(directory, 'parquet');
-  await writeBars(barStoreRoot, rising(20));
-  const constituentsPath = join(directory, 'constituents.csv');
+async function seededDays(dir: string, up?: DailyBar[]): Promise<ReplayCliOptions> {
+  const barStoreRoot = join(dir, 'parquet');
+  await writeBars(barStoreRoot, rising(20), up);
+  const constituentsPath = join(dir, 'constituents.csv');
   writeFileSync(constituentsPath, `date,tickers\n2016-01-04,"UP,HOLD"\n${EXIT_DAY},"UP"\n`);
-  const fxPath = join(directory, 'fx.csv');
+  const fxPath = join(dir, 'fx.csv');
   writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n02 Jan 2026,1.26\n');
-  const spreadsPath = join(directory, 'spreads.csv');
+  const spreadsPath = join(dir, 'spreads.csv');
   writeFileSync(spreadsPath, 'symbol,sessions,median_half_spread_bps\nUP,10,2\nHOLD,10,3\n');
-  const storePath = join(directory, 'paper.sqlite');
+  const storePath = join(dir, 'paper.sqlite');
   const seed = openSharedStore(storePath);
   new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
     2026,
@@ -124,18 +127,24 @@ beforeAll(async () => {
     1_500,
   );
   seed.close();
-  options = {
+  const days: ReplayCliOptions = {
     tradingDate: EXIT_DAY,
     storePath,
     barStoreRoot,
     constituentsPath,
     fxPath,
     spreadsPath,
-    saxoSpreadsPath: join(directory, 'absent-saxo-spreads.csv'),
-    cfdCataloguePath: join(directory, 'absent-catalogue.json'),
+    saxoSpreadsPath: join(dir, 'absent-saxo-spreads.csv'),
+    cfdCataloguePath: join(dir, 'absent-catalogue.json'),
     venueSessions: OPEN_EVERY_DAY,
   };
-  for (const day of [ENTRY_DAY, FILL_DAY, EXIT_DAY]) await runDay(day);
+  for (const day of [ENTRY_DAY, FILL_DAY, EXIT_DAY]) await runDay(day, days);
+  return days;
+}
+
+beforeAll(async () => {
+  directory = mkdtempSync(join(tmpdir(), 'v2-replay-book-'));
+  options = await seededDays(directory);
 });
 
 afterAll(() => {
@@ -146,8 +155,8 @@ function digestOf(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-function journalRows(sql: string): unknown[] {
-  const db = new BetterSqlite3(options.storePath, { readonly: true });
+function journalRows(sql: string, storePath = options.storePath): unknown[] {
+  const db = new BetterSqlite3(storePath, { readonly: true });
   try {
     return db.prepare(sql).all();
   } finally {
@@ -306,6 +315,43 @@ describe('replay of sizing, orders, fills and marks', () => {
     expect(result.divergences).toEqual([
       { kind: 'row_missing', stage: 'orders', key: `v2-debate-primary-${EXIT_DAY}-HOLD-exit` },
     ]);
+  });
+});
+
+describe('replay of a simulated entry whose fill-day bar is missing (#2127)', () => {
+  let gapped: ReplayCliOptions;
+
+  beforeAll(async () => {
+    gapped = await seededDays(
+      mkdtempSync(join(directory, 'fill-day-gap-')),
+      rising(2, FILL_DAY).filter((bar) => bar.date !== ENTRY_DAY),
+    );
+  });
+
+  it('leaves the entry unbooked behind the later bar and journals the refusal', () => {
+    expect(
+      journalRows(
+        `SELECT trading_date, leg FROM v2_fills WHERE instrument = 'UP'`,
+        gapped.storePath,
+      ),
+    ).toEqual([]);
+    expect(
+      journalRows(
+        `SELECT trading_date, book_id FROM v2_refusals
+          WHERE parameter = 'FILL_DAY_BAR' AND instrument = 'UP' ORDER BY book_id`,
+        gapped.storePath,
+      ),
+    ).toEqual(
+      ['arm2/technical-only', 'debate/no-macro-gate', 'debate/primary'].map((book_id) => ({
+        trading_date: EXIT_DAY,
+        book_id,
+      })),
+    );
+  });
+
+  it.each([FILL_DAY, EXIT_DAY])('replays %s with no divergence', async (tradingDate) => {
+    const result = await replayFromFiles({ ...gapped, tradingDate });
+    expect(result.divergences).toEqual([]);
   });
 });
 
