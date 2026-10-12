@@ -146,5 +146,11 @@ describe('SqliteSplitChecks', () => {
       { instrument: 'AAPL', exchange: 'US', after: '2026-10-01' },
       { instrument: 'BP', exchange: 'LSE', after: '2026-10-01' },
     ]);
+    checks.record(check('2026-10-08', 'agree'));
+    expect(checks.carried('2026-10-08')).toContainEqual({
+      instrument: 'AAPL',
+      exchange: 'US',
+      after: '2026-10-01',
+    });
   });
 });

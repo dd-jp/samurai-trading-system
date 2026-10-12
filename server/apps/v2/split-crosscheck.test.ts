@@ -80,6 +80,10 @@ describe('crossCheckSplits', () => {
     expect(
       crossCheckSplits({ eodhd: [read('AAPL.US', SPLIT)], alpaca: undefined }, WINDOW, off),
     ).toMatchObject({ unconfirmed: off.steps });
+    const early = { ...detected, steps: [{ date: '2026-09-27', ratio: 1.2 }] };
+    expect(
+      crossCheckSplits({ eodhd: [read('AAPL.US', SPLIT)], alpaca: undefined }, WINDOW, early),
+    ).toMatchObject({ unconfirmed: early.steps });
   });
 
   it('blocks when either source leaves the window uncovered or conflicts', () => {

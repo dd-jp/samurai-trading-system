@@ -7,6 +7,7 @@ import { rewoundCopy } from './replay-book.js';
 import {
   journalledQuotes,
   journalledVeto,
+  restoreControls,
   type SettledSignal,
   settledSignals,
   signalDivergences,
@@ -16,6 +17,7 @@ import { parseSignalPayload } from './signals/payload.js';
 import { SignalStore } from './signals/store.js';
 import { INTERRUPTED_VETO } from './signals/veto.js';
 import { classifySignalWindow } from './signals/window.js';
+import { SqliteSplitChecks } from './split-checks.js';
 
 const D = '2026-09-30';
 const AT = new Date(`${D}T14:00:00.000Z`);
@@ -348,5 +350,28 @@ describe('rewoundCopy signal rows', () => {
     });
     expect(rows(db, tables.events)).toHaveLength(5);
     expect(rows(db, tables.claims)).toHaveLength(3);
+  });
+});
+
+describe('restoreControls', () => {
+  it('restores the split clears David journalled between two signal passes, as it does controls', () => {
+    const { db } = journal();
+    const clock = new SimulatedClock(new Date(`${D}T12:00:00.000Z`));
+    const checks = new SqliteSplitChecks(db, clock);
+    for (const at of ['13:00', '15:00', '17:00']) {
+      clock.advanceTo(new Date(`${D}T${at}:00.000Z`));
+      checks.clear('AAPL', 'US', `cleared at ${at}`);
+    }
+    const copy = rewoundCopy(db, D, `${D}T14:00:00.000Z`);
+    handles.push(copy);
+    const cleared = () =>
+      (
+        copy.prepare('SELECT reason FROM v2_split_clears ORDER BY clear_id').all() as {
+          reason: string;
+        }[]
+      ).map((row) => row.reason);
+    expect(cleared()).toEqual(['cleared at 13:00']);
+    restoreControls({ journal: db, copy }, `${D}T14:00:00.000Z`, `${D}T16:00:00.000Z`);
+    expect(cleared()).toEqual(['cleared at 13:00', 'cleared at 15:00']);
   });
 });

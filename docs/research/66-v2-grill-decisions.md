@@ -830,7 +830,7 @@ David ruled again on 2026-10-12, on what runs before the feed is bought:
 - A disagreement, an EODHD or Alpaca read that is `uncovered` or `conflict`, or a read that failed blocks that line (ruling 2). Nothing rescales, a `data` refusal (`SPLIT_CROSSCHECK`) is journalled, and `v2_split_crosscheck_block` goes out at error level, which the alerting logger sends as critical. Every verdict is journalled in `v2_split_checks`. Entries on the line, in the daily cycle and the signals entry pass, are refused with an `entry` refusal (`SPLIT_CROSSCHECK_BLOCK`) and a size-0 decision. Exits still run.
 - A block lasts from its first blocking day until a day on which every check of the line agrees. A line no longer held is checked again each cycle until then, so its block lifts by itself. `npm run v2:split-clear -- --instrument X --exchange US|LSE --reason TEXT` (`server/apps/v2/split-clear.ts`) journals a clear in `v2_split_clears`, which lifts the current block only. The next blocking day starts a new one.
 - With no key, nothing reads or journals a split, a bar step rescales as before, and each bar-step rescale logs `v2_split_feed_unset` (warning) (ruling 3). A dry run never reads the feed.
-- Replay reads the day's journalled reads and never fetches. A replayed day with no `v2_split_reads` row ran without the feed, so it replays without it.
+- Replay reads the day's journalled reads and never fetches. A replayed day with no `v2_split_reads` row ran without the feed, so it replays without it. A clear journalled during the day is put back before each replayed signals pass that came after it, as `v2_controls` rows are.
 
 Build notes (not rulings):
 
