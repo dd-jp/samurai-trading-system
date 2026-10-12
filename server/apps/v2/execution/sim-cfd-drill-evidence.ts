@@ -1,3 +1,4 @@
+import { redactEvidence } from './evidence-redaction.js';
 import type { DrillAssetType, OpenOrder } from './sim-cfd-drill-reads.js';
 
 export interface DrillStep {
@@ -65,7 +66,6 @@ export interface DrillEvidence {
   passed: boolean;
 }
 
-const REDACTED = '[redacted]';
 const IDENTITY_KEYS = new Set([
   'AccountKey',
   'ClientKey',
@@ -74,21 +74,8 @@ const IDENTITY_KEYS = new Set([
   'AccountGroupKey',
 ]);
 
-function redactString(value: string, secrets: readonly string[]): string {
-  return secrets.reduce((text, secret) => text.split(secret).join(REDACTED), value);
-}
-
 export function redact(value: unknown, secrets: readonly string[]): unknown {
-  const live = secrets.filter((secret) => secret.length > 0);
-  if (typeof value === 'string') return redactString(value, live);
-  if (Array.isArray(value)) return value.map((item) => redact(item, live));
-  if (typeof value !== 'object' || value === null) return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [
-      key,
-      IDENTITY_KEYS.has(key) ? REDACTED : redact(item, live),
-    ]),
-  );
+  return redactEvidence(value, secrets, IDENTITY_KEYS);
 }
 
 export function isFlat(flatness: AccountFlatness | undefined): boolean {
