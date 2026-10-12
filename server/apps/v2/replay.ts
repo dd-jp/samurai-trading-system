@@ -18,6 +18,7 @@ import {
   journalledNewsSource,
   quotePerGbp,
   SqliteNewsLedger,
+  SqliteSplitReads,
   TABLE_VENUE_SESSIONS,
   type VenueSessionGate,
 } from './data/index.js';
@@ -68,6 +69,8 @@ import {
   type SecretSource,
   secretWireForms,
 } from './signal/index.js';
+import { SqliteSplitChecks } from './split-checks.js';
+import { journalledSplitFeed } from './split-feed.js';
 
 const REPLAYED_SLEEVES: readonly string[] = [DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID];
 const LSE_REFUSAL_PREFIX = 'LSE leg refused: ';
@@ -366,6 +369,11 @@ function replayComposition(replay: ReplayCycle): CycleComposition {
       db,
       tradingDate,
       inputs.venueSessions ?? TABLE_VENUE_SESSIONS,
+    ),
+    splitFeed: journalledSplitFeed(
+      new SqliteSplitReads(db),
+      new SqliteSplitChecks(copy, replay.clock),
+      tradingDate,
     ),
     brokerAccess: (pricing) =>
       brokerAccessFor({

@@ -25,7 +25,9 @@ import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import { pushDailySummary } from './daily-summary.js';
 import {
+  type AlpacaDataCredentials,
   AlpacaNewsSource,
+  AlpacaSplitsClient,
   BarsMarketData,
   type BarsSource,
   bothVenuesClosed,
@@ -33,6 +35,7 @@ import {
   type CfdCatalogue,
   createVenueRouter,
   currentConstituents,
+  EodhdClient,
   FX_PATH,
   loadCfdCatalogue,
   MarketauxClient,
@@ -45,6 +48,7 @@ import {
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
   SqliteNewsLedger,
+  SqliteSplitReads,
   TABLE_VENUE_SESSIONS,
   type VenueRouter,
   type VenueSessionGate,
@@ -94,6 +98,8 @@ import {
 import { processDueSignals, type SignalOutcome, signalsDue } from './signals/processor.js';
 import type { SignalStore } from './signals/store.js';
 import { panelVeto } from './signals/veto.js';
+import { SqliteSplitChecks } from './split-checks.js';
+import { liveSplitFeed, type SplitFeed } from './split-feed.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
 export const CYCLE_CFD_CATALOGUE = { path: CFD_CATALOGUE_PATH, storePath: V2_STORE_PATH };
@@ -132,6 +138,9 @@ export interface V2RootOptions {
   readonly quotes?: LatestQuoteSource | undefined;
   readonly newsSource?: NewsSource | undefined;
   readonly marketauxApiKey?: string | undefined;
+  readonly eodhdApiKey?: string | undefined;
+  readonly alpacaDataCredentials?: AlpacaDataCredentials | undefined;
+  readonly splitFetch?: typeof fetch | undefined;
   readonly isUkStock?: ((symbol: string) => boolean) | undefined;
   readonly lseLegRefusal?: string | undefined;
   readonly knownSecrets?: SecretSource | undefined;
@@ -331,6 +340,27 @@ function refuseLiveMode(options: V2RootOptions): void {
   if (options.samuraiMode === 'live') {
     throw new Error('v2 root refuses SAMURAI_MODE=live: nothing has passed the gate (doc 66 Q10)');
   }
+}
+
+export function splitFeedFor(
+  options: V2RootOptions,
+  db: StoreHandle,
+  clock: Clock,
+): SplitFeed | undefined {
+  const apiKey = options.eodhdApiKey?.trim() ?? '';
+  if (options.dryRun || apiKey === '') return undefined;
+  const fetchImpl = options.splitFetch ?? fetch;
+  const now = () => clock.now();
+  const credentials = options.alpacaDataCredentials;
+  const store = guardedStore(db, 'v2');
+  return liveSplitFeed({
+    eodhd: new EodhdClient(apiKey, fetchImpl, now),
+    alpaca:
+      credentials === undefined ? undefined : new AlpacaSplitsClient(credentials, fetchImpl, now),
+    reads: new SqliteSplitReads(store),
+    checks: new SqliteSplitChecks(store, clock),
+    clock,
+  });
 }
 
 function brokerModeFor(options: V2RootOptions): BrokerMode {
@@ -608,6 +638,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     brokerMode: brokerModeFor(options),
     venueSessions: venueSessionsFor(options),
     runStartedAt: options.runStartedAt,
+    splitFeed: splitFeedFor(options, db, clock),
   });
   const lease = new RunLease(db, clock);
   const quotes = quotesFor(options);
@@ -791,6 +822,14 @@ export function logFaultFreeWeeks(
   });
 }
 
+// The data API takes either account's pair; the paper pair is the one every run already holds
+function alpacaDataCredentialsFrom(env: NodeJS.ProcessEnv): AlpacaDataCredentials | undefined {
+  const apiKey = env.ALPACA_API_KEY ?? '';
+  const apiSecret = env.ALPACA_API_SECRET ?? '';
+  if (apiKey === '' || apiSecret === '') return undefined;
+  return { apiKey, apiSecret };
+}
+
 export function rootOptionsFor(
   dryRun: boolean,
   tradingDate: string,
@@ -804,6 +843,8 @@ export function rootOptionsFor(
     ...nousOptionsFrom(env),
     samuraiMode: env.SAMURAI_MODE,
     marketauxApiKey: env.MARKETAUX_API_KEY,
+    eodhdApiKey: env.EODHD_API_KEY,
+    alpacaDataCredentials: alpacaDataCredentialsFrom(env),
     clock,
     logger,
     lseLegRefusal: saxoSessionRefusal(clock.now()),

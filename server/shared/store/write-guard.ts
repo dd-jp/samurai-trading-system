@@ -93,6 +93,9 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'v2_canary_runs',
     'v2_trial_chain',
     'v2_cfd_catalogue_snapshots',
+    'v2_split_reads',
+    'v2_split_checks',
+    'v2_split_clears',
   ],
   verdict: ['verdict_log'],
 };

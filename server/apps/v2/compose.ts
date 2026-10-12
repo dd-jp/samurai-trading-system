@@ -38,6 +38,7 @@ import {
   RECONCILE_CASH_TOLERANCE_GBP,
   SleeveRegistry,
 } from './signal/index.js';
+import type { SplitFeed } from './split-feed.js';
 
 export interface CycleCompositionOptions {
   readonly db: StoreHandle;
@@ -63,6 +64,7 @@ export interface CycleCompositionOptions {
   readonly runStartedAt?: Date | undefined;
   // Replay only: answers every broker call from the journal, so no venue adapter is built
   readonly brokerAccess?: ((pricing: FillPricing) => BrokerAccess) | undefined;
+  readonly splitFeed?: SplitFeed | undefined;
 }
 
 export interface CycleComposition extends CycleDeps {
@@ -177,5 +179,6 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     venueSessions: options.venueSessions,
     runStartedAt: options.runStartedAt,
     atomically: (work) => v2Store.transaction(work)(),
+    splitFeed: options.splitFeed,
   };
 }

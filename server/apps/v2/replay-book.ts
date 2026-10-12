@@ -72,6 +72,7 @@ const DATED_TABLES = [
   'v2_reconciles',
   'v2_faults',
   'v2_rescales',
+  'v2_split_checks',
 ] as const;
 
 const APPEND_ONLY_TRIGGERS = [
@@ -86,6 +87,8 @@ const APPEND_ONLY_TRIGGERS = [
   'v2_signal_vetoes_no_delete',
   'v2_signal_veto_claims_no_delete',
   'v2_signal_veto_retry_verdicts_no_delete',
+  'v2_split_checks_no_delete',
+  'v2_split_clears_no_delete',
 ] as const;
 
 const SIGNAL_REWIND_SQL = [
@@ -237,6 +240,7 @@ export function rewoundCopy(db: StoreHandle, tradingDate: string, startedAt: str
       copy.prepare(`DELETE FROM ${table} WHERE trading_date >= ?`).run(tradingDate);
     }
     copy.prepare('DELETE FROM v2_controls WHERE set_at > ?').run(startedAt);
+    copy.prepare('DELETE FROM v2_split_clears WHERE cleared_at > ?').run(startedAt);
     for (const sql of SIGNAL_REWIND_SQL) copy.prepare(sql).run({ startedAt });
     copy
       .prepare(

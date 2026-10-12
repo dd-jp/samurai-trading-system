@@ -149,6 +149,45 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    table: 'v2_split_reads',
+    seed: `INSERT INTO v2_split_reads (read_id, trading_date, source, symbol, from_date, to_date, as_of, status, reason, splits, fetched_at)
+      VALUES (1, '2026-10-01', 'eodhd', 'AAPL.US', '2026-09-01', '2026-10-01', '2026-10-01', 'ok', '', '[]', '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same read_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_split_reads (read_id, trading_date, source, symbol, from_date, to_date, as_of, status, reason, splits, fetched_at)
+          VALUES (1, '2026-10-01', 'eodhd', 'AAPL.US', '2026-09-01', '2026-10-01', '2026-10-01', 'ok', '', '[{"date":"2026-09-02","ratio":2}]', '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
+    table: 'v2_split_checks',
+    seed: `INSERT INTO v2_split_checks (check_id, trading_date, instrument, exchange, after_date, through_date, verdict, reason, ratio, recorded_at)
+      VALUES (1, '2026-10-01', 'AAPL', 'US', '2026-09-01', '2026-09-30', 'block', 'eodhd_uncovered', 1, '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same check_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_split_checks (check_id, trading_date, instrument, exchange, after_date, through_date, verdict, reason, ratio, recorded_at)
+          VALUES (1, '2026-10-01', 'AAPL', 'US', '2026-09-01', '2026-09-30', 'agree', 'agree', 1, '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
+    table: 'v2_split_clears',
+    seed: `INSERT INTO v2_split_clears (clear_id, instrument, exchange, reason, cleared_at)
+      VALUES (1, 'AAPL', 'US', 'original', '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same clear_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_split_clears (clear_id, instrument, exchange, reason, cleared_at)
+          VALUES (1, 'MSFT', 'US', 'rewritten', '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
     table: 'v2_controls',
     seed: `INSERT INTO v2_controls (control_id, action, reason, source, idempotency_key, set_at)
       VALUES (1, 'halt', 'original', 'test', 'key-original', '2026-10-01T07:00:00.000Z')`,

@@ -10,7 +10,7 @@ import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { VenueSessionGate } from './data/index.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from './execution/alpaca/alpaca-client.js';
-import { composeV2Root } from './index.js';
+import { composeV2Root, type V2RootOptions } from './index.js';
 import { type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
@@ -300,11 +300,43 @@ let staleOptions: ReplayCliOptions;
 
 let partOptions: ReplayCliOptions;
 
+let fedOptions: ReplayCliOptions;
+
+const splitFetches: URL[] = [];
+
+// EODHD and Alpaca answer per their documented shapes; the split is the bars' 2:1 on SPLIT_BAR
+const splitFetch = (async (input: URL) => {
+  splitFetches.push(input);
+  const inside = (date: string, from: string | null, to: string | null) =>
+    date >= (from ?? '') && date <= (to ?? '');
+  const exDate = dateAt(SPLIT_BAR);
+  if (input.host === 'eodhd.com') {
+    const listed =
+      input.pathname.endsWith('/UP.US') &&
+      inside(exDate, input.searchParams.get('from'), input.searchParams.get('to'));
+    return new Response(
+      JSON.stringify(listed ? [{ date: exDate, split: '2.000000/1.000000' }] : []),
+    );
+  }
+  const listed =
+    input.searchParams.get('symbols') === 'UP' &&
+    inside(exDate, input.searchParams.get('start'), input.searchParams.get('end'));
+  return new Response(
+    JSON.stringify({
+      corporate_actions: {
+        forward_splits: listed ? [{ symbol: 'UP', new_rate: 2, old_rate: 1, ex_date: exDate }] : [],
+      },
+      next_page_token: null,
+    }),
+  );
+}) as typeof fetch;
+
 async function journalDays(
   name: string,
   base: ReplayCliOptions,
   staleStop: boolean,
   splitDay: Broker = { filled: true, positionScale: 2 },
+  extra: Partial<V2RootOptions> = {},
 ) {
   const storePath = join(directory, `${name}.sqlite`);
   const seed = openSharedStore(storePath);
@@ -336,6 +368,7 @@ async function journalDays(
       transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer(clock)),
       newsSource: { headlines: () => Promise.resolve([]) },
       alpacaClient,
+      ...extra,
     });
     try {
       await root.run();
@@ -379,6 +412,11 @@ beforeAll(async () => {
     positionScale: 2,
     partial: 3,
     failSweeps: 1,
+  });
+  fedOptions = await journalDays('fed', base, false, undefined, {
+    eodhdApiKey: 'eodhd-test-key',
+    alpacaDataCredentials: { apiKey: 'alpaca-data-key', apiSecret: 'alpaca-data-secret' },
+    splitFetch,
   });
 });
 
@@ -793,4 +831,65 @@ describe('replay of a date a crashed run acted on before the retry that marked i
     },
     60_000,
   );
+});
+
+describe('replay of a split read from the EODHD feed (#2025)', () => {
+  const rows = (sql: string) => journalRows(sql, fedOptions.storePath);
+
+  it('rescales from the feed once both sources list the split, journalling every read and check', () => {
+    expect(splitFetches.length).toBeGreaterThan(0);
+    expect(
+      rows(
+        `SELECT trading_date, source, ratio, anchor_date FROM v2_rescales
+           WHERE book_id = 'debate/primary' AND source = 'detector'`,
+      ),
+    ).toEqual([
+      { trading_date: SPLIT_DAY, source: 'detector', ratio: 2, anchor_date: dateAt(SPLIT_BAR) },
+    ]);
+    expect(
+      rows(
+        `SELECT DISTINCT trading_date, source, symbol, status FROM v2_split_reads ORDER BY trading_date, source`,
+      ),
+    ).toEqual([
+      { trading_date: SPLIT_DAY, source: 'alpaca', symbol: 'UP', status: 'ok' },
+      { trading_date: SPLIT_DAY, source: 'eodhd', symbol: 'UP.US', status: 'ok' },
+      { trading_date: DAY_AFTER, source: 'alpaca', symbol: 'UP', status: 'ok' },
+      { trading_date: DAY_AFTER, source: 'eodhd', symbol: 'UP.US', status: 'ok' },
+    ]);
+    expect(
+      rows(
+        `SELECT DISTINCT trading_date, verdict, ratio FROM v2_split_checks ORDER BY trading_date, ratio`,
+      ),
+    ).toEqual([
+      { trading_date: SPLIT_DAY, verdict: 'agree', ratio: 2 },
+      { trading_date: DAY_AFTER, verdict: 'agree', ratio: 1 },
+    ]);
+    expect(JSON.stringify(rows('SELECT * FROM v2_split_reads'))).not.toMatch(
+      /eodhd-test-key|alpaca-data/,
+    );
+  });
+
+  it('replays the split day and the day after identical from the journalled reads, fetching nothing', async () => {
+    const fetched = splitFetches.length;
+    for (const tradingDate of [SPLIT_DAY, DAY_AFTER]) {
+      const result = await replayFromFiles({ ...fedOptions, tradingDate });
+      expect(result.divergences).toEqual([]);
+    }
+    expect(splitFetches.length).toBe(fetched);
+  });
+
+  it('diverges when the journalled EODHD read is changed, never refetching it', async () => {
+    const storePath = tamperedCopy(
+      'fed-no-split',
+      `DROP TRIGGER IF EXISTS v2_split_reads_no_update;
+       UPDATE v2_split_reads SET splits = '[]' WHERE trading_date = '${SPLIT_DAY}';`,
+      fedOptions.storePath,
+    );
+    const result = await replayFromFiles({ ...fedOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toContainEqual({
+      kind: 'row_missing',
+      stage: 'rescales',
+      key: `debate/primary|UP|detector|${dateAt(SPLIT_BAR)}|1`,
+    });
+  });
 });
