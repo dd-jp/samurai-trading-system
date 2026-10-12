@@ -2075,17 +2075,30 @@ class Cycle {
   }
 
   // David, 2026-10-09 (#2025): a split the sources disagree on blocks entries; broker exits still run
-  withoutSplitBlocked(book: BookSpec, decisions: readonly SleeveDecision[]): SleeveDecision[] {
+  withoutSplitBlocked(
+    book: BookSpec,
+    decisions: readonly SleeveDecision[],
+    clearedBy?: string,
+  ): SleeveDecision[] {
     const feed = this.deps.splitFeed;
     if (feed === undefined) return [...decisions];
     return decisions.filter((proposed) => {
       if (!isEntryAction(proposed)) return true;
       const exchange = exchangeOf(proposed.venue);
-      const block = feed.checks.block(proposed.instrument, exchange, this.tradingDate);
+      const block = feed.checks.block(proposed.instrument, exchange, this.tradingDate, clearedBy);
       if (block === undefined) return true;
       this.journalSplitBlocked(book, proposed, `${block.reason} since ${block.since}`);
       return false;
     });
+  }
+
+  // Build note (#2126): the daily cycle's entries count clears as of the run's start, as its exits
+  // do; an event-driven entry pass reads them live, and its replay restores them to the event
+  withoutSplitBlockedAtStart(
+    book: BookSpec,
+    decisions: readonly SleeveDecision[],
+  ): SleeveDecision[] {
+    return this.withoutSplitBlocked(book, decisions, this.runStartedAt.toISOString());
   }
 
   // David, 2026-10-12 (#2025): a blocked line's simulated exits freeze. Build note: clears count
@@ -2520,7 +2533,7 @@ async function tradeSleeveBooks(
     await cycle.exits(book, decisions);
     await cycle.entries(
       book,
-      cycle.withoutSplitBlocked(book, cycle.withoutSittingOut(book, decisions)),
+      cycle.withoutSplitBlockedAtStart(book, cycle.withoutSittingOut(book, decisions)),
     );
   }
   return [...books];

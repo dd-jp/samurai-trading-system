@@ -67,6 +67,7 @@ import {
   type ReplayMiss,
   ReplayTransport,
   type SecretSource,
+  SIGNALS_SLEEVE_ID,
   secretWireForms,
 } from './signal/index.js';
 import { type SplitCheckLedger, SqliteSplitChecks } from './split-checks.js';
@@ -161,22 +162,29 @@ const PARAMETER_REFUSALS_SQL = `
   SELECT DISTINCT parameter FROM v2_refusals
    WHERE trading_date = ? AND scope = 'parameter'`;
 
-const FROZEN_SQL = `
-  SELECT DISTINCT instrument FROM v2_refusals
-   WHERE trading_date = ? AND parameter = 'SPLIT_EXIT_FREEZE'`;
+// The signals processor's entry passes read clears live and journal the same entry block, so
+// only the daily cycle's books count here
+const RUN_START_BLOCKS_SQL = `
+  SELECT DISTINCT r.instrument FROM v2_refusals r
+   WHERE r.trading_date = ?
+     AND (r.parameter = 'SPLIT_EXIT_FREEZE'
+       OR (r.parameter = 'SPLIT_CROSSCHECK_BLOCK'
+         AND EXISTS (SELECT 1 FROM v2_books b WHERE b.book_id = r.book_id AND b.sleeve_id <> ?)))`;
 
 const NO_CLEAR_COUNTS = '';
 
-// The live freeze reads clears as of its run's start, the rewound copy holds them up to the day's
-// first journalled row; a clear landing between the two froze the run, so the journalled freeze
-// stands
-export function journalledFreezes(
+// The live freeze and entry block read clears as of the run's start, the rewound copy holds them
+// up to the day's first journalled row; a clear landing between the two blocked the run, so the
+// journalled block stands
+export function journalledSplitBlocks(
   db: StoreHandle,
   checks: SplitCheckLedger,
   tradingDate: string,
 ): SplitCheckLedger {
-  const rows = db.prepare(FROZEN_SQL).all(tradingDate) as { instrument: string }[];
-  const frozen = new Set(rows.map((row) => row.instrument));
+  const rows = db.prepare(RUN_START_BLOCKS_SQL).all(tradingDate, SIGNALS_SLEEVE_ID) as {
+    instrument: string;
+  }[];
+  const blocked = new Set(rows.map((row) => row.instrument));
   return {
     record: (check) => checks.record(check),
     block: (instrument, exchange, date, clearedBy) =>
@@ -184,7 +192,7 @@ export function journalledFreezes(
         instrument,
         exchange,
         date,
-        clearedBy !== undefined && frozen.has(instrument) ? NO_CLEAR_COUNTS : clearedBy,
+        clearedBy !== undefined && blocked.has(instrument) ? NO_CLEAR_COUNTS : clearedBy,
       ),
     blockedBetween: (instrument, exchange, from, before) =>
       checks.blockedBetween(instrument, exchange, from, before),
@@ -403,7 +411,7 @@ function replayComposition(replay: ReplayCycle): CycleComposition {
     ),
     splitFeed: journalledSplitFeed(
       new SqliteSplitReads(db),
-      journalledFreezes(db, new SqliteSplitChecks(copy, replay.clock), tradingDate),
+      journalledSplitBlocks(db, new SqliteSplitChecks(copy, replay.clock), tradingDate),
       tradingDate,
     ),
     brokerAccess: (pricing) =>

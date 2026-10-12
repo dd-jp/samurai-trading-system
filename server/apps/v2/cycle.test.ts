@@ -6244,6 +6244,41 @@ describe('runCycle: positions held across a split (#1865)', () => {
       ]);
     });
 
+    it("a clear landing mid-run holds that run's entries; the entry pass reads it live", async () => {
+      const deps = harness([], true);
+      hold(deps, 6);
+      const checksClock = new SimulatedClock(new Date('2026-09-29T07:00:00.000Z'));
+      const blocked = fed(deps, flat, reader([]), reader(TEN_FOR_ONE), checksClock);
+      await runCycle(blocked, '2026-09-29');
+      unhold(deps);
+      checksClock.advanceTo(new Date('2026-09-30T08:00:00.000Z'));
+      (blocked.splitFeed.checks as SqliteSplitChecks).clear('AAPL', 'US', 'David checked it');
+      deps.setDecisions([longAapl]);
+      const started = {
+        ...blocked,
+        clock: new SimulatedClock(new Date('2026-09-30T07:00:00.000Z')),
+      };
+      await runCycle(started, '2026-09-30');
+      expect(deps.journal.orderFor('v2-debate-primary-2026-09-30-AAPL')).toBeUndefined();
+      expect(refusalsOf(deps, 'SPLIT_CROSSCHECK_BLOCK')).toContainEqual({
+        trading_date: '2026-09-30',
+        scope: 'entry',
+        book_id: 'debate/primary',
+        instrument: 'AAPL',
+        ticket: '#2025',
+      });
+
+      const report = await runEntryPass(started, {
+        tradingDate: '2026-09-30',
+        sleeveId: 'debate',
+        decisionsFor: () => [longAapl],
+        entryOrderId: (book, instrument, date) => `sig-${book.id}-${date}-${instrument}`,
+        blockedBookIds: new Set(),
+      });
+      expect(report.refusals).toEqual([]);
+      expect(deps.journal.orderFor('sig-debate/primary-2026-09-30-AAPL')).toBeDefined();
+    });
+
     describe('simulated exits on a blocked line freeze (David 2026-10-12)', () => {
       const SHADOW_SPEC: SleeveSpec = {
         ...TEST_SPEC,
