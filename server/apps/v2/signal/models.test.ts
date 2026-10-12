@@ -18,9 +18,9 @@ describe('model pins', () => {
     ]);
   });
 
-  it('seats Sonnet 5, GPT-5.5 and DeepSeek V4 Pro as debaters and Opus 5.5 as judge, all on Nous ids', () => {
+  it('seats Sonnet 5.5, GPT-5.5 and DeepSeek V4 Pro as debaters and Opus 5.5 as judge, all on Nous ids', () => {
     expect(DEBATER_PINS.map((pin) => pin.wire)).toEqual([
-      'anthropic/claude-sonnet-5',
+      'anthropic/claude-sonnet-5.5',
       'openai/gpt-5.5',
       'deepseek/deepseek-v4-pro-0813',
     ]);
@@ -29,9 +29,9 @@ describe('model pins', () => {
     expect(JUDGE_PIN.seat).toBe('judge');
   });
 
-  it('pins the canonical_slug the debate-sleeve spec §4 table records, leaving Sonnet 5 unverified', () => {
+  it('pins the canonical_slug the debate-sleeve spec §4 table records', () => {
     expect(ALL_PINS.map((pin) => [pin.wire, pin.canonicalSlug])).toEqual([
-      ['anthropic/claude-sonnet-5', undefined],
+      ['anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-5.5-20260928'],
       ['openai/gpt-5.5', 'openai/gpt-5.5-20260423'],
       ['deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-pro-20260813'],
       ['anthropic/claude-opus-5.5', 'anthropic/claude-opus-5.5-20260921'],

@@ -889,6 +889,17 @@ Build notes (not rulings):
 - The dated router, the arm 2 backtest and the trial identity read the snapshots from the store (`server/apps/v2/data/cfd-catalogue-archive.ts`); the semantics of #2105 are unchanged. #1860's recorded trial, before any snapshot, keeps its hash.
 - `npm run v2:cfd-catalogue-import` (`server/apps/v2/cfd-catalogue-import.ts`) imports any `data/saxo-cfd-catalogue-archive/<asOf>.json` <!-- cite-exempt: untracked — gitignored local archive the import reads --> files the first build wrote. It validates every file before it records any, refuses a file whose name is not its `asOf` or whose `asOf` is not a valid date, ignores other names, and is idempotent. The directory stays gitignored until the import has run on the Mac and it is removed.
 
+## Ruling of 2026-10-12 — Sonnet seat swapped to Sonnet 5.5 (#2121)
+
+David ruled in chat on 2026-10-12, recorded on [#2121](https://github.com/dd-jp/samurai-trading-system/issues/2121): *"swap to 5.5"*. Nous had answered every `anthropic/claude-sonnet-5` call with HTTP 400 ("Request contains an invalid argument"): intermittently from 2026-10-02 and on all 20 debates of 2026-10-12, so no debate completed. The other three pins answered the same probe with 200.
+
+Build notes (not rulings):
+
+- The Sonnet seat pins `anthropic/claude-sonnet-5.5` (wire and priced), at the same $2 / $10 per Mtok as Sonnet 5.
+- Its slug was `anthropic/claude-sonnet-5.5-20260928` on 10 of 10 fetches of `GET /models` on 2026-10-12, so the pin is strict, like the other three seats. The #1787 exception (an undated Sonnet slug, accepted and logged) ends with Sonnet 5.
+- Three debater-shaped probes each echoed the id, finished `stop` in about 190 output tokens and parsed as JSON.
+- The pin digest changes, so under the 2026-10-04 and 2026-10-10 rulings (#1747) both debate books count G1 from zero. The signals sleeve pins only the judge and is unaffected. Under the pinned-model rule (CLAUDE.md, Key Constraints) the swap is a new counted trial.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

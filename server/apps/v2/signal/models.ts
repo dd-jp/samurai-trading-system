@@ -9,12 +9,11 @@ export interface ModelPin {
   readonly canonicalSlug: string | undefined;
 }
 
-export const SONNET_5_PIN: ModelPin = {
+export const SONNET_5_5_PIN: ModelPin = {
   seat: 'sonnet',
-  wire: 'anthropic/claude-sonnet-5',
-  priced: 'anthropic/claude-sonnet-5',
-  // Nous lists this id under a dated or an undated canonical_slug from one fetch to the next; David accepted the undetected-swap gap (doc 66, #1787)
-  canonicalSlug: undefined,
+  wire: 'anthropic/claude-sonnet-5.5',
+  priced: 'anthropic/claude-sonnet-5.5',
+  canonicalSlug: 'anthropic/claude-sonnet-5.5-20260928',
 };
 
 const GPT_5_5_PIN: ModelPin = {
@@ -38,7 +37,7 @@ export const JUDGE_PIN: ModelPin = {
   canonicalSlug: 'anthropic/claude-opus-5.5-20260921',
 };
 
-export const DEBATER_PINS: readonly ModelPin[] = [SONNET_5_PIN, GPT_5_5_PIN, DEEPSEEK_V4_PRO_PIN];
+export const DEBATER_PINS: readonly ModelPin[] = [SONNET_5_5_PIN, GPT_5_5_PIN, DEEPSEEK_V4_PRO_PIN];
 
 export const ALL_PINS: readonly ModelPin[] = [...DEBATER_PINS, JUDGE_PIN];
 

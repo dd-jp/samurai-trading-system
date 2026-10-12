@@ -65,7 +65,7 @@ describe('buildLlmPanel', () => {
     });
     expect(Object.keys(panel.debaters).sort()).toEqual(['deepseek', 'gpt', 'sonnet']);
     expect(panel.pins.map((pin) => pin.wire)).toEqual([
-      'anthropic/claude-sonnet-5',
+      'anthropic/claude-sonnet-5.5',
       'openai/gpt-5.5',
       'deepseek/deepseek-v4-pro-0813',
       'anthropic/claude-opus-5.5',
@@ -114,7 +114,7 @@ describe('buildLlmPanel failure and limits', () => {
       bearResponse: bull,
     });
     expect(requests.map((request) => [request.model, request.max_tokens])).toEqual([
-      ['anthropic/claude-sonnet-5', DEBATER_MAX_TOKENS],
+      ['anthropic/claude-sonnet-5.5', DEBATER_MAX_TOKENS],
       ['anthropic/claude-opus-5.5', JUDGE_MAX_TOKENS],
     ]);
     failing = true;
