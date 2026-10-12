@@ -65,13 +65,18 @@ function entryFill(
     : stopLimitFill(entry, entry.trigger, bar);
 }
 
-function stopOnFillBar(entry: LimitEntry, price: number, bar: QuotedBar): number | undefined {
+function stopOnFillBar(
+  entry: LimitEntry,
+  price: number,
+  bar: Pick<QuotedBar, 'low' | 'high'>,
+): number | undefined {
   if (entry.stop === undefined) return undefined;
   if (entry.side === 'buy') return bar.low <= entry.stop ? Math.min(entry.stop, price) : undefined;
   return bar.high >= entry.stop ? Math.max(entry.stop, price) : undefined;
 }
 
-// The quote fill already paid the spread at the ask; the fill day's bar is checked only for the stop
+// The quote fill already paid the spread at the ask. A daily bar cannot say whether its range came
+// before the quote, so the fill day stops out only on its close (David 2026-10-12, #2024)
 function quotedEntry(
   entry: LimitEntry,
   fill: number | null,
@@ -80,7 +85,7 @@ function quotedEntry(
   if (fill === null) return { kind: 'cancelled' };
   const [bar] = bars;
   if (bar === undefined) return { kind: 'pending' };
-  const stoppedAt = stopOnFillBar(entry, fill, quoted(bar));
+  const stoppedAt = stopOnFillBar(entry, fill, { low: bar.rawClose, high: bar.rawClose });
   return { kind: 'filled', bar, price: fill, crossesSpread: false, stoppedAt };
 }
 

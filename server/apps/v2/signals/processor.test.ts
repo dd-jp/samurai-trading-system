@@ -79,13 +79,16 @@ const UP_BARS = flatBars({
   '2026-10-01': { open: 25.2, high: 26.1, low: 25.1, close: 26, rawClose: 26 },
 });
 
-async function writeFixtures(capital: boolean = true): Promise<Fixtures> {
+async function writeFixtures(
+  capital: boolean = true,
+  upBars: readonly DailyBar[] = UP_BARS,
+): Promise<Fixtures> {
   const directory = mkdtempSync(join(tmpdir(), 'v2-signals-proc-'));
   dirs.push(directory);
   const barStoreRoot = join(directory, 'parquet');
   const bars = await ParquetBarStore.open(barStoreRoot);
   await bars.write('alpaca', [
-    { symbol: 'UP', bars: UP_BARS },
+    { symbol: 'UP', bars: [...upBars] },
     { symbol: 'DN', bars: flatBars() },
     { symbol: 'SPY', bars: flatBars() },
     { symbol: 'OLD', bars: flatBars().filter((bar) => bar.date <= '2026-09-01') },
@@ -761,6 +764,66 @@ describe('both legs fill at the first quote after the signal (David 2026-10-08, 
       .all() as { book_id: string; price_gbp: number }[];
     expect(fills.map((fill) => fill.book_id)).toEqual(['signals/no-veto', 'signals/primary']);
     for (const fill of fills) expect(fill.price_gbp).toBeCloseTo(25.18 / 1.25, 9);
+  });
+
+  function exitsOf(root: V2Root): { book_id: string; detail: string; price: number }[] {
+    return root.db
+      .prepare(
+        `SELECT book_id, json_extract(payload, '$.detail') AS detail,
+                json_extract(payload, '$.price') AS price
+           FROM v2_orders WHERE book_id LIKE 'signals/%' AND leg = 'exit' ORDER BY book_id`,
+      )
+      .all() as { book_id: string; detail: string; price: number }[];
+  }
+
+  async function fillDayThenNext(fillDay: Partial<DailyBar>, nextDay: Partial<DailyBar>) {
+    const fixtures = await writeFixtures(true, flatBars({ [D]: fillDay, '2026-10-01': nextDay }));
+    const clock = new SimulatedClock(IN_SESSION);
+    const { root, signals } = open(fixtures, clock, { quotes: quotesAt(quote(24.96)) });
+    post(signals, {});
+    await root.processSignals(signals, IN_SESSION);
+    clock.advanceTo(new Date('2026-10-01T06:30:00.000Z'));
+    const fill = open(fixtures, clock);
+    await fill.root.run();
+    return { fixtures, clock, fill: fill.root };
+  }
+
+  it('leaves both legs held when the fill day trades below the stop but closes above it, then stops them on the next full bar (David 2026-10-12)', async () => {
+    const { fixtures, clock, fill } = await fillDayThenNext(
+      { open: 25.1, high: 25.2, low: 24.3, close: 25, rawClose: 25 },
+      { open: 24.9, high: 25.2, low: 24.4, close: 24.6, rawClose: 24.6 },
+    );
+    expect(exitsOf(fill)).toEqual([]);
+    for (const book of ['signals/no-veto', 'signals/primary']) {
+      expect(fill.books.position(book, 'UP')?.qty).toBe(35);
+    }
+
+    clock.advanceTo(new Date('2026-10-02T06:30:00.000Z'));
+    const next = open(fixtures, clock);
+    await next.root.run();
+    expect(exitsOf(next.root)).toEqual(
+      ['signals/no-veto', 'signals/primary'].map((book_id) => ({
+        book_id,
+        detail: 'bracket_leg_on_daily_bar',
+        price: expect.closeTo(24.5, 9),
+      })),
+    );
+    expect(next.root.books.position('signals/no-veto', 'UP')).toBeUndefined();
+  });
+
+  it('stops both legs out at the stop when the fill day closes below it (David 2026-10-12)', async () => {
+    const { fill } = await fillDayThenNext(
+      { open: 25.1, high: 25.2, low: 24.3, close: 24.4, rawClose: 24.4 },
+      {},
+    );
+    expect(exitsOf(fill)).toEqual(
+      ['signals/no-veto', 'signals/primary'].map((book_id) => ({
+        book_id,
+        detail: 'stop_on_entry_bar',
+        price: expect.closeTo(24.5, 9),
+      })),
+    );
+    expect(fill.books.position('signals/no-veto', 'UP')).toBeUndefined();
   });
 
   it('keeps the shadow pending through its session when the first quote misses, then a no-fill', async () => {
