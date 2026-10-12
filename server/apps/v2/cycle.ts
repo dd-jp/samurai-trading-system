@@ -2051,8 +2051,8 @@ class Cycle {
     });
   }
 
-  // David, 2026-10-12 (#2025): clears are read as of the run's start, as a replay's rewound copy
-  // holds them, so a clear landing mid-run thaws the line from the next run
+  // David, 2026-10-12 (#2025): a blocked line's simulated exits freeze. Build note: clears count
+  // as of the run's start, as a replay's rewound copy holds them, so a mid-run clear thaws next run
   splitFrozen(bookId: string, held: Position): boolean {
     const feed = this.deps.splitFeed;
     if (feed === undefined) return false;
