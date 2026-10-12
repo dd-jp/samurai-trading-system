@@ -14,6 +14,7 @@ export const MODEL_RATES: Readonly<Record<string, ModelRate>> = Object.freeze({
   'anthropic/claude-opus-5.5': { input: 4, output: 20 },
   'anthropic/claude-opus-5': { input: 5, output: 25 },
   'anthropic/claude-opus-4.8': { input: 4, output: 20 },
+  'anthropic/claude-sonnet-5.5': { input: 2, output: 10 },
   'anthropic/claude-sonnet-5': { input: 2, output: 10 },
   'anthropic/claude-haiku-4.5': { input: 0.8, output: 4 },
   'openai/gpt-5.6-sol': { input: 4, output: 24 },
