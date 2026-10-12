@@ -681,7 +681,7 @@ Build choices David ruled on the same day (2026-10-08, #2024):
 
 1. **Accepted: only the first quote decides the shadow.** A later quote in the session that reaches the entry does not fill it, though the resting real leg could still fill then.
 2. **Changed: the $50M movers floor applies to signals.** The debate pool's dollar-volume floor (`MOVERS_MIN_DOLLAR_VOLUME_USD`) is applied to the signal's symbol on the last bar before the trading date (raw close times volume, in USD). An off-floor signal is journalled as rejected on the same path as an off-list one, `below_dollar_volume_floor` (scope `signal`, ticket #2024): no quote read, no veto, no order in either book.
-3. **Accepted: the fill day's bar is checked for the stop over the whole day,** including the part before the quote.
+3. **Accepted: the fill day's bar is checked for the stop over the whole day,** including the part before the quote. *Superseded 2026-10-12 ("Ruling 2026-10-12 (#2024 item 4)" below): the fill day checks only its close.*
 4. **Changed: a paper-week fidelity check compares the real leg's fill prices with the shadow's.** That Alpaca paper fills the real leg from the same feed the quote is read from stays unverified until that check runs. It is recorded in the spec's known limits and not built yet.
 5. **Accepted: a dry run reads no feed and keeps the daily-bar simulation.**
 
@@ -908,6 +908,43 @@ Build notes (not rulings):
 - The refresh records the row first and then writes the live file, so a failed insert leaves the file the cycle reads as it was. Recording the same `asOf` with the same bytes again is a no-op; the same `asOf` with other bytes fails loudly, and the refresh leg logs `v2_cfd_catalogue_refresh_failed` and keeps the earlier file. A second refresh on the same day with changed Saxo data therefore no longer replaces that day's snapshot.
 - The dated router, the arm 2 backtest and the trial identity read the snapshots from the store (`server/apps/v2/data/cfd-catalogue-archive.ts`); the semantics of #2105 are unchanged. #1860's recorded trial, before any snapshot, keeps its hash.
 - `npm run v2:cfd-catalogue-import` (`server/apps/v2/cfd-catalogue-import.ts`) imports any `data/saxo-cfd-catalogue-archive/<asOf>.json` <!-- cite-exempt: untracked — gitignored local archive the import reads --> files the first build wrote. It validates every file before it records any, refuses a file whose name is not its `asOf` or whose `asOf` is not a valid date, ignores other names, and is idempotent. The directory stays gitignored until the import has run on the Mac and it is removed.
+
+## Ruling of 2026-10-12 — Sonnet seat swapped to Sonnet 5.5 (#2121)
+
+David ruled in chat on 2026-10-12, both recorded on [#2121](https://github.com/dd-jp/samurai-trading-system/issues/2121):
+
+1. **Swap.** *"swap to 5.5"*.
+2. **Sonnet 5 trades leave the G1 count.** Asked how the G1 count should treat debate entries with no pin digest now that the pins changed, David chose *"Exclude them"*. This narrows #1747 ruling 4 ("legacy entries count as current"), which assumed the pins had not changed since paper began.
+
+Why the swap: Nous had answered every `anthropic/claude-sonnet-5` call with HTTP 400 ("Request contains an invalid argument"): intermittently from 2026-10-02 and on all 20 debates of 2026-10-12, so no debate completed. The other three pins answered the same probe with 200.
+
+Build notes (not rulings):
+
+- The Sonnet seat pins `anthropic/claude-sonnet-5.5` (wire and priced), at the same $2 / $10 per Mtok as Sonnet 5.
+- Its slug was `anthropic/claude-sonnet-5.5-20260928` on 10 of 10 fetches of `GET /models` on 2026-10-12, so the pin is strict, like the other three seats. The #1787 exception (an undated Sonnet slug, accepted and logged) ends with Sonnet 5.
+- Three debater-shaped probes each echoed the id, finished `stop` in about 190 output tokens and parsed as JSON.
+- The pin digest changes, so under the 2026-10-04 and 2026-10-10 rulings (#1747) a new debate entry counts toward G1 only under the Sonnet 5.5 pins.
+- For ruling 2, an entry with no digest counts under the pins in force before digests existed (`PRE_DIGEST_ALL_PINS` in `server/apps/v2/signal/models.ts`, read through `bookPreDigestPinDigest` in `server/apps/v2/signal/parameters.ts`). For the debate books those pins include Sonnet 5, so both books count G1 from zero. For the signals sleeve, arm 2 and the no-veto books they equal the current pins, so their undigested entries still count.
+- Replaying a debate day from before the swap now diverges on the Sonnet calls (spec §11). This fails safe.
+- Under the pinned-model rule (CLAUDE.md, Key Constraints) the swap is a new counted trial.
+
+## Ruling 2026-10-12 (#2024 item 4)
+
+David ruled in chat on 2026-10-12, recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024): the signals sleeve's no-veto shadow fills at the first quote after the signal arrives, the same rule as the primary, and never against the whole day's bar. This agrees with the 2026-10-08 ruling (d) and with ruling 4 of 2026-10-09 (F1): after a failed veto call both legs fill at the same first quote, so the comparison isolates the veto.
+
+*Already built 2026-10-08 (#2092).* The premise check found the entry fill already follows this ruling. The processor reads the first Alpaca latest quote at or after the signal's `process_after`, both entry orders journal it as `entry_quote`, the primary's bracket goes to Alpaca right after the read, and the daily cycle books the shadow at the quote's `fill` without reading the bar for the entry price (`simulateLimitEntry` in `server/apps/v2/simulated-entry.ts`). Replay reads the journalled `entry_quote`. The entry fill needed tests only. Build notes (not rulings):
+
+- The new tests pin the ruling. A quote-filled entry does not fill at the open or the trigger price the day bar reached before the quote, for a limit or a buy-stop. A buy-stop zone whose bar would have filled at the trigger fills both legs at the same first quote.
+- A dry run with no quote source keeps the daily-bar simulation for both legs (build choice 5 of 2026-10-08), so the two legs still share one rule there.
+
+**Fill-day stop: the close only.** David ruled the follow-up on 2026-10-12, recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024): on the fill day, the no-veto shadow's stop triggers only when the day's close is at or beyond the stop: a long's when the close is at or below it, a short's when the close is at or above it. The full-bar stop check resumes from the next day. This supersedes build choice 3 of 2026-10-08, which checked the whole fill-day bar. The reason: a daily bar cannot tell whether its low came before or after the quote, so a low before the signal could stop the shadow out where the primary's resting stop never saw it. The new rule biases the comparison against the veto, which is the safe direction.
+
+*Built 2026-10-12 (#2024)* in `simulateLimitEntry`'s quote-fill path (`server/apps/v2/simulated-entry.ts`). Build notes (not rulings):
+
+- The rule applies to every entry booked at a journalled `entry_quote`. In production that is the shadow alone: the paper and live primary is Alpaca's bracket, whose resting stop the change does not touch, and a dry run reads no quote and keeps the whole-bar simulation for both legs. A dry run given a quote source (the tests' harness) books its primary on the same path, so both simulated legs follow the one rule.
+- A fill-day close at or beyond the stop exits at the stop, or at the fill when the quote was already beyond it, the worse of the two. This follows the existing fill-bar precedent, which prices a stop the bar reaches at the worse of stop and fill, and the bracket's, which prices at the stop unless the open gapped through it. Nothing gaps between the quote and the close, so the close is not used as the price.
+- The next day's full-bar check is the existing bracket check, which skips bars before the position's opened date (the cycle's trading date at the fill), so the fill-day bar is never checked over its range. Replay stays deterministic: the rule reads only the journalled quote and the stored bar.
+- Known limit, unchanged (the harness's missed-cycle limit, `docs/specs/debate-sleeve-spec.md`): when a quote-filled entry is booked late, with several bars since the order, the fill day is checked on its close only and no later bar before the booking cycle is bracket-checked. The position opens on the booking cycle's date, so the bracket check resumes with that date's bar, at the next cycle. An entry is booked late only when the cycle after the fill day did not book it: that cycle did not run, or the fill day's bar was not yet stored.
 
 ## Still open
 

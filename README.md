@@ -24,7 +24,7 @@ The map issue is [#1706](https://github.com/dd-jp/samurai-trading-system/issues/
 
 **Sleeves.** Each sleeve has its own capital share, universe, entry rule, benchmark, paper book and go-live rule, and gets its share of the start capital, the loss cap and the daily cap.
 
-- **Debate (30%).** A daily swing sleeve. Before the open, three debaters (Sonnet 5, DeepSeek, GPT) argue each screened name and a judge (Opus 5.5) settles it, on daily bars, candle features and news. Positions hold for days to weeks and exit by a broker-resting stop or a time stop; bounded shorts are allowed. Its benchmark is **arm 2**: the same names, stops and exits, with an indicator-only entry and no LLM. The sleeve cannot be backtested honestly, so its proof is forward paper: at least 100 closed trades and a one-sided 95% test against arm 2. Spec: `docs/specs/debate-sleeve-spec.md`.
+- **Debate (30%).** A daily swing sleeve. Before the open, three debaters (Sonnet 5.5, DeepSeek, GPT) argue each screened name and a judge (Opus 5.5) settles it, on daily bars, candle features and news. Positions hold for days to weeks and exit by a broker-resting stop or a time stop; bounded shorts are allowed. Its benchmark is **arm 2**: the same names, stops and exits, with an indicator-only entry and no LLM. The sleeve cannot be backtested honestly, so its proof is forward paper: at least 100 closed trades and a one-sided 95% test against arm 2. Spec: `docs/specs/debate-sleeve-spec.md`.
 - **Signals (the 70% paper share, £7,000).** Since 2026-09-30, external US-long signals arrive on a loopback-only HTTP endpoint. Each entry passes the risk gate and an LLM entry veto, judged against a no-veto shadow book. Spec: `docs/specs/signals-sleeve-spec.md`.
 - **Rules-based candidates (no paper cash while signals holds the 70%).** Momentum was dropped on 2026-09-25 (doc 70). Five candidates are backtested in turn, up to 8 counted trials each: cross-asset trend, mean reversion, vol-targeted index hold, post-earnings drift, then the v3 evidence run's fallback entry rule (#1861). A passer carries an LLM entry veto judged against a no-veto shadow. The rulings and each run's result are in doc 66 (S1–S7 and the candidate sections).
 
@@ -89,8 +89,15 @@ Requires Node 24+ and npm 10+. Run `npm ci` once. Credentials are read from `.en
 | `npm run v2:entry-offsets`, `npm run v2:cost-fidelity` | Paper-against-model reports |
 | `npm run v2:cfd-catalogue` | Refresh the Saxo CFD catalogue |
 | `npm run v2:sim-cfd-stop-drill` | The Saxo SIM CFD resting-stop drill |
+| `npm run v2:alpaca-oco-probe` | The Alpaca paper OCO re-arm wire probe (#2090); see below |
 | `npm run saxo:login`, `npm run saxo:keepalive` | Saxo OAuth login and token keep-alive |
 | `npm run bars:snapshot` | Restore the tracked bar-store snapshot that smoke and tests read |
+
+### Alpaca OCO re-arm probe
+
+`npm run v2:alpaca-oco-probe` places real orders on the Alpaca paper account and runs only by hand. It refuses any trading host but `https://paper-api.alpaca.markets`, and any time outside US regular hours or within 20 minutes of the close. It also refuses a symbol the account already holds or has an open order on, so it never touches the v2 positions. It reads the paper keys from `.env.local` <!-- cite-exempt: untracked — gitignored local file --> as `v2:run` does.
+
+It buys 1 share of SCHD (`--symbol` picks another) with the bracket the v2 adapter sends. Once the entry fills, it re-arms through the adapter's `replaceProtectiveLegs` with the stop moved, the path a stale or missing stop takes in reconcile. It captures the raw `status=all&nested=true` and `status=open` order JSON, and what the broker-book reader and `compareVenue` make of it, after the fill, before the re-arm and after it. Then it cancels its own orders, flattens once no order on the symbol still works, and checks the symbol is flat. The clean-up runs even when a step fails. The redacted evidence goes to `data/alpaca-oco-probe/` <!-- cite-exempt: untracked — gitignored output directory -->, and the last stdout lines give its path, the OCO stop leg's status and any residual position or working order.
 
 ### Scheduled jobs (macOS launchd)
 

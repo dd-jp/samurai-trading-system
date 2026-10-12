@@ -1507,7 +1507,7 @@ describe('composeV2Root', () => {
       expect([...authorizations]).toEqual(['Bearer nous-secret-key']);
       expect(models.sort()).toEqual([
         'anthropic/claude-opus-5.5',
-        'anthropic/claude-sonnet-5',
+        'anthropic/claude-sonnet-5.5',
         'deepseek/deepseek-v4-pro-0813',
         'openai/gpt-5.5',
       ]);

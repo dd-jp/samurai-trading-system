@@ -30,6 +30,23 @@ describe('simulateLimitEntry at a journalled quote fill (David 2026-10-08, #2024
     });
   });
 
+  it('never fills at a price the day bar reached before the quote (David 2026-10-12)', () => {
+    const dipped = bar('d1', { open: 19.6, low: 19.3, high: 20.4 });
+    expect(simulateLimitEntry(BUY, [dipped])).toMatchObject({ kind: 'filled', price: 19.6 });
+    expect(simulateLimitEntry({ ...BUY, quoteFill: 19.95 }, [dipped])).toMatchObject({
+      kind: 'filled',
+      price: 19.95,
+      stoppedAt: undefined,
+    });
+    const buyStop: LimitEntry = { ...BUY, trigger: 19.8, limit: 20.2 };
+    const spiked = bar('d1', { open: 19.85, low: 19.5, high: 21 });
+    expect(simulateLimitEntry(buyStop, [spiked])).toMatchObject({ kind: 'filled', price: 19.85 });
+    expect(simulateLimitEntry({ ...buyStop, quoteFill: 20.1 }, [spiked])).toMatchObject({
+      kind: 'filled',
+      price: 20.1,
+    });
+  });
+
   it('is a no-fill when the first quote did not reach the entry, even where the bar would fill', () => {
     expect(simulateLimitEntry({ ...BUY, quoteFill: null }, [bar('d1', { low: 19 })])).toEqual({
       kind: 'cancelled',
@@ -37,14 +54,30 @@ describe('simulateLimitEntry at a journalled quote fill (David 2026-10-08, #2024
     expect(simulateLimitEntry({ ...BUY, quoteFill: null }, [])).toEqual({ kind: 'cancelled' });
   });
 
-  it('waits for the fill day bar, then stops out on it when the bar reaches the stop', () => {
+  it('waits for the fill day bar, then stops out on it only when its close reaches the stop (David 2026-10-12)', () => {
     expect(simulateLimitEntry({ ...BUY, quoteFill: 19.9 }, [])).toEqual({ kind: 'pending' });
-    const stopped = bar('d1', { low: 19 });
-    expect(simulateLimitEntry({ ...BUY, quoteFill: 19.9 }, [stopped])).toMatchObject({
-      kind: 'filled',
-      price: 19.9,
-      stoppedAt: 19.2,
-    });
+    const cases: readonly [LimitEntry, Partial<V2Bar>, number | undefined][] = [
+      [BUY, { low: 19, close: 19.5, rawClose: 19.5 }, undefined],
+      [BUY, { low: 19, close: 19.21, rawClose: 19.21 }, undefined],
+      [BUY, { low: 19, close: 19.2, rawClose: 19.2 }, 19.2],
+      [BUY, { low: 18.5, close: 18.8, rawClose: 18.8 }, 19.2],
+      [{ ...BUY, quoteFill: 19.1 }, { low: 18.5, close: 18.8, rawClose: 18.8 }, 19.1],
+      [BUY, { open: 9.9, high: 10.1, low: 9.5, close: 9.7, rawClose: 19.4 }, undefined],
+      [BUY, { open: 9.9, high: 10.1, low: 9.5, close: 9.6, rawClose: 19.2 }, 19.2],
+      [SELL, { high: 21, close: 20.5, rawClose: 20.5 }, undefined],
+      [SELL, { high: 21, close: 20.79, rawClose: 20.79 }, undefined],
+      [SELL, { high: 21.5, close: 20.8, rawClose: 20.8 }, 20.8],
+      [{ ...SELL, quoteFill: 20.9 }, { high: 21.5, close: 21.2, rawClose: 21.2 }, 20.9],
+      [{ ...BUY, stop: undefined }, { low: 1, close: 1, rawClose: 1 }, undefined],
+    ];
+    for (const [entry, override, stoppedAt] of cases) {
+      const quoteFill = entry.quoteFill ?? (entry.side === 'buy' ? 19.9 : 20.1);
+      expect(simulateLimitEntry({ ...entry, quoteFill }, [bar('d1', override)])).toMatchObject({
+        kind: 'filled',
+        price: quoteFill,
+        stoppedAt,
+      });
+    }
   });
 });
 
