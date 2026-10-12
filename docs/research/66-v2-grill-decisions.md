@@ -681,7 +681,7 @@ Build choices David ruled on the same day (2026-10-08, #2024):
 
 1. **Accepted: only the first quote decides the shadow.** A later quote in the session that reaches the entry does not fill it, though the resting real leg could still fill then.
 2. **Changed: the $50M movers floor applies to signals.** The debate pool's dollar-volume floor (`MOVERS_MIN_DOLLAR_VOLUME_USD`) is applied to the signal's symbol on the last bar before the trading date (raw close times volume, in USD). An off-floor signal is journalled as rejected on the same path as an off-list one, `below_dollar_volume_floor` (scope `signal`, ticket #2024): no quote read, no veto, no order in either book.
-3. **Accepted: the fill day's bar is checked for the stop over the whole day,** including the part before the quote.
+3. **Accepted: the fill day's bar is checked for the stop over the whole day,** including the part before the quote. *Superseded 2026-10-12 ("Ruling 2026-10-12 (#2024 item 4)" below): the fill day checks only its close.*
 4. **Changed: a paper-week fidelity check compares the real leg's fill prices with the shadow's.** That Alpaca paper fills the real leg from the same feed the quote is read from stays unverified until that check runs. It is recorded in the spec's known limits and not built yet.
 5. **Accepted: a dry run reads no feed and keeps the daily-bar simulation.**
 
@@ -907,6 +907,24 @@ Build notes (not rulings):
 - For ruling 2, an entry with no digest counts under the pins in force before digests existed (`PRE_DIGEST_ALL_PINS` in `server/apps/v2/signal/models.ts`, read through `bookPreDigestPinDigest` in `server/apps/v2/signal/parameters.ts`). For the debate books those pins include Sonnet 5, so both books count G1 from zero. For the signals sleeve, arm 2 and the no-veto books they equal the current pins, so their undigested entries still count.
 - Replaying a debate day from before the swap now diverges on the Sonnet calls (spec §11). This fails safe.
 - Under the pinned-model rule (CLAUDE.md, Key Constraints) the swap is a new counted trial.
+
+## Ruling 2026-10-12 (#2024 item 4)
+
+David ruled in chat on 2026-10-12, recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024): the signals sleeve's no-veto shadow fills at the first quote after the signal arrives, the same rule as the primary, and never against the whole day's bar. This agrees with the 2026-10-08 ruling (d) and with ruling 4 of 2026-10-09 (F1): after a failed veto call both legs fill at the same first quote, so the comparison isolates the veto.
+
+*Already built 2026-10-08 (#2092).* The premise check found the entry fill already follows this ruling. The processor reads the first Alpaca latest quote at or after the signal's `process_after`, both entry orders journal it as `entry_quote`, the primary's bracket goes to Alpaca right after the read, and the daily cycle books the shadow at the quote's `fill` without reading the bar for the entry price (`simulateLimitEntry` in `server/apps/v2/simulated-entry.ts`). Replay reads the journalled `entry_quote`. The entry fill needed tests only. Build notes (not rulings):
+
+- The new tests pin the ruling. A quote-filled entry does not fill at the open or the trigger price the day bar reached before the quote, for a limit or a buy-stop. A buy-stop zone whose bar would have filled at the trigger fills both legs at the same first quote.
+- A dry run with no quote source keeps the daily-bar simulation for both legs (build choice 5 of 2026-10-08), so the two legs still share one rule there.
+
+**Fill-day stop: the close only.** David ruled the follow-up on 2026-10-12, recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024): on the fill day, the no-veto shadow's stop triggers only when the day's close is at or beyond the stop: a long's when the close is at or below it, a short's when the close is at or above it. The full-bar stop check resumes from the next day. This supersedes build choice 3 of 2026-10-08, which checked the whole fill-day bar. The reason: a daily bar cannot tell whether its low came before or after the quote, so a low before the signal could stop the shadow out where the primary's resting stop never saw it. The new rule biases the comparison against the veto, which is the safe direction.
+
+*Built 2026-10-12 (#2024)* in `simulateLimitEntry`'s quote-fill path (`server/apps/v2/simulated-entry.ts`). Build notes (not rulings):
+
+- The rule applies to every entry booked at a journalled `entry_quote`. In production that is the shadow alone: the paper and live primary is Alpaca's bracket, whose resting stop the change does not touch, and a dry run reads no quote and keeps the whole-bar simulation for both legs. A dry run given a quote source (the tests' harness) books its primary on the same path, so both simulated legs follow the one rule.
+- A fill-day close at or beyond the stop exits at the stop, or at the fill when the quote was already beyond it, the worse of the two. This follows the existing fill-bar precedent, which prices a stop the bar reaches at the worse of stop and fill, and the bracket's, which prices at the stop unless the open gapped through it. Nothing gaps between the quote and the close, so the close is not used as the price.
+- The next day's full-bar check is the existing bracket check, which skips bars before the position's opened date (the cycle's trading date at the fill), so the fill-day bar is never checked over its range. Replay stays deterministic: the rule reads only the journalled quote and the stored bar.
+- Known limit, unchanged (the harness's missed-cycle limit, `docs/specs/debate-sleeve-spec.md`): when a quote-filled entry is booked late, with several bars since the order, the fill day is checked on its close only and no later bar before the booking cycle is bracket-checked. The position opens on the booking cycle's date, so the bracket check resumes with that date's bar, at the next cycle. An entry is booked late only when the cycle after the fill day did not book it: that cycle did not run, or the fill day's bar was not yet stored.
 
 ## Still open
 
