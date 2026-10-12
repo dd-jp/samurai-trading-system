@@ -130,18 +130,31 @@ export function journalledQuotes(
   };
 }
 
-function restoreControls(replay: SignalsReplay, after: string, until: string): void {
-  const rows = replay.journal
-    .prepare(
-      `SELECT control_id, action, reason, source, idempotency_key, set_at FROM v2_controls
-        WHERE set_at > ? AND set_at <= ? ORDER BY control_id`,
-    )
-    .all(after, until);
-  const insert = replay.copy.prepare(
-    `INSERT INTO v2_controls (control_id, action, reason, source, idempotency_key, set_at)
-     VALUES (@control_id, @action, @reason, @source, @idempotency_key, @set_at)`,
-  );
-  for (const row of rows) insert.run(row);
+const RESTORED_ROWS = [
+  {
+    select: `SELECT control_id, action, reason, source, idempotency_key, set_at FROM v2_controls
+              WHERE set_at > ? AND set_at <= ? ORDER BY control_id`,
+    insert: `INSERT INTO v2_controls (control_id, action, reason, source, idempotency_key, set_at)
+             VALUES (@control_id, @action, @reason, @source, @idempotency_key, @set_at)`,
+  },
+  {
+    select: `SELECT clear_id, instrument, exchange, reason, cleared_at FROM v2_split_clears
+              WHERE cleared_at > ? AND cleared_at <= ? ORDER BY clear_id`,
+    insert: `INSERT INTO v2_split_clears (clear_id, instrument, exchange, reason, cleared_at)
+             VALUES (@clear_id, @instrument, @exchange, @reason, @cleared_at)`,
+  },
+] as const;
+
+export function restoreControls(
+  replay: Pick<SignalsReplay, 'journal' | 'copy'>,
+  after: string,
+  until: string,
+): void {
+  for (const { select, insert } of RESTORED_ROWS) {
+    const rows = replay.journal.prepare(select).all(after, until);
+    const write = replay.copy.prepare(insert);
+    for (const row of rows) write.run(row);
+  }
 }
 
 const QUOTED_DAY_SQL = `

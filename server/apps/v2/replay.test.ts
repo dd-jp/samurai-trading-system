@@ -31,6 +31,7 @@ import {
   formatReplay,
   type JournalledDecision,
   journalledCfdEntryRefusal,
+  journalledFreezes,
   journalledLseRefusal,
   type ReplayResult,
   redactor,
@@ -46,6 +47,7 @@ import {
   ScriptedTransport,
   withheldParameters,
 } from './signal/index.js';
+import { SqliteSplitChecks } from './split-checks.js';
 
 vi.mock('../../shared/store/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../shared/store/index.js')>();
@@ -916,6 +918,48 @@ describe('journalledLseRefusal', () => {
     expect(journalledLseRefusal(db, '2026-09-30')).toBe('other wording');
     expect(journalledLseRefusal(db, '2026-10-01')).toBeUndefined();
     db.close();
+  });
+});
+
+describe('journalledFreezes', () => {
+  const check = (tradingDate: string, instrument: string) => ({
+    tradingDate,
+    instrument,
+    exchange: 'US' as const,
+    window: { after: '2026-10-01', through: tradingDate },
+    verdict: 'block' as const,
+    reason: 'sources_disagree',
+    ratio: 1,
+  });
+
+  it('holds a line the live run journalled frozen against a clear the rewound copy holds', () => {
+    const journal = migratedMemoryStore();
+    journal
+      .prepare(
+        `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at, book_id, instrument)
+         VALUES (?, 'exit', 'SPLIT_EXIT_FREEZE', '#2025', 'm', 'now', 'debate/no-veto', ?)`,
+      )
+      .run('2026-10-06', 'AAPL');
+    const clock = new SimulatedClock(new Date('2026-10-05T07:00:00.000Z'));
+    const copy = new SqliteSplitChecks(migratedMemoryStore(), clock);
+    const checks = journalledFreezes(journal, copy, '2026-10-06');
+    checks.record(check('2026-10-05', 'AAPL'));
+    checks.record(check('2026-10-05', 'MSFT'));
+    clock.advanceTo(new Date('2026-10-06T07:29:30.000Z'));
+    copy.clear('AAPL', 'US', 'David checked');
+    copy.clear('MSFT', 'US', 'David checked');
+    const runStart = '2026-10-06T07:30:00.000Z';
+    expect(checks.block('AAPL', 'US', '2026-10-06', runStart)).toEqual({
+      after: '2026-10-01',
+      reason: 'sources_disagree',
+      since: '2026-10-05',
+    });
+    expect(checks.block('AAPL', 'US', '2026-10-06')).toBeUndefined();
+    expect(checks.block('MSFT', 'US', '2026-10-06', runStart)).toBeUndefined();
+    expect(checks.blockedBetween('AAPL', 'US', '2026-10-05', '2026-10-06')).toBe(true);
+    expect(checks.carried('2026-10-06')).toEqual(copy.carried('2026-10-06'));
+    expect(checks.carried('2026-10-06')).not.toEqual([]);
+    journal.close();
   });
 });
 

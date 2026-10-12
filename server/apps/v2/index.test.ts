@@ -48,6 +48,7 @@ import {
   rootOptionsFor,
   runAfterPinCheck,
   runOnce,
+  splitFeedFor,
   V2_STORE_PATH,
   type V2RootOptions,
   withoutRefusedLse,
@@ -2135,5 +2136,101 @@ describe('newsWiringFor', () => {
       marketauxApiKey: 'from-env',
     });
     expect(rootOptionsFor(false, '2026-09-29', {}, clock, quiet).marketauxApiKey).toBeUndefined();
+  });
+});
+
+describe('splitFeedFor (#2025)', () => {
+  const NOW = new Date('2026-10-05T07:00:00.000Z');
+  const base: V2RootOptions = { tradingDate: '2026-10-05', dryRun: false };
+
+  function fakeFetch(seen: URL[]): typeof fetch {
+    return (async (input: URL) => {
+      seen.push(input);
+      return new Response(
+        JSON.stringify(input.host === 'eodhd.com' ? [] : { corporate_actions: {} }),
+      );
+    }) as typeof fetch;
+  }
+
+  it('is absent with no EODHD key, a blank one, or on a dry run', () => {
+    const clock = new SimulatedClock(NOW);
+    const db = migratedMemoryStore();
+    expect(splitFeedFor(base, db, clock)).toBeUndefined();
+    expect(splitFeedFor({ ...base, eodhdApiKey: '  ' }, db, clock)).toBeUndefined();
+    expect(
+      splitFeedFor({ ...base, dryRun: true, eodhdApiKey: 'eodhd-key' }, db, clock),
+    ).toBeUndefined();
+  });
+
+  it('reads EODHD with the trimmed key and Alpaca with the data pair, journalling both', async () => {
+    const clock = new SimulatedClock(NOW);
+    const db = migratedMemoryStore();
+    const seen: URL[] = [];
+    const feed = splitFeedFor(
+      {
+        ...base,
+        eodhdApiKey: ' eodhd-key ',
+        alpacaDataCredentials: { apiKey: 'k', apiSecret: 's' },
+        splitFetch: fakeFetch(seen),
+      },
+      db,
+      clock,
+    );
+    await feed?.refresh(
+      [{ instrument: 'AAPL', exchange: 'US', after: '2026-10-01' }],
+      '2026-10-05',
+    );
+    expect(seen.map((url) => url.host)).toEqual(['eodhd.com', 'data.alpaca.markets']);
+    expect(seen[0]?.searchParams.get('api_token')).toBe('eodhd-key');
+    expect(feed?.sources('AAPL', 'US', '2026-10-05')).toMatchObject({
+      eodhd: [{ symbol: 'AAPL.US', asOf: '2026-10-05', splits: [] }],
+      alpaca: [{ symbol: 'AAPL', asOf: '2026-10-05', splits: [] }],
+    });
+    expect(JSON.stringify(db.prepare('SELECT * FROM v2_split_reads').all())).not.toContain(
+      'eodhd-key',
+    );
+  });
+
+  it('records a missing Alpaca pair as a failed read', async () => {
+    const seen: URL[] = [];
+    const db = migratedMemoryStore();
+    const feed = splitFeedFor(
+      { ...base, eodhdApiKey: 'eodhd-key', splitFetch: fakeFetch(seen) },
+      db,
+      new SimulatedClock(NOW),
+    );
+    await feed?.refresh(
+      [{ instrument: 'AAPL', exchange: 'US', after: '2026-10-01' }],
+      '2026-10-05',
+    );
+    expect(seen).toHaveLength(1);
+    expect(
+      db.prepare('SELECT source, status, reason FROM v2_split_reads ORDER BY read_id').all(),
+    ).toEqual([
+      { source: 'eodhd', status: 'ok', reason: '' },
+      { source: 'alpaca', status: 'error', reason: 'no_alpaca_key' },
+    ]);
+  });
+
+  it('takes the EODHD key and the Alpaca paper pair from the environment', () => {
+    const clock = new SimulatedClock(NOW);
+    const quiet: Logger = { log: () => {} };
+    const env = { EODHD_API_KEY: 'e', ALPACA_API_KEY: 'k', ALPACA_API_SECRET: 's' };
+    expect(rootOptionsFor(false, '2026-10-05', env, clock, quiet)).toMatchObject({
+      eodhdApiKey: 'e',
+      alpacaDataCredentials: { apiKey: 'k', apiSecret: 's' },
+    });
+    const bare = rootOptionsFor(false, '2026-10-05', {}, clock, quiet);
+    expect(bare.eodhdApiKey).toBeUndefined();
+    expect(bare.alpacaDataCredentials).toBeUndefined();
+    for (const half of [
+      { ALPACA_API_KEY: 'k' },
+      { ALPACA_API_SECRET: 's' },
+      { ALPACA_API_KEY: '', ALPACA_API_SECRET: 's' },
+    ]) {
+      expect(
+        rootOptionsFor(false, '2026-10-05', half, clock, quiet).alpacaDataCredentials,
+      ).toBeUndefined();
+    }
   });
 });

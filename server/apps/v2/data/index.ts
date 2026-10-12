@@ -1,3 +1,5 @@
+export type { AlpacaDataCredentials } from './alpaca-splits.js';
+export { AlpacaSplitsClient, AlpacaSplitsError } from './alpaca-splits.js';
 export type { DataSanityReport } from './bar-sanity.js';
 export { dataSanity } from './bar-sanity.js';
 export type { BarsSource } from './bars.js';
@@ -35,6 +37,9 @@ export {
   SAXO_CFD_SPREAD,
   saxoCfdBorrow,
 } from './cfd-tariff.js';
+export type { EodhdExchange, EodhdSplit, SplitsRead, SplitsWindow } from './eodhd-client.js';
+export { EodhdClient, EodhdRequestError, eodhdSymbol } from './eodhd-client.js';
+export { splitsAcross } from './eodhd-splits.js';
 export type { FxObservation } from './fx.js';
 export {
   dayFxSource,
@@ -62,6 +67,8 @@ export type { NewsSource } from './news.js';
 export { AlpacaNewsSource, NO_NEWS, newsFailureReason, newsForVenue } from './news.js';
 export { SqliteNewsLedger } from './news-ledger.js';
 export { realisedVolatility } from './realised-vol.js';
+export type { SplitSourceName } from './split-reads.js';
+export { SqliteSplitReads } from './split-reads.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
 export { CLOSED_VENUE_ROUTER, createDatedVenueRouter, createVenueRouter } from './venue-routes.js';
 export type { SitOutCode, VenueSessionGate } from './venue-sessions.js';

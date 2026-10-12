@@ -55,6 +55,7 @@ const SECRET_ENV: Readonly<Record<string, string>> = {
   HEALTHCHECKS_SIGNALS_PING_URL: 'https://hc-ping.egress.test/sentinel-signals-3d7a',
   LITESTREAM_SSE_C_KEY: 'sentinel-litestream-sse-c-key-8e9f',
   POLYGON_API_KEY: 'sentinel-polygon-api-key-0a2b',
+  EODHD_API_KEY: 'sentinel-eodhd-api-key-7c4f',
   MARKETAUX_API_TOKEN: 'sentinel-marketaux-api-token-1c3d',
   MARKETAUX_API_KEY: 'sentinel-marketaux-api-key-5b2e',
   NOUS_API_KEY: 'sentinel-nous-shared-key-4e6f',
@@ -307,6 +308,7 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
       const root = composeV2Root({
         ...rootOptionsFor(false, tradingDate, { ...ENV }, clock, { log: () => {} }),
         ...fixtures,
+        eodhdApiKey: undefined,
         storePath,
         alpacaClient,
         newsSource: {
@@ -375,6 +377,7 @@ describe('LLM egress (doc 67 Step 4b, keys and egress)', () => {
     const root = composeV2Root({
       ...rootOptionsFor(false, ENTRY_DATE, { ...ENV }, clock, { log: (entry) => logs.push(entry) }),
       ...fixtures,
+      eodhdApiKey: undefined,
       storePath,
       alpacaClient: fakeAlpacaClient(clock),
       newsSource: {
