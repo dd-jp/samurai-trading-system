@@ -13,7 +13,7 @@ import {
   saxoCfdBorrow,
 } from '../data/index.js';
 import type { VolTargetSizing } from '../risk/index.js';
-import { ALL_PINS, JUDGE_PIN, type ModelPin, pinDigest } from './models.js';
+import { ALL_PINS, JUDGE_PIN, type ModelPin, PRE_DIGEST_ALL_PINS, pinDigest } from './models.js';
 
 export const UNSET: unique symbol = Symbol('unset');
 
@@ -263,10 +263,27 @@ export const SLEEVE_PINS_BY_ID: Readonly<Record<string, readonly ModelPin[]>> = 
   [SIGNALS_SLEEVE_ID]: [JUDGE_PIN],
 };
 
-export function bookPinDigest(sleeveId: string, variant: string): string | undefined {
-  const pins = SLEEVE_PINS_BY_ID[sleeveId];
+const PRE_DIGEST_SLEEVE_PINS_BY_ID: Readonly<Record<string, readonly ModelPin[]>> = {
+  ...SLEEVE_PINS_BY_ID,
+  [DEBATE_SLEEVE_ID]: PRE_DIGEST_ALL_PINS,
+};
+
+function digestOf(
+  pinsById: Readonly<Record<string, readonly ModelPin[]>>,
+  sleeveId: string,
+  variant: string,
+): string | undefined {
+  const pins = pinsById[sleeveId];
   if (pins === undefined) return undefined;
   return pinDigest(variant === 'no-veto' ? [] : pins);
+}
+
+export function bookPinDigest(sleeveId: string, variant: string): string | undefined {
+  return digestOf(SLEEVE_PINS_BY_ID, sleeveId, variant);
+}
+
+export function bookPreDigestPinDigest(sleeveId: string, variant: string): string | undefined {
+  return digestOf(PRE_DIGEST_SLEEVE_PINS_BY_ID, sleeveId, variant);
 }
 
 export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;

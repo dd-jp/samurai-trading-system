@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { SAXO_CFD_COMMISSION, SAXO_CFD_FINANCING, SAXO_CFD_SPREAD } from '../data/index.js';
 import { CROSS_ASSET_TREND_CANDIDATE_ID } from './cross-asset-trend.js';
 import { MEAN_REVERSION_CANDIDATE_ID } from './mean-reversion.js';
-import { ALL_PINS, DEBATER_PINS, JUDGE_PIN, pinDigest } from './models.js';
+import { ALL_PINS, DEBATER_PINS, JUDGE_PIN, PRE_DIGEST_ALL_PINS, pinDigest } from './models.js';
 import {
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
   bookPinDigest,
+  bookPreDigestPinDigest,
   CFD_BORROW_MODEL,
   CFD_COST_MODEL,
   CFD_ENTRY_GATES,
@@ -304,5 +305,34 @@ describe('sleeve pin sets (#1747, David 2026-10-04 and 2026-10-10)', () => {
 
   it('has no digest for a sleeve with no declared pins', () => {
     expect(bookPinDigest('trend', 'primary')).toBeUndefined();
+  });
+});
+
+describe('pins before #2110 (David 2026-10-12, #2121)', () => {
+  it('puts the debate books on Sonnet 5, so an undigested debate entry is not under the current pins', () => {
+    expect(PRE_DIGEST_ALL_PINS.map((pin) => pin.wire)).toEqual([
+      'anthropic/claude-sonnet-5',
+      'openai/gpt-5.5',
+      'deepseek/deepseek-v4-pro-0813',
+      'anthropic/claude-opus-5.5',
+    ]);
+    expect(bookPreDigestPinDigest(DEBATE_SLEEVE_ID, 'primary')).toBe(
+      pinDigest(PRE_DIGEST_ALL_PINS),
+    );
+    expect(bookPreDigestPinDigest(DEBATE_SLEEVE_ID, 'primary')).not.toBe(
+      bookPinDigest(DEBATE_SLEEVE_ID, 'primary'),
+    );
+  });
+
+  it('matches the current pins wherever they have not changed', () => {
+    for (const [sleeve, variant] of [
+      [SIGNALS_SLEEVE_ID, 'primary'],
+      [SIGNALS_SLEEVE_ID, 'no-veto'],
+      [ARM2_SLEEVE_ID, 'technical-only'],
+      [DEBATE_SLEEVE_ID, 'no-veto'],
+    ] as const) {
+      expect(bookPreDigestPinDigest(sleeve, variant)).toBe(bookPinDigest(sleeve, variant));
+    }
+    expect(bookPreDigestPinDigest('trend', 'primary')).toBeUndefined();
   });
 });

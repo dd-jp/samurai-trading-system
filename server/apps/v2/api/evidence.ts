@@ -16,7 +16,7 @@ import { type StoreHandle, toStoredTimestamp } from '../../../shared/store/index
 import { CLOSE_LEGS_SQL, entryOffsetOfPayload, entryPayloadOfClose } from '../entry-offset.js';
 import { annualisedSharpe, maxDrawdown, moments } from '../evidence/index.js';
 import { ENTRY_LIMIT_OFFSET } from '../risk/index.js';
-import { bookPinDigest } from '../signal/index.js';
+import { bookPinDigest, bookPreDigestPinDigest } from '../signal/index.js';
 
 const G1_CLOSED_TRADES = 100;
 
@@ -68,8 +68,9 @@ function totalsBy<K>(rows: readonly TaggedRow[], keyOf: (row: TaggedRow) => K): 
 function closedTradesBook(book: BookRow, rows: readonly TaggedRow[]): ClosedTradesBookWire {
   const own = rows.filter((row) => row.book_id === book.book_id);
   const current = bookPinDigest(book.sleeve_id, book.variant) ?? null;
+  const preDigest = bookPreDigestPinDigest(book.sleeve_id, book.variant) ?? null;
   const counted = own.filter(
-    (row) => inCurrentSample(row) && (row.pin_digest === null || row.pin_digest === current),
+    (row) => inCurrentSample(row) && (row.pin_digest ?? preDigest) === current,
   );
   return {
     book_id: book.book_id,
