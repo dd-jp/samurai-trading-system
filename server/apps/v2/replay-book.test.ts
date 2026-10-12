@@ -347,6 +347,12 @@ describe('replay of a simulated entry whose fill-day bar is missing (#2127)', ()
         book_id,
       })),
     );
+    expect(
+      journalRows(
+        `SELECT kind, trading_date FROM v2_faults WHERE code = 'FILL_DAY_BAR'`,
+        gapped.storePath,
+      ),
+    ).toEqual(Array.from({ length: 3 }, () => ({ kind: 'stale_bar', trading_date: EXIT_DAY })));
   });
 
   it.each([FILL_DAY, EXIT_DAY])('replays %s with no divergence', async (tradingDate) => {
