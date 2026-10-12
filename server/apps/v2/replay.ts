@@ -69,7 +69,7 @@ import {
   type SecretSource,
   secretWireForms,
 } from './signal/index.js';
-import { SqliteSplitChecks } from './split-checks.js';
+import { type SplitCheckLedger, SqliteSplitChecks } from './split-checks.js';
 import { journalledSplitFeed } from './split-feed.js';
 
 const REPLAYED_SLEEVES: readonly string[] = [DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID];
@@ -160,6 +160,37 @@ const LSE_REFUSAL_SQL = `
 const PARAMETER_REFUSALS_SQL = `
   SELECT DISTINCT parameter FROM v2_refusals
    WHERE trading_date = ? AND scope = 'parameter'`;
+
+const FROZEN_SQL = `
+  SELECT DISTINCT instrument FROM v2_refusals
+   WHERE trading_date = ? AND parameter = 'SPLIT_EXIT_FREEZE'`;
+
+const NO_CLEAR_COUNTS = '';
+
+// The live freeze reads clears as of its run's start, the rewound copy holds them up to the day's
+// first journalled row; a clear landing between the two froze the run, so the journalled freeze
+// stands
+export function journalledFreezes(
+  db: StoreHandle,
+  checks: SplitCheckLedger,
+  tradingDate: string,
+): SplitCheckLedger {
+  const rows = db.prepare(FROZEN_SQL).all(tradingDate) as { instrument: string }[];
+  const frozen = new Set(rows.map((row) => row.instrument));
+  return {
+    record: (check) => checks.record(check),
+    block: (instrument, exchange, date, clearedBy) =>
+      checks.block(
+        instrument,
+        exchange,
+        date,
+        clearedBy !== undefined && frozen.has(instrument) ? NO_CLEAR_COUNTS : clearedBy,
+      ),
+    blockedBetween: (instrument, exchange, from, before) =>
+      checks.blockedBetween(instrument, exchange, from, before),
+    carried: (date) => checks.carried(date),
+  };
+}
 
 function journalledDecisions(db: StoreHandle, tradingDate: string): readonly JournalledDecision[] {
   const rows = db.prepare(DECISIONS_SQL).all(tradingDate) as JournalledDecision[];
@@ -372,7 +403,7 @@ function replayComposition(replay: ReplayCycle): CycleComposition {
     ),
     splitFeed: journalledSplitFeed(
       new SqliteSplitReads(db),
-      new SqliteSplitChecks(copy, replay.clock),
+      journalledFreezes(db, new SqliteSplitChecks(copy, replay.clock), tradingDate),
       tradingDate,
     ),
     brokerAccess: (pricing) =>
