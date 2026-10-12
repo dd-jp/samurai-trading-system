@@ -908,6 +908,17 @@ Build notes (not rulings):
 - Replaying a debate day from before the swap now diverges on the Sonnet calls (spec §11). This fails safe.
 - Under the pinned-model rule (CLAUDE.md, Key Constraints) the swap is a new counted trial.
 
+## Ruling 2026-10-12 (#2024 item 4)
+
+David ruled in chat on 2026-10-12, recorded on [#2024](https://github.com/dd-jp/samurai-trading-system/issues/2024): the signals sleeve's no-veto shadow fills at the first quote after the signal arrives, the same rule as the primary, and never against the whole day's bar. This agrees with the 2026-10-08 ruling (d) and with ruling 4 of 2026-10-09 (F1): after a failed veto call both legs fill at the same first quote, so the comparison isolates the veto.
+
+*Already built 2026-10-08 (#2092).* The premise check found the entry fill already follows this ruling. The processor reads the first Alpaca latest quote at or after the signal's `process_after`, both entry orders journal it as `entry_quote`, the primary's bracket goes to Alpaca right after the read, and the daily cycle books the shadow at the quote's `fill` without reading the bar for the entry price (`simulateLimitEntry` in `server/apps/v2/simulated-entry.ts`). Replay reads the journalled `entry_quote`. The PR for this ruling adds tests and no runtime change. Build notes (not rulings):
+
+- The new tests pin the ruling. A quote-filled entry does not fill at the open or the trigger price the day bar reached before the quote, for a limit or a buy-stop. A buy-stop zone whose bar would have filled at the trigger fills both legs at the same first quote.
+- A dry run with no quote source keeps the daily-bar simulation for both legs (build choice 5 of 2026-10-08), so the two legs still share one rule there.
+
+Open for David: build choice 3 of 2026-10-08 (accepted) checks the shadow's stop over the whole fill-day bar, including the part before the quote, so a low before the signal can stop the shadow out where the primary's resting stop, placed after the quote, never saw it. Daily bars cannot tell a low before the quote from one after it. Whether "never against the whole day's bar" also replaces that stop check is not decided here, and the stop check is unchanged.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

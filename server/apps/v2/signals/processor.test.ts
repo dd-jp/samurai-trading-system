@@ -736,6 +736,33 @@ describe('both legs fill at the first quote after the signal (David 2026-10-08, 
     expect(shadowEntryFill(next.root)?.price_gbp).toBeCloseTo(24.96 / 1.25, 9);
   });
 
+  it('fills both legs at the same first quote, not at the bar price the trigger reached before the signal (David 2026-10-12)', async () => {
+    const fixtures = await writeFixtures();
+    const clock = new SimulatedClock(IN_SESSION);
+    const { root, signals } = open(fixtures, clock, { quotes: quotesAt(quote(25.18)) });
+    const id = post(signals, { entry: [25.1, 25.3], targets: [26, 27] });
+
+    await root.processSignals(signals, IN_SESSION);
+    for (const orderId of [primaryId(id), shadowId(id)]) {
+      expect(root.journal.orderFor(orderId)?.payload).toMatchObject({
+        trigger: 25.1,
+        limit: 25.3,
+        entry_quote: { ask: 25.18, fill: 25.18 },
+      });
+    }
+
+    clock.advanceTo(new Date('2026-10-01T06:30:00.000Z'));
+    const next = open(fixtures, clock);
+    await next.root.run();
+    const fills = next.root.db
+      .prepare(
+        "SELECT book_id, price_gbp FROM v2_fills WHERE book_id LIKE 'signals/%' AND leg = 'entry' ORDER BY book_id",
+      )
+      .all() as { book_id: string; price_gbp: number }[];
+    expect(fills.map((fill) => fill.book_id)).toEqual(['signals/no-veto', 'signals/primary']);
+    for (const fill of fills) expect(fill.price_gbp).toBeCloseTo(25.18 / 1.25, 9);
+  });
+
   it('keeps the shadow pending through its session when the first quote misses, then a no-fill', async () => {
     const fixtures = await writeFixtures();
     const clock = new SimulatedClock(IN_SESSION);

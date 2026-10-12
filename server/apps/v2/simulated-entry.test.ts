@@ -30,6 +30,23 @@ describe('simulateLimitEntry at a journalled quote fill (David 2026-10-08, #2024
     });
   });
 
+  it('never fills at a price the day bar reached before the quote (David 2026-10-12)', () => {
+    const dipped = bar('d1', { open: 19.6, low: 19.3, high: 20.4 });
+    expect(simulateLimitEntry(BUY, [dipped])).toMatchObject({ kind: 'filled', price: 19.6 });
+    expect(simulateLimitEntry({ ...BUY, quoteFill: 19.95 }, [dipped])).toMatchObject({
+      kind: 'filled',
+      price: 19.95,
+      stoppedAt: undefined,
+    });
+    const buyStop: LimitEntry = { ...BUY, trigger: 19.8, limit: 20.2 };
+    const spiked = bar('d1', { open: 19.85, low: 19.5, high: 21 });
+    expect(simulateLimitEntry(buyStop, [spiked])).toMatchObject({ kind: 'filled', price: 19.85 });
+    expect(simulateLimitEntry({ ...buyStop, quoteFill: 20.1 }, [spiked])).toMatchObject({
+      kind: 'filled',
+      price: 20.1,
+    });
+  });
+
   it('is a no-fill when the first quote did not reach the entry, even where the bar would fill', () => {
     expect(simulateLimitEntry({ ...BUY, quoteFill: null }, [bar('d1', { low: 19 })])).toEqual({
       kind: 'cancelled',
