@@ -134,7 +134,9 @@ function workingIds(history: readonly AlpacaOrder[], prefix: string): string[] {
 async function heldQty(client: ProbeClient, symbol: string): Promise<number> {
   const positions = await client.getPositions();
   const held = positions.find((position) => position.symbol === symbol);
-  return held === undefined ? 0 : Number(held.qty);
+  if (held === undefined) return 0;
+  const size = Math.abs(Number(held.qty));
+  return held.side === 'short' ? -size : size;
 }
 
 async function assertUntouched(client: ProbeClient, symbol: string): Promise<void> {
@@ -303,6 +305,12 @@ async function flattenProbePosition(
 ): Promise<void> {
   const qty = await heldQty(deps.client, options.symbol);
   if (qty === 0) return;
+  const working = workingIds(await deps.client.listOrderHistory([options.symbol]), '');
+  if (working.length > 0) {
+    throw new Error(
+      `flatten_skipped: ${working.length} order(s) on ${options.symbol} still work and could close the ${qty} held, so a flatten beside them could open the opposite side`,
+    );
+  }
   evidence.cleanup.flattenOrder = await deps.client.submitMarketOrder({
     symbol: options.symbol,
     side: qty > 0 ? 'sell' : 'buy',
@@ -385,6 +393,14 @@ export async function runAlpacaOcoProbe(
 
 const IDENTITY_KEYS: ReadonlySet<string> = new Set(['account_id', 'account_number']);
 
+function identityValues(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(identityValues);
+  if (typeof value !== 'object' || value === null) return [];
+  return Object.entries(value).flatMap(([key, item]) =>
+    IDENTITY_KEYS.has(key) && typeof item === 'string' ? [item] : identityValues(item),
+  );
+}
+
 export function redact(value: unknown, secrets: readonly string[]): unknown {
-  return redactEvidence(value, secrets, IDENTITY_KEYS);
+  return redactEvidence(value, [...secrets, ...identityValues(value)], IDENTITY_KEYS);
 }

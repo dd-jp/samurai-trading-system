@@ -450,9 +450,25 @@ describe('cleanup on failure', () => {
     const client = new FakePaper({ cancelFails: true });
     const evidence = await runAlpacaOcoProbe(deps(client), OPTIONS);
     expect(evidence.failure).toMatch(/did not cancel/);
-    expect(evidence.cleanup.errors).toEqual([expect.stringMatching(/cancel refused/)]);
-    expect(evidence.residual?.workingOrderIds).toEqual(['ord-1', 'ord-2']);
+    expect(evidence.cleanup.errors).toEqual([
+      expect.stringMatching(/cancel refused/),
+      expect.stringMatching(/flatten_skipped: 2 order\(s\) on SCHD still work/),
+    ]);
+    expect(client.calls).not.toContain('submitMarketOrder');
+    expect(evidence.residual).toEqual({ positionQty: 1, workingOrderIds: ['ord-1', 'ord-2'] });
     expect(evidence.passed).toBe(false);
+  });
+
+  it('closes a short by buying back the quantity held', async () => {
+    const client = new FakePaper({ ocoFails: true });
+    const order = client.submitOcoOrder.bind(client);
+    client.submitOcoOrder = (request) => {
+      client.positions.set('SCHD', -1);
+      return order(request);
+    };
+    const evidence = await runAlpacaOcoProbe(deps(client), OPTIONS);
+    expect(evidence.cleanup.flattenOrder).toMatchObject({ side: 'buy', qty: '1' });
+    expect(evidence.residual).toEqual({ positionQty: 0, workingOrderIds: [] });
   });
 
   it('keeps the residual when the flatten does not land', async () => {
@@ -475,12 +491,19 @@ describe('redaction', () => {
   it('blanks account ids and every credential substring, at any depth', () => {
     expect(
       redact(
-        { account_id: 'a', list: [{ account_number: 'b', note: `x${KEY}y` }], n: 1, z: null },
+        {
+          account_id: ACCOUNT,
+          list: [{ account_number: 'PA3NUMBER', note: `x${KEY}y`, error: `${ACCOUNT} PA3NUMBER` }],
+          n: 1,
+          z: null,
+        },
         [KEY, ''],
       ),
     ).toEqual({
       account_id: '[redacted]',
-      list: [{ account_number: '[redacted]', note: 'x[redacted]y' }],
+      list: [
+        { account_number: '[redacted]', note: 'x[redacted]y', error: '[redacted] [redacted]' },
+      ],
       n: 1,
       z: null,
     });
@@ -518,6 +541,28 @@ describe('main', () => {
     expect(text).not.toContain(SECRET);
     expect(text).not.toContain(ACCOUNT);
     expect(JSON.parse(text).snapshots[2].history[0].order_class).toBe('oco');
+  });
+
+  it('scrubs an account id carried inside an error message from the file and stdout', async () => {
+    const client = new FakePaper();
+    const history = client.listOrderHistory.bind(client);
+    let reads = 0;
+    client.listOrderHistory = (symbols) => {
+      reads += 1;
+      if (reads !== 3) return history(symbols);
+      return Promise.reject(new Error(`malformed response body: {"account_id":"${ACCOUNT}"}`));
+    };
+    const lines: string[] = [];
+    const code = await main(
+      ['--out-dir', outDir],
+      {},
+      { ...deps(client), client: () => client, stdout: (line) => lines.push(line) },
+    );
+    expect(code).toBe(1);
+    const text = readFileSync(join(outDir, readdirSync(outDir)[0] ?? ''), 'utf8');
+    expect(text).not.toContain(ACCOUNT);
+    expect(lines.join('\n')).not.toContain(ACCOUNT);
+    expect(lines).toContainEqual(expect.stringMatching(/^failure: .*\[redacted\]/));
   });
 
   it('exits 1 when the run fails', async () => {

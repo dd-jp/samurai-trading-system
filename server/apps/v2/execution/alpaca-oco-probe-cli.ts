@@ -34,17 +34,13 @@ export function parseProbeArgs(argv: readonly string[]): ProbeArgs {
   };
 }
 
-export function writeProbeEvidence(
-  evidence: ProbeEvidence,
-  outDir: string,
-  secrets: readonly string[],
-): string {
+export function writeProbeEvidence(evidence: ProbeEvidence, outDir: string): string {
   const path = join(
     outDir,
     `alpaca-oco-probe-${evidence.startedAt.slice(0, 19).replaceAll(':', '')}Z.json`,
   );
   mkdirSync(outDir, { recursive: true });
-  writeFileSync(path, `${JSON.stringify(redact(evidence, secrets), null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(evidence, null, 2)}\n`);
   return path;
 }
 
@@ -104,9 +100,10 @@ export async function main(
       runId: String(deps.clock.now().getTime()),
     },
   );
-  const path = writeProbeEvidence(evidence, args.outDir, credentialValues(env));
-  for (const line of summaryLines(evidence, path)) deps.stdout(line);
-  return evidence.passed ? 0 : 1;
+  const redacted = redact(evidence, credentialValues(env)) as ProbeEvidence;
+  const path = writeProbeEvidence(redacted, args.outDir);
+  for (const line of summaryLines(redacted, path)) deps.stdout(line);
+  return redacted.passed ? 0 : 1;
 }
 
 await setExitCodeWhenInvoked(import.meta.url, () =>
