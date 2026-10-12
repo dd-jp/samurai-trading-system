@@ -302,34 +302,42 @@ let partOptions: ReplayCliOptions;
 
 let fedOptions: ReplayCliOptions;
 
+let blockedOptions: ReplayCliOptions;
+
 const splitFetches: URL[] = [];
 
 // EODHD and Alpaca answer per their documented shapes; the split is the bars' 2:1 on SPLIT_BAR
-const splitFetch = (async (input: URL) => {
-  splitFetches.push(input);
-  const inside = (date: string, from: string | null, to: string | null) =>
-    date >= (from ?? '') && date <= (to ?? '');
-  const exDate = dateAt(SPLIT_BAR);
-  if (input.host === 'eodhd.com') {
+const splitFetchFor = (eodhdLists: boolean) =>
+  (async (input: URL) => {
+    splitFetches.push(input);
+    const inside = (date: string, from: string | null, to: string | null) =>
+      date >= (from ?? '') && date <= (to ?? '');
+    const exDate = dateAt(SPLIT_BAR);
+    if (input.host === 'eodhd.com') {
+      const listed =
+        eodhdLists &&
+        input.pathname.endsWith('/UP.US') &&
+        inside(exDate, input.searchParams.get('from'), input.searchParams.get('to'));
+      return new Response(
+        JSON.stringify(listed ? [{ date: exDate, split: '2.000000/1.000000' }] : []),
+      );
+    }
     const listed =
-      input.pathname.endsWith('/UP.US') &&
-      inside(exDate, input.searchParams.get('from'), input.searchParams.get('to'));
+      input.searchParams.get('symbols') === 'UP' &&
+      inside(exDate, input.searchParams.get('start'), input.searchParams.get('end'));
     return new Response(
-      JSON.stringify(listed ? [{ date: exDate, split: '2.000000/1.000000' }] : []),
+      JSON.stringify({
+        corporate_actions: {
+          forward_splits: listed
+            ? [{ symbol: 'UP', new_rate: 2, old_rate: 1, ex_date: exDate }]
+            : [],
+        },
+        next_page_token: null,
+      }),
     );
-  }
-  const listed =
-    input.searchParams.get('symbols') === 'UP' &&
-    inside(exDate, input.searchParams.get('start'), input.searchParams.get('end'));
-  return new Response(
-    JSON.stringify({
-      corporate_actions: {
-        forward_splits: listed ? [{ symbol: 'UP', new_rate: 2, old_rate: 1, ex_date: exDate }] : [],
-      },
-      next_page_token: null,
-    }),
-  );
-}) as typeof fetch;
+  }) as typeof fetch;
+
+const splitFetch = splitFetchFor(true);
 
 async function journalDays(
   name: string,
@@ -417,6 +425,11 @@ beforeAll(async () => {
     eodhdApiKey: 'eodhd-test-key',
     alpacaDataCredentials: { apiKey: 'alpaca-data-key', apiSecret: 'alpaca-data-secret' },
     splitFetch,
+  });
+  blockedOptions = await journalDays('fed-blocked', base, false, undefined, {
+    eodhdApiKey: 'eodhd-test-key',
+    alpacaDataCredentials: { apiKey: 'alpaca-data-key', apiSecret: 'alpaca-data-secret' },
+    splitFetch: splitFetchFor(false),
   });
 });
 
@@ -891,5 +904,39 @@ describe('replay of a split read from the EODHD feed (#2025)', () => {
       stage: 'rescales',
       key: `debate/primary|UP|detector|${dateAt(SPLIT_BAR)}|1`,
     });
+  });
+});
+
+describe('replay of a line blocked by the split cross-check (#2025)', () => {
+  const rows = (sql: string) => journalRows(sql, blockedOptions.storePath);
+
+  it('freezes the simulated books on the blocked line and journals why', () => {
+    const checks = rows(
+      `SELECT DISTINCT trading_date, verdict, reason FROM v2_split_checks ORDER BY trading_date`,
+    );
+    for (const tradingDate of [SPLIT_DAY, DAY_AFTER]) {
+      expect(checks).toContainEqual({
+        trading_date: tradingDate,
+        verdict: 'block',
+        reason: 'sources_disagree',
+      });
+    }
+    expect(rows(`SELECT COUNT(*) AS n FROM v2_rescales WHERE source = 'detector'`)).toEqual([
+      { n: 0 },
+    ]);
+    const frozen = rows(
+      `SELECT DISTINCT trading_date, scope, book_id, instrument FROM v2_refusals
+         WHERE parameter = 'SPLIT_EXIT_FREEZE' ORDER BY trading_date, book_id`,
+    ) as { trading_date: string; scope: string; book_id: string; instrument: string }[];
+    expect(frozen.length).toBeGreaterThan(0);
+    expect(frozen.every((row) => row.scope === 'exit' && row.instrument === 'UP')).toBe(true);
+    expect(frozen.map((row) => row.book_id)).not.toContain('debate/primary');
+  });
+
+  it('replays the frozen days identical from the journalled reads and checks', async () => {
+    for (const tradingDate of [SPLIT_DAY, DAY_AFTER]) {
+      const result = await replayFromFiles({ ...blockedOptions, tradingDate });
+      expect(result.divergences).toEqual([]);
+    }
   });
 });

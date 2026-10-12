@@ -127,6 +127,31 @@ describe('SqliteSplitChecks', () => {
     expect(checks.block('AAPL', 'US', '2026-10-08')).toMatchObject({ since: '2026-10-08' });
   });
 
+  it('reads a clear only up to the run start it is given, inclusive', () => {
+    const { clock, checks } = ledger();
+    checks.record(check('2026-10-05', 'block'));
+    clock.advanceTo(new Date('2026-10-05T12:00:00.000Z'));
+    checks.clear('AAPL', 'US', 'David checked');
+    expect(checks.block('AAPL', 'US', '2026-10-05', '2026-10-05T11:59:59.999Z')).toMatchObject({
+      since: '2026-10-05',
+    });
+    expect(checks.block('AAPL', 'US', '2026-10-05', '2026-10-05T12:00:00.000Z')).toBeUndefined();
+    expect(checks.block('AAPL', 'US', '2026-10-05')).toBeUndefined();
+  });
+
+  it('finds a blocking check of the line from a date up to, not including, another', () => {
+    const { checks } = ledger();
+    checks.record(check('2026-10-06', 'block'));
+    checks.record(check('2026-10-07', 'agree'));
+    checks.record(check('2026-10-06', 'block', { instrument: 'MSFT' }));
+    checks.record(check('2026-10-06', 'block', { exchange: 'LSE' }));
+    expect(checks.blockedBetween('AAPL', 'US', '2026-10-06', '2026-10-07')).toBe(true);
+    expect(checks.blockedBetween('AAPL', 'US', '2026-10-05', '2026-10-06')).toBe(false);
+    expect(checks.blockedBetween('AAPL', 'US', '2026-10-07', '2026-10-09')).toBe(false);
+    expect(checks.blockedBetween('MSFT', 'US', '2026-10-07', '2026-10-09')).toBe(false);
+    expect(checks.blockedBetween('BP', 'LSE', '2026-10-01', '2026-10-09')).toBe(false);
+  });
+
   it('carries every line whose episode was open yesterday, from its last window start', () => {
     const { checks } = ledger();
     checks.record(

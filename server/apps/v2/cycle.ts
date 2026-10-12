@@ -314,6 +314,7 @@ class Cycle {
   readonly #unrescaled = new Set<string>();
   readonly #unrescaledBooks = new Set<string>();
   readonly #splitRequested = new Set<string>();
+  readonly #exitsFrozen = new Set<string>();
   readonly tally: Tally = {
     submitted: 0,
     simulated: 0,
@@ -1048,15 +1049,15 @@ class Cycle {
     units: { readonly ratio: number; readonly date: string },
   ): void {
     const held = this.deps.books.position(order.book_id, order.instrument);
-    if (outcome.stoppedAt !== undefined && held !== undefined) {
-      this.simulatedExit(
-        order.book_id,
-        held,
-        outcome.stoppedAt / units.ratio,
-        true,
-        'stop_on_entry_bar',
-      );
-    }
+    if (outcome.stoppedAt === undefined || held === undefined) return;
+    if (this.splitFrozen(order.book_id, held)) return;
+    this.simulatedExit(
+      order.book_id,
+      held,
+      outcome.stoppedAt / units.ratio,
+      true,
+      'stop_on_entry_bar',
+    );
   }
 
   // An add-on books qty x ratio in the latest bar's units, which the broker would floor too
@@ -1127,15 +1128,33 @@ class Cycle {
     const order = this.deps.journal.orderFor(held.exitClientOrderId);
     if (
       order === undefined ||
-      !(SIMULATED_OUTCOMES as ReadonlySet<JournalledOutcome>).has(order.outcome)
+      !(SIMULATED_OUTCOMES as ReadonlySet<JournalledOutcome>).has(order.outcome) ||
+      this.splitFrozen(order.book_id, held)
     )
       return;
-    const price = simulateMarketExit(this.barsSince(order));
+    const price = simulateMarketExit(this.exitBars(order, held));
     if (price === undefined) {
       this.fillPendingExitAtLastClose(order, held);
       return;
     }
     this.settleExitFill(order, held, price);
+  }
+
+  // A flatten frozen by a split block fills on the latest bar, the one the resume rescale is in
+  // units of; an earlier bar may be in pre-split units
+  exitBars(order: JournalledOrder, held: Position): readonly V2Bar[] {
+    const bars = this.barsSince(order);
+    const feed = this.deps.splitFeed;
+    if (feed === undefined) return bars;
+    const exchange = exchangeOf(held.venue);
+    return feed.checks.blockedBetween(
+      held.instrument,
+      exchange,
+      order.trading_date,
+      this.tradingDate,
+    )
+      ? bars.slice(-1)
+      : bars;
   }
 
   settleExitFill(order: JournalledOrder, held: Position, price: number): boolean {
@@ -1678,7 +1697,10 @@ class Cycle {
   ): Promise<void> {
     if (this.rescaleThrew(book.id, held.instrument)) return;
     await this.resumePendingExit(book, held);
-    if (this.deps.executor.simulates(routeOf(book, held.venue))) {
+    if (
+      this.deps.executor.simulates(routeOf(book, held.venue)) &&
+      !this.splitFrozen(book.id, held)
+    ) {
       this.simulatedBracketExit(book, held);
       this.simulatedEndedSeriesExit(book.id, held.instrument);
     }
@@ -2015,7 +2037,7 @@ class Cycle {
     this.refusals.push(message);
   }
 
-  // David, 2026-10-09 (#2025): a split the sources disagree on blocks entries; exits still run
+  // David, 2026-10-09 (#2025): a split the sources disagree on blocks entries; broker exits still run
   withoutSplitBlocked(book: BookSpec, decisions: readonly SleeveDecision[]): SleeveDecision[] {
     const feed = this.deps.splitFeed;
     if (feed === undefined) return [...decisions];
@@ -2027,6 +2049,40 @@ class Cycle {
       this.journalSplitBlocked(book, proposed, `${block.reason} since ${block.since}`);
       return false;
     });
+  }
+
+  // David, 2026-10-12 (#2025): clears are read as of the run's start, as a replay's rewound copy
+  // holds them, so a clear landing mid-run thaws the line from the next run
+  splitFrozen(bookId: string, held: Position): boolean {
+    const feed = this.deps.splitFeed;
+    if (feed === undefined) return false;
+    const block = feed.checks.block(
+      held.instrument,
+      exchangeOf(held.venue),
+      this.tradingDate,
+      this.runStartedAt.toISOString(),
+    );
+    if (block === undefined) return false;
+    this.journalExitFreeze(bookId, held, `${block.reason} since ${block.since}`);
+    return true;
+  }
+
+  journalExitFreeze(bookId: string, held: Position, why: string): void {
+    const key = positionKey(bookId, held.instrument);
+    if (this.#exitsFrozen.has(key)) return;
+    this.#exitsFrozen.add(key);
+    const message = `${bookId} ${held.instrument}: simulated exits frozen, split sources ${why}`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'exit',
+      parameter: 'SPLIT_EXIT_FREEZE',
+      ticket: SPLIT_TICKET,
+      message,
+      book_id: bookId,
+      instrument: held.instrument,
+    });
+    this.refusals.push(message);
+    this.log('warn', 'v2_split_exit_frozen', message);
   }
 
   journalSplitBlocked(book: BookSpec, proposed: SleeveDecision, why: string): void {

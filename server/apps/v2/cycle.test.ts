@@ -5557,6 +5557,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       const logs: LogEntry[] = [];
       return {
         ...withMarket(deps, bars),
+        clock: checksClock,
         logger: { log: (entry: LogEntry) => logs.push(entry) },
         logs,
         splitFeed: liveSplitFeed({
@@ -5802,7 +5803,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       expect(messagesOf(throwing.logs, 'v2_split_feed_refresh_threw')[0]).toContain('disk full');
     });
 
-    it('a block holds entries but not exits, and a clear lifts it', async () => {
+    it('a block holds entries and the simulated flatten, and a clear lifts both', async () => {
       const deps = harness([], true);
       hold(deps, 6);
       const checksClock = new SimulatedClock(new Date('2026-09-29T07:00:00.000Z'));
@@ -5817,7 +5818,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       checksClock.advanceTo(new Date('2026-09-30T07:00:00.000Z'));
       deps.setDecisions([longAapl]);
       await runCycle(blocked, '2026-09-30');
-      expect(primary(deps)).toBeUndefined();
+      expect(primary(deps)).toMatchObject({ qty: 6 });
       expect(deps.journal.orderFor('v2-debate-primary-2026-09-30-AAPL')).toBeUndefined();
       expect(sizeShares(deps, 'debate/primary', '2026-09-30', 'AAPL')).toBe(0);
       expect(refusalsOf(deps, 'SPLIT_CROSSCHECK_BLOCK')).toEqual([
@@ -5845,6 +5846,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
       );
       checksClock.advanceTo(new Date('2026-10-01T07:00:00.000Z'));
       await runCycle(blocked, '2026-10-01');
+      expect(primary(deps)).toBeUndefined();
       expect(deps.journal.orderFor('v2-debate-primary-2026-10-01-AAPL')).toBeDefined();
     });
 
@@ -5856,9 +5858,8 @@ describe('runCycle: positions held across a split (#1865)', () => {
         splits: (symbol, window) => reader(eodhd[0] ?? [], []).splits(symbol, window),
       };
       const blocked = fed(deps, flat, sometimes, reader(TEN_FOR_ONE));
-      deps.setDecisions([{ ...longAapl, action: 'exit', reason: 'judge exit' }]);
       await runCycle(blocked, '2026-09-29');
-      deps.setDecisions([]);
+      unhold(deps);
       await runCycle(blocked, '2026-09-30');
       expect(primary(deps)).toBeUndefined();
       deps.setDecisions([longAapl]);
@@ -5877,6 +5878,20 @@ describe('runCycle: positions held across a split (#1865)', () => {
       expect(checksOf(deps).at(-1)).toMatchObject({ trading_date: '2026-10-02', verdict: 'agree' });
       expect(deps.journal.orderFor('v2-debate-primary-2026-10-02-AAPL')).toBeDefined();
     });
+
+    function unhold(deps: Harness): void {
+      deps.books.applyFill('debate/primary', {
+        instrument: 'AAPL',
+        venue: 'alpaca',
+        side: 'sell',
+        leg: 'exit',
+        qty: 6,
+        priceGbp: 20 / FX,
+        feeGbp: 0,
+        clientOrderId: 'seed-exit',
+        tradingDate: '2026-09-29',
+      });
+    }
 
     function bySymbol(listed: Readonly<Record<string, Splits>>): SplitsReader {
       return {
@@ -6030,10 +6045,8 @@ describe('runCycle: positions held across a split (#1865)', () => {
         targetGbp: 21.2 / FX,
       });
       const blocked = fed(deps, flat, bySymbol({}), bySymbol({ AAPL: TEN_FOR_ONE }));
-      deps.setDecisions([{ ...longAapl, action: 'exit', reason: 'judge exit' }]);
       await runCycle(blocked, '2026-09-29');
-      expect(sizeShares(deps, 'debate/primary', '2026-09-29', 'AAPL')).toBeDefined();
-      deps.setDecisions([]);
+      unhold(deps);
       await runCycle(blocked, '2026-09-30');
       expect(primary(deps)).toBeUndefined();
       const logged = blocked.logs.length;
@@ -6062,9 +6075,8 @@ describe('runCycle: positions held across a split (#1865)', () => {
       const deps = harness([], true);
       hold(deps, 6);
       const blocked = fed(deps, flat, reader([]), reader(TEN_FOR_ONE));
-      deps.setDecisions([{ ...longAapl, action: 'exit', reason: 'judge exit' }]);
       await runCycle(blocked, '2026-09-29');
-      deps.setDecisions([]);
+      unhold(deps);
       await runCycle(blocked, '2026-09-30');
       const bare = fed(deps, later, reader([]), reader(TEN_FOR_ONE));
       await runCycle(bare, '2026-10-01');
@@ -6081,9 +6093,8 @@ describe('runCycle: positions held across a split (#1865)', () => {
       const deps = harness([], true);
       hold(deps, 6);
       const blocked = fed(deps, flat, reader([]), reader(TEN_FOR_ONE));
-      deps.setDecisions([{ ...longAapl, action: 'exit', reason: 'judge exit' }]);
       await runCycle(blocked, '2026-09-29');
-      deps.setDecisions([]);
+      unhold(deps);
       await runCycle(blocked, '2026-09-30');
       const report = await runEntryPass(blocked, {
         tradingDate: '2026-09-30',
@@ -6097,6 +6108,257 @@ describe('runCycle: positions held across a split (#1865)', () => {
         'debate/primary AAPL: entry blocked, split sources sources_disagree since 2026-09-29',
         'debate/no-macro-gate AAPL: entry blocked, split sources sources_disagree since 2026-09-29',
       ]);
+    });
+
+    describe('simulated exits on a blocked line freeze (David 2026-10-12)', () => {
+      const SHADOW_SPEC: SleeveSpec = {
+        ...TEST_SPEC,
+        books: [
+          { variant: 'primary', instantiated: true },
+          { variant: 'no-veto', instantiated: true },
+        ],
+      };
+      const THROUGH_STOP: RawBar = { open: 19.6, high: 19.8, low: 19, close: 19.1 };
+
+      function seed(deps: Harness, bookId: string, instrument: string, qty = 6): void {
+        deps.books.applyFill(bookId, {
+          instrument,
+          venue: 'alpaca',
+          side: 'buy',
+          leg: 'entry',
+          qty,
+          priceGbp: 20 / FX,
+          feeGbp: 0,
+          clientOrderId: 'seed',
+          tradingDate: '2026-09-25',
+          stopGbp: 19.2 / FX,
+          targetGbp: 21.2 / FX,
+        });
+      }
+
+      function switchable(listed: Splits[]): SplitsReader {
+        return { splits: (symbol, window) => reader(listed[0] ?? []).splits(symbol, window) };
+      }
+
+      function exitFills(deps: CycleDeps, bookId = 'debate/primary'): unknown[] {
+        return storeOf(deps)
+          .prepare(
+            `SELECT client_order_id, trading_date, qty, price_gbp FROM v2_fills
+               WHERE book_id = ? AND leg = 'exit' ORDER BY fill_seq`,
+          )
+          .all(bookId);
+      }
+
+      it('a blocked line crossing its stale stop books no exit in either leg; an unblocked one still exits', async () => {
+        const deps = harness([], true, undefined, [2026], SHADOW_SPEC);
+        hold(deps, 6);
+        seed(deps, 'debate/no-veto', 'AAPL');
+        seed(deps, 'debate/primary', 'MSFT');
+        const bars = [...preSplit(1), seriesBar('2026-09-28', THROUGH_STOP, 1)];
+        const blocked = fed(deps, bars, bySymbol({}), bySymbol({ AAPL: TEN_FOR_ONE }));
+        const report = await runCycle(blocked, '2026-09-29');
+        expect(primary(deps)).toMatchObject({ qty: 6, stopGbp: 19.2 / FX });
+        expect(deps.books.position('debate/no-veto', 'AAPL')).toMatchObject({ qty: 6 });
+        expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-AAPL-exit')).toBeUndefined();
+        expect(deps.journal.orderFor('v2-debate-no-veto-2026-09-29-AAPL-exit')).toBeUndefined();
+        expect(deps.books.position('debate/primary', 'MSFT')).toBeUndefined();
+        expect(deps.journal.orderFor('v2-debate-primary-2026-09-29-MSFT-exit')).toMatchObject({
+          payload: { detail: 'bracket_leg_on_daily_bar', price: expect.closeTo(19.2, 9) },
+        });
+        expect(refusalsOf(deps, 'SPLIT_EXIT_FREEZE')).toEqual(
+          ['debate/primary', 'debate/no-veto'].map((book_id) => ({
+            trading_date: '2026-09-29',
+            scope: 'exit',
+            book_id,
+            instrument: 'AAPL',
+            ticket: '#2025',
+          })),
+        );
+        expect(report.refusals).toContain(
+          'debate/no-veto AAPL: simulated exits frozen, split sources sources_disagree since 2026-09-29',
+        );
+        expect(messagesOf(blocked.logs, 'v2_split_exit_frozen')).toEqual([
+          'debate/primary AAPL: simulated exits frozen, split sources sources_disagree since 2026-09-29',
+          'debate/no-veto AAPL: simulated exits frozen, split sources sources_disagree since 2026-09-29',
+        ]);
+      });
+
+      it('once the sources agree, rescales first and checks the bracket from the resume bar on', async () => {
+        const deps = harness([], true);
+        hold(deps, 6);
+        const listed: Splits[] = [[]];
+        const bars = [
+          ...snapshot.slice(0, 5),
+          seriesBar('2026-09-30', { open: 1.97, high: 2, low: 1.9, close: 1.93 }, 1),
+        ];
+        const blocked = fed(deps, bars, switchable(listed), reader(TEN_FOR_ONE));
+        await runCycle(blocked, '2026-09-29');
+        expect(primary(deps)).toMatchObject({ qty: 6, splitFactor: 1 });
+        expect(exitFills(deps)).toEqual([]);
+
+        listed[0] = TEN_FOR_ONE;
+        await runCycle(blocked, '2026-09-30');
+        expect(primary(deps)).toMatchObject({
+          qty: 60,
+          stopGbp: expect.closeTo(1.92 / FX, 9),
+          splitFactor: 10,
+        });
+        expect(exitFills(deps)).toEqual([]);
+        expect(refusalsOf(deps, 'SPLIT_EXIT_FREEZE')).toMatchObject([
+          { trading_date: '2026-09-29' },
+        ]);
+
+        await runCycle(blocked, '2026-10-01');
+        expect(primary(deps)).toBeUndefined();
+        expect(deps.journal.orderFor('v2-debate-primary-2026-10-01-AAPL-exit')).toMatchObject({
+          payload: { size: 60, price: expect.closeTo(1.92, 9) },
+        });
+      });
+
+      it('a flatten frozen across the block fills on the latest bar after the rescale', async () => {
+        const deps = harness([], true);
+        hold(deps, 6);
+        const listed: Splits[] = [[]];
+        const bars = [
+          ...snapshot.slice(0, 4),
+          seriesBar('2026-09-29', { open: 2.1, high: 2.11, low: 2.05, close: 2.1 }, 1),
+          seriesBar('2026-09-30', { open: 1.98, high: 2, low: 1.95, close: 1.97 }, 1),
+        ];
+        const blocked = fed(deps, bars, switchable(listed), reader(TEN_FOR_ONE));
+        deps.setDecisions([{ ...longAapl, action: 'exit', reason: 'judge exit' }]);
+        await runCycle(blocked, '2026-09-29');
+        deps.setDecisions([]);
+        await runCycle(blocked, '2026-09-30');
+        expect(primary(deps)).toMatchObject({ qty: 6 });
+        expect(exitFills(deps)).toEqual([]);
+
+        listed[0] = TEN_FOR_ONE;
+        await runCycle(blocked, '2026-10-01');
+        expect(primary(deps)).toBeUndefined();
+        const [fill] = exitFills(deps) as { qty: number; price_gbp: number }[];
+        expect(fill).toMatchObject({
+          client_order_id: 'v2-debate-primary-2026-09-29-AAPL-exit',
+          trading_date: '2026-10-01',
+          qty: 60,
+        });
+        expect(fill?.price_gbp).toBeLessThan(1.99 / FX);
+        expect(fill?.price_gbp).toBeGreaterThan(1.97 / FX);
+      });
+
+      it('a clear before the run thaws the line; one landing mid-run waits for the next run', async () => {
+        const deps = harness([], true);
+        hold(deps, 6);
+        const checksClock = new SimulatedClock(new Date('2026-09-29T07:00:00.000Z'));
+        const blocked = fed(deps, snapshot, reader([]), reader(TEN_FOR_ONE), checksClock);
+        await runCycle(blocked, '2026-09-29');
+        checksClock.advanceTo(new Date('2026-09-30T08:00:00.000Z'));
+        (blocked.splitFeed.checks as SqliteSplitChecks).clear('AAPL', 'US', 'David checked it');
+        const runClock = new SimulatedClock(new Date('2026-09-30T07:00:00.000Z'));
+        await runCycle({ ...blocked, clock: runClock }, '2026-09-30');
+        expect(primary(deps)).toMatchObject({ qty: 6 });
+        expect(refusalsOf(deps, 'SPLIT_EXIT_FREEZE')).toMatchObject([
+          { trading_date: '2026-09-29' },
+          { trading_date: '2026-09-30' },
+        ]);
+
+        checksClock.advanceTo(new Date('2026-10-01T07:00:00.000Z'));
+        await runCycle(blocked, '2026-10-01');
+        expect(primary(deps)).toBeUndefined();
+        expect(deps.journal.orderFor('v2-debate-primary-2026-10-01-AAPL-exit')).toMatchObject({
+          payload: { size: 6, detail: 'bracket_leg_on_daily_bar' },
+        });
+        expect(refusalsOf(deps, 'SPLIT_EXIT_FREEZE')).toHaveLength(2);
+      });
+
+      it('freezes the fill-day stop of a simulated entry that fills on a blocked line', async () => {
+        const deps = harness([], true);
+        hold(deps, 6);
+        const blocked = fed(deps, snapshot, reader([]), reader(TEN_FOR_ONE));
+        await runCycle(blocked, '2026-09-29');
+        deps.journal.recordOrder({
+          client_order_id: 'resting-entry',
+          decision_id: null,
+          book_id: 'debate/no-macro-gate',
+          trading_date: '2026-09-29',
+          instrument: 'AAPL',
+          venue: 'alpaca',
+          leg: 'entry',
+          side: 'buy',
+          dry_run: true,
+          outcome: 'simulated',
+          payload: { size: 50, limit: 2.1, stop: 1.96 },
+        });
+        await runCycle(blocked, '2026-09-30');
+        expect(deps.books.position('debate/no-macro-gate', 'AAPL')).toMatchObject({ qty: 50 });
+        expect(exitFills(deps, 'debate/no-macro-gate')).toEqual([]);
+        expect(refusalsOf(deps, 'SPLIT_EXIT_FREEZE')).toContainEqual({
+          trading_date: '2026-09-30',
+          scope: 'exit',
+          book_id: 'debate/no-macro-gate',
+          instrument: 'AAPL',
+          ticket: '#2025',
+        });
+      });
+
+      it('the same fill-day stop exits on an unblocked line', async () => {
+        const deps = harness([], true);
+        hold(deps, 6);
+        const agreed = fed(deps, snapshot, reader(TEN_FOR_ONE), reader(TEN_FOR_ONE));
+        await runCycle(agreed, '2026-09-29');
+        deps.journal.recordOrder({
+          client_order_id: 'resting-entry',
+          decision_id: null,
+          book_id: 'debate/no-macro-gate',
+          trading_date: '2026-09-29',
+          instrument: 'AAPL',
+          venue: 'alpaca',
+          leg: 'entry',
+          side: 'buy',
+          dry_run: true,
+          outcome: 'simulated',
+          payload: { size: 50, limit: 2.1, stop: 1.96 },
+        });
+        await runCycle(agreed, '2026-09-30');
+        expect(deps.books.position('debate/no-macro-gate', 'AAPL')).toBeUndefined();
+        expect(exitFills(deps, 'debate/no-macro-gate')).toHaveLength(1);
+        expect(refusalsOf(deps, 'SPLIT_EXIT_FREEZE')).toEqual([]);
+      });
+
+      it('a broker stop fill on a blocked line is still booked from the broker', async () => {
+        const alpaca = new SplitAlpaca();
+        const deps = harness([longAapl], false, alpaca);
+        await runCycle(deps, '2026-09-25');
+        alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+        deps.setDecisions([]);
+        const live = fed(deps, flat, reader([]), reader(new Error('down')));
+        await runCycle(live, '2026-09-29');
+        expect(primary(deps)).toMatchObject({ qty: 6 });
+        expect(live.splitFeed.checks.block('AAPL', 'US', '2026-09-29')).toBeDefined();
+        alpaca.pending.push({
+          client_order_id: 'v2-debate-primary-2026-09-25-AAPL',
+          broker_fill_id: toBrokerFillId('alp-stop-frozen'),
+          leg: 'stop',
+          fee: 0,
+          price: 19.2,
+          qty: 6,
+          timestamp: '2026-09-29T15:00:00.000Z',
+        });
+        await runCycle(live, '2026-09-30');
+        expect(live.splitFeed.checks.block('AAPL', 'US', '2026-09-30')).toBeDefined();
+        expect(primary(deps)).toBeUndefined();
+        expect(
+          storeOf(deps)
+            .prepare(
+              `SELECT leg, qty FROM v2_fills WHERE book_id = 'debate/primary' AND leg != 'entry'`,
+            )
+            .all(),
+        ).toEqual([{ leg: 'stop', qty: 6 }]);
+        expect(
+          (refusalsOf(deps, 'SPLIT_EXIT_FREEZE') as { book_id: string }[]).map(
+            (row) => row.book_id,
+          ),
+        ).not.toContain('debate/primary');
+      });
     });
   });
 });

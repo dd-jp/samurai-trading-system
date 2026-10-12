@@ -27,7 +27,18 @@ export interface SplitBlock {
 
 export interface SplitCheckLedger {
   record(check: SplitCheck): void;
-  block(instrument: string, exchange: EodhdExchange, tradingDate: string): SplitBlock | undefined;
+  block(
+    instrument: string,
+    exchange: EodhdExchange,
+    tradingDate: string,
+    clearedBy?: string,
+  ): SplitBlock | undefined;
+  blockedBetween(
+    instrument: string,
+    exchange: EodhdExchange,
+    from: string,
+    before: string,
+  ): boolean;
   carried(tradingDate: string): readonly SplitRequest[];
 }
 
@@ -118,26 +129,54 @@ export class SqliteSplitChecks implements SplitCheckLedger {
     return openEpisode(rows);
   }
 
-  #cleared(instrument: string, exchange: EodhdExchange, since: string): boolean {
+  #cleared(
+    instrument: string,
+    exchange: EodhdExchange,
+    since: string,
+    by: string | undefined,
+  ): boolean {
     return (
       this.db
         .prepare(
           `SELECT 1 FROM v2_split_clears
-           WHERE instrument = ? AND exchange = ? AND cleared_at >= ? LIMIT 1`,
+           WHERE instrument = ? AND exchange = ? AND cleared_at >= ?
+             AND (? IS NULL OR cleared_at <= ?) LIMIT 1`,
         )
-        .get(instrument, exchange, since) !== undefined
+        .get(instrument, exchange, since, by ?? null, by ?? null) !== undefined
     );
   }
 
-  block(instrument: string, exchange: EodhdExchange, tradingDate: string): SplitBlock | undefined {
+  block(
+    instrument: string,
+    exchange: EodhdExchange,
+    tradingDate: string,
+    clearedBy?: string,
+  ): SplitBlock | undefined {
     const episode = this.#episode(instrument, exchange, tradingDate);
     if (episode === undefined) return undefined;
-    if (this.#cleared(instrument, exchange, episode.start.recorded_at)) return undefined;
+    if (this.#cleared(instrument, exchange, episode.start.recorded_at, clearedBy)) return undefined;
     return {
       after: episode.last.after_date,
       reason: episode.last.reason,
       since: episode.start.trading_date,
     };
+  }
+
+  blockedBetween(
+    instrument: string,
+    exchange: EodhdExchange,
+    from: string,
+    before: string,
+  ): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM v2_split_checks
+           WHERE instrument = ? AND exchange = ? AND verdict = 'block'
+             AND trading_date >= ? AND trading_date < ? LIMIT 1`,
+        )
+        .get(instrument, exchange, from, before) !== undefined
+    );
   }
 
   carried(tradingDate: string): readonly SplitRequest[] {
