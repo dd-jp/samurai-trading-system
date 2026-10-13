@@ -425,7 +425,7 @@ describe('AlpacaBrokerBooks over the HTTP client past 500 lifetime orders (#2089
     ]);
     const book = await books.read('alpaca');
     expect(book.openOrders).toEqual([CRL_STOP]);
-    expect(historyCursors).toEqual([null, `old-${ALPACA_ORDER_PAGE_LIMIT - 1}`]);
+    expect(historyCursors).toEqual([null, `old-${ALPACA_ORDER_PAGE_LIMIT - 2}`]);
   });
 
   it('fails the read, never passes it, when the history runs past the page cap', async () => {

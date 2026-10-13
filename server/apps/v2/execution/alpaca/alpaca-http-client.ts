@@ -243,14 +243,16 @@ function pageRowCount(page: readonly AlpacaOrder[]): number {
 const MULTI_LEG_CLASSES: ReadonlySet<string> = new Set(['bracket', 'oco', 'oto']);
 
 // Measured on Alpaca paper 2026-10-07 (#2086): a `nested=true` page cut through a bracket lists a
-// leg whose parent fell outside it as an order of its own. Whether `before_order_id` is exclusive
-// of a timestamp tie is unmeasured (#2089), so a cut that could hide a row fails the read
+// leg whose parent fell outside it as an order of its own. Whether `before_order_id` skips every
+// order sharing the cursor's submitted_at is unmeasured (#2089), so the cursor is the last parent
+// strictly newer than the page's oldest: under either reading the next page re-lists the rows after
+// it, and those are the only repeats the walk accepts
 class OrderPageWalk {
   readonly #orders: AlpacaOrder[] = [];
   readonly #seen = new Set<string>();
   readonly #orphans = new Set<string>();
   readonly #nestedLegs = new Set<string>();
-  #cursor: AlpacaOrder | undefined;
+  #relisted: ReadonlySet<string> = new Set();
 
   constructor(
     private readonly nested: boolean,
@@ -258,17 +260,25 @@ class OrderPageWalk {
   ) {}
 
   add(page: readonly AlpacaOrder[]): void {
-    this.#checkCut(page);
     for (const order of page) this.#addRow(order);
   }
 
   nextCursor(page: readonly AlpacaOrder[]): string {
-    const parent = page.findLast((order) => !this.#orphanRow(order));
-    if (parent === undefined) {
+    const oldest = page.findLast((order) => !this.#orphanRow(order));
+    if (oldest === undefined) {
       throw new Error(`Alpaca ${this.context} filled a page with orphan legs only`);
     }
-    this.#cursor = parent;
-    return parent.id;
+    const oldestAt = this.#submittedAt(oldest);
+    const cursor = page.findLastIndex(
+      (order) => !this.#orphanRow(order) && this.#submittedAt(order) > oldestAt,
+    );
+    if (cursor < 0) {
+      throw new Error(
+        `Alpaca ${this.context} filled a page with orders submitted in one millisecond`,
+      );
+    }
+    this.#relisted = new Set(page.slice(cursor + 1).map((order) => order.id));
+    return page[cursor].id;
   }
 
   finish(): AlpacaOrder[] {
@@ -285,6 +295,14 @@ class OrderPageWalk {
     return this.nested && MULTI_LEG_CLASSES.has(order.order_class) && !order.legs?.length;
   }
 
+  #submittedAt(order: AlpacaOrder): number {
+    const at = Date.parse(order.submitted_at ?? '');
+    if (Number.isNaN(at)) {
+      throw new Error(`Alpaca ${this.context} page cut at ${order.id} has no readable submitted_at`);
+    }
+    return at;
+  }
+
   #addRow(order: AlpacaOrder): void {
     for (const leg of order.legs ?? []) this.#nestedLegs.add(leg.id);
     if (this.#orphanRow(order)) {
@@ -292,26 +310,11 @@ class OrderPageWalk {
       return;
     }
     if (this.#seen.has(order.id)) {
+      if (this.#relisted.has(order.id)) return;
       throw new Error(`Alpaca ${this.context} listed order ${order.id} on two pages`);
     }
     this.#seen.add(order.id);
     this.#orders.push(order);
-  }
-
-  #checkCut(page: readonly AlpacaOrder[]): void {
-    if (this.#cursor === undefined) return;
-    const next = page.find((order) => !this.#seen.has(order.id) && !this.#orphans.has(order.id));
-    if (next === undefined) return;
-    const cut = this.#cursor.submitted_at;
-    if (
-      typeof cut !== 'string' ||
-      cut === next.submitted_at ||
-      typeof next.submitted_at !== 'string'
-    ) {
-      throw new Error(
-        `Alpaca ${this.context} page cut at ${this.#cursor.id} cannot be told apart from ${next.id} by submitted_at`,
-      );
-    }
   }
 }
 

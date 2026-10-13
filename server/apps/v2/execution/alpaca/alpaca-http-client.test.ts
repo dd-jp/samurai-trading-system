@@ -1152,19 +1152,19 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
 
       const at500 = pages(orders(500), []);
       await expect(list(client())).resolves.toHaveLength(500);
-      expect(cursors(at500)).toEqual([null, 'o-499']);
+      expect(cursors(at500)).toEqual([null, 'o-498']);
 
       const past500 = pages(orders(500), orders(1, 500));
       const read = await list(client());
       expect(read.map((order) => order.id)).toEqual(orders(501).map((order) => order.id));
-      expect(cursors(past500)).toEqual([null, 'o-499']);
+      expect(cursors(past500)).toEqual([null, 'o-498']);
     });
 
     it('follows the cursor across three pages and keeps every order once, newest first', async () => {
       const fetchMock = pages(orders(500), orders(500, 500), orders(7, 1000));
       const read = await client().listOpenOrders();
       expect(read.map((order) => order.id)).toEqual(orders(1007).map((order) => order.id));
-      expect(cursors(fetchMock)).toEqual([null, 'o-499', 'o-999']);
+      expect(cursors(fetchMock)).toEqual([null, 'o-498', 'o-998']);
       for (const [url] of fetchMock.mock.calls) {
         expect(new URL(url as string).searchParams.get('direction')).toBe('desc');
       }
@@ -1182,10 +1182,16 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
       },
     );
 
-    it('fails when a page repeats an order an earlier page listed', async () => {
-      pages(orders(500), orders(1, 499));
+    it('keeps a row the next page re-lists after the cursor once', async () => {
+      pages(orders(500), orders(3, 499));
+      const read = await client().listOpenOrders();
+      expect(read.map((order) => order.id)).toEqual(orders(502).map((order) => order.id));
+    });
+
+    it('fails when a page repeats an order from before the cursor', async () => {
+      pages(orders(500), orders(1, 498));
       await expect(client().listOpenOrders()).rejects.toThrow(
-        'Alpaca listOpenOrders listed order o-499 on two pages',
+        'Alpaca listOpenOrders listed order o-498 on two pages',
       );
     });
 
@@ -1222,7 +1228,7 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
         ...orders(499).map((order) => order.id),
         'cut-parent',
       ]);
-      expect(cursors(fetchMock)).toEqual([null, 'o-498']);
+      expect(cursors(fetchMock)).toEqual([null, 'o-497']);
     });
 
     it('fails the listing when a cut-off leg never turns up under a parent it read', async () => {
@@ -1244,21 +1250,54 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
       await expect(client().listOpenOrders()).resolves.toEqual([orphanLeg('open-leg', 0)]);
     });
 
+    const sameMillisecond = (count: number, from: number, at: number) =>
+      orders(count, from).map((order) => ({ ...order, submitted_at: submittedAt(at) }));
+
+    function venue(rows: readonly ReturnType<typeof orders>[number][], skipsTies: boolean) {
+      const fetchMock = vi.fn(async (url: string) => {
+        const before = new URL(url).searchParams.get('before_order_id');
+        const cut = rows.findIndex((order) => order.id === before);
+        const cutAt = cut < 0 ? undefined : Date.parse(rows[cut].submitted_at);
+        const after = rows.filter((order, index) =>
+          cut < 0 ? true : skipsTies ? Date.parse(order.submitted_at) < (cutAt ?? 0) : index > cut,
+        );
+        return jsonResponse(after.slice(0, ALPACA_ORDER_PAGE_LIMIT));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
     it.each([
-      ['shares the cut row submitted_at', { submitted_at: submittedAt(499) }],
-      ['has no submitted_at', { submitted_at: undefined }],
-    ])('fails the listing when the next page opens on a row that %s', async (_what, next) => {
-      pages(orders(500), [{ ...orders(1, 500)[0], ...next }]);
+      ['skips every order tied with the cursor', true],
+      ['skips only the cursor', false],
+    ])(
+      'reads every order once across a page cut inside a run of ties when before_order_id %s',
+      async (_reading, skipsTies) => {
+        const rows = [...orders(497), ...sameMillisecond(6, 497, 497)];
+        const fetchMock = venue(rows, skipsTies);
+        const read = await client().listOpenOrders();
+        expect(read.map((order) => order.id)).toEqual(rows.map((order) => order.id));
+        expect(cursors(fetchMock)).toEqual([null, 'o-496']);
+      },
+    );
+
+    it('fails a full page whose parents share one millisecond, with no cursor to page from', async () => {
+      pages(sameMillisecond(500, 0, 0));
       await expect(client().listOpenOrders()).rejects.toThrow(
-        'Alpaca listOpenOrders page cut at o-499 cannot be told apart from o-500 by submitted_at',
+        'Alpaca listOpenOrders filled a page with orders submitted in one millisecond',
       );
     });
 
-    it('fails the listing when the cut row has no submitted_at', async () => {
-      const first = orders(500);
-      first[499] = { ...first[499], submitted_at: undefined as unknown as string };
+    it.each([
+      ['no', undefined],
+      ['an unreadable', 'not-a-time'],
+    ])('fails the listing when a tail row has %s submitted_at', async (_what, submitted_at) => {
+      const first: unknown[] = orders(500);
+      first[499] = { ...orders(1, 499)[0], submitted_at };
       pages(first, orders(1, 500));
-      await expect(client().listOpenOrders()).rejects.toThrow('page cut at o-499');
+      await expect(client().listOpenOrders()).rejects.toThrow(
+        'Alpaca listOpenOrders page cut at o-499 has no readable submitted_at',
+      );
     });
 
     it('fails rather than return a listing cut at the page cap', async () => {
