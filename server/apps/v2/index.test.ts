@@ -48,6 +48,7 @@ import {
   rootOptionsFor,
   runAfterPinCheck,
   runOnce,
+  splitFeedFor,
   V2_STORE_PATH,
   type V2RootOptions,
   withoutRefusedLse,
@@ -164,6 +165,8 @@ function scriptedFactory(transports: ScriptedTransport[]) {
   };
 }
 
+// A filled bracket as measured in #2086: the take-profit rests `new` on the open listing and the stop
+// stays `held`, which only the order history returns
 function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders: AlpacaOrder[] } {
   const orders: AlpacaOrder[] = [];
   const filled = (order: AlpacaOrder): AlpacaOrder => ({
@@ -172,12 +175,39 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
     filled_qty: order.qty,
     filled_avg_price: order.limit_price ?? '0',
     filled_at: clock.now().toISOString(),
+    legs: (order.legs ?? []).map((leg) => ({
+      ...leg,
+      status: leg.type === 'stop' ? 'held' : 'new',
+    })),
   });
+  const takeProfits = (order: AlpacaOrder): AlpacaOrder[] =>
+    (filled(order).legs ?? [])
+      .filter((leg) => leg.type === 'limit')
+      .map((leg) => ({
+        ...leg,
+        client_order_id: leg.client_order_id ?? leg.id,
+        symbol: order.symbol,
+        side: leg.side ?? order.side,
+        qty: leg.qty ?? order.qty,
+        order_class: 'bracket',
+      }));
   return {
     orders,
     submitOrder: vi.fn((request) => {
+      const id = `alp-${orders.length + 1}`;
+      const leg = (suffix: string, type: 'limit' | 'stop') => ({
+        id: `${id}-${suffix}`,
+        client_order_id: `${id}-${suffix}-uuid`,
+        side: request.side === 'buy' ? ('sell' as const) : ('buy' as const),
+        qty: request.qty,
+        type,
+        status: 'held',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+      });
       const order: AlpacaOrder = {
-        id: `alp-${orders.length + 1}`,
+        id,
         client_order_id: request.client_order_id,
         symbol: request.symbol,
         side: request.side,
@@ -189,23 +219,8 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
         filled_at: null,
         limit_price: request.limit_price,
         legs: [
-          {
-            id: `${orders.length + 1}-tp`,
-            type: 'limit',
-            status: 'held',
-            filled_qty: '0',
-            filled_avg_price: null,
-            filled_at: null,
-          },
-          {
-            id: `${orders.length + 1}-sl`,
-            type: 'stop',
-            status: 'held',
-            filled_qty: '0',
-            filled_avg_price: null,
-            filled_at: null,
-            stop_price: request.stop_loss.stop_price,
-          },
+          { ...leg('tp', 'limit'), limit_price: request.take_profit.limit_price },
+          { ...leg('sl', 'stop'), stop_price: request.stop_loss.stop_price },
         ],
       };
       orders.push(order);
@@ -224,21 +239,10 @@ function fakeAlpacaClient(clock: SimulatedClock): AlpacaBrokerClient & { orders:
     submitMarketOrder: vi.fn().mockRejectedValue(new Error('unused')),
     submitOcoOrder: vi.fn().mockRejectedValue(new Error('unused')),
     cancelOrder: vi.fn().mockResolvedValue(undefined),
-    listOpenOrders: vi.fn(() =>
-      Promise.resolve(
-        orders.map((order) => ({
-          ...order,
-          id: `${order.id}-sl`,
-          client_order_id: `${order.client_order_id}-stop`,
-          side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
-          type: 'stop',
-          order_class: 'simple',
-          status: 'new',
-          stop_price: order.legs?.[1]?.stop_price ?? null,
-        })),
-      ),
+    listOpenOrders: vi.fn(() => Promise.resolve(orders.flatMap(takeProfits))),
+    listOrderHistory: vi.fn((symbols: readonly string[]) =>
+      Promise.resolve(orders.filter((order) => symbols.includes(order.symbol)).map(filled)),
     ),
-    listOrderHistory: vi.fn().mockResolvedValue([]),
     getPositions: vi.fn(() =>
       Promise.resolve(
         orders.map((order) => ({
@@ -620,15 +624,13 @@ describe('composeV2Root', () => {
       });
       expect(exitCodeFor(report)).toBe(0);
       const needsDavid = report.refusals.filter((refusal) => refusal.includes('needs David'));
-      expect(needsDavid).toHaveLength(6);
-      expect(needsDavid.some((refusal) => refusal.includes('CFD_RESTING_STOP_VERIFIED'))).toBe(
-        true,
-      );
+      expect(needsDavid).toHaveLength(5);
       for (const parameter of [
         'CFD_COST_MODEL',
         'CFD_SPREAD_MODEL',
         'CFD_FINANCING_MODEL',
         'CFD_BORROW_MODEL',
+        'CFD_RESTING_STOP_VERIFIED',
       ]) {
         expect(needsDavid.some((refusal) => refusal.includes(parameter))).toBe(false);
       }
@@ -867,6 +869,7 @@ describe('composeV2Root', () => {
         tradingDate: ENTRY_DATE,
         constituents: ['AAPL'],
         path: join(fixtures.directory, 'cfd-catalogue.json'),
+        storePath,
         logger,
         connect: () => ({
           api: { cfdInstrumentPage: never, cfdInstrumentDetails: never, cfdInfoPrices: never },
@@ -1504,7 +1507,7 @@ describe('composeV2Root', () => {
       expect([...authorizations]).toEqual(['Bearer nous-secret-key']);
       expect(models.sort()).toEqual([
         'anthropic/claude-opus-5.5',
-        'anthropic/claude-sonnet-5',
+        'anthropic/claude-sonnet-5.5',
         'deepseek/deepseek-v4-pro-0813',
         'openai/gpt-5.5',
       ]);
@@ -2133,5 +2136,101 @@ describe('newsWiringFor', () => {
       marketauxApiKey: 'from-env',
     });
     expect(rootOptionsFor(false, '2026-09-29', {}, clock, quiet).marketauxApiKey).toBeUndefined();
+  });
+});
+
+describe('splitFeedFor (#2025)', () => {
+  const NOW = new Date('2026-10-05T07:00:00.000Z');
+  const base: V2RootOptions = { tradingDate: '2026-10-05', dryRun: false };
+
+  function fakeFetch(seen: URL[]): typeof fetch {
+    return (async (input: URL) => {
+      seen.push(input);
+      return new Response(
+        JSON.stringify(input.host === 'eodhd.com' ? [] : { corporate_actions: {} }),
+      );
+    }) as typeof fetch;
+  }
+
+  it('is absent with no EODHD key, a blank one, or on a dry run', () => {
+    const clock = new SimulatedClock(NOW);
+    const db = migratedMemoryStore();
+    expect(splitFeedFor(base, db, clock)).toBeUndefined();
+    expect(splitFeedFor({ ...base, eodhdApiKey: '  ' }, db, clock)).toBeUndefined();
+    expect(
+      splitFeedFor({ ...base, dryRun: true, eodhdApiKey: 'eodhd-key' }, db, clock),
+    ).toBeUndefined();
+  });
+
+  it('reads EODHD with the trimmed key and Alpaca with the data pair, journalling both', async () => {
+    const clock = new SimulatedClock(NOW);
+    const db = migratedMemoryStore();
+    const seen: URL[] = [];
+    const feed = splitFeedFor(
+      {
+        ...base,
+        eodhdApiKey: ' eodhd-key ',
+        alpacaDataCredentials: { apiKey: 'k', apiSecret: 's' },
+        splitFetch: fakeFetch(seen),
+      },
+      db,
+      clock,
+    );
+    await feed?.refresh(
+      [{ instrument: 'AAPL', exchange: 'US', after: '2026-10-01' }],
+      '2026-10-05',
+    );
+    expect(seen.map((url) => url.host)).toEqual(['eodhd.com', 'data.alpaca.markets']);
+    expect(seen[0]?.searchParams.get('api_token')).toBe('eodhd-key');
+    expect(feed?.sources('AAPL', 'US', '2026-10-05')).toMatchObject({
+      eodhd: [{ symbol: 'AAPL.US', asOf: '2026-10-05', splits: [] }],
+      alpaca: [{ symbol: 'AAPL', asOf: '2026-10-05', splits: [] }],
+    });
+    expect(JSON.stringify(db.prepare('SELECT * FROM v2_split_reads').all())).not.toContain(
+      'eodhd-key',
+    );
+  });
+
+  it('records a missing Alpaca pair as a failed read', async () => {
+    const seen: URL[] = [];
+    const db = migratedMemoryStore();
+    const feed = splitFeedFor(
+      { ...base, eodhdApiKey: 'eodhd-key', splitFetch: fakeFetch(seen) },
+      db,
+      new SimulatedClock(NOW),
+    );
+    await feed?.refresh(
+      [{ instrument: 'AAPL', exchange: 'US', after: '2026-10-01' }],
+      '2026-10-05',
+    );
+    expect(seen).toHaveLength(1);
+    expect(
+      db.prepare('SELECT source, status, reason FROM v2_split_reads ORDER BY read_id').all(),
+    ).toEqual([
+      { source: 'eodhd', status: 'ok', reason: '' },
+      { source: 'alpaca', status: 'error', reason: 'no_alpaca_key' },
+    ]);
+  });
+
+  it('takes the EODHD key and the Alpaca paper pair from the environment', () => {
+    const clock = new SimulatedClock(NOW);
+    const quiet: Logger = { log: () => {} };
+    const env = { EODHD_API_KEY: 'e', ALPACA_API_KEY: 'k', ALPACA_API_SECRET: 's' };
+    expect(rootOptionsFor(false, '2026-10-05', env, clock, quiet)).toMatchObject({
+      eodhdApiKey: 'e',
+      alpacaDataCredentials: { apiKey: 'k', apiSecret: 's' },
+    });
+    const bare = rootOptionsFor(false, '2026-10-05', {}, clock, quiet);
+    expect(bare.eodhdApiKey).toBeUndefined();
+    expect(bare.alpacaDataCredentials).toBeUndefined();
+    for (const half of [
+      { ALPACA_API_KEY: 'k' },
+      { ALPACA_API_SECRET: 's' },
+      { ALPACA_API_KEY: '', ALPACA_API_SECRET: 's' },
+    ]) {
+      expect(
+        rootOptionsFor(false, '2026-10-05', half, clock, quiet).alpacaDataCredentials,
+      ).toBeUndefined();
+    }
   });
 });

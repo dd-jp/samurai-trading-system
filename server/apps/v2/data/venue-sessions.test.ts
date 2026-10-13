@@ -3,6 +3,7 @@ import {
   bothVenuesClosed,
   entryCutoff,
   exchangeOf,
+  firstSessionOn,
   sessionDay,
   TABLE_VENUE_SESSIONS,
 } from './venue-sessions.js';
@@ -45,6 +46,26 @@ describe('sessionDay', () => {
   it('still reads a weekend past both tables as closed', () => {
     expect(sessionDay('us', '2029-01-06')).toBe('closed');
     expect(sessionDay('lse', '2029-01-07')).toBe('closed');
+  });
+});
+
+describe('firstSessionOn', () => {
+  it.each([
+    ['alpaca', ORDINARY, '2026-10-01', ORDINARY],
+    ['alpaca', SATURDAY, '2026-09-30', '2026-09-28'],
+    ['alpaca', THANKSGIVING, '2026-11-30', '2026-11-27'],
+    ['saxo', THANKSGIVING, '2026-11-30', THANKSGIVING],
+    ['saxo', UK_BANK_HOLIDAY, '2026-09-02', '2026-09-01'],
+    ['saxo_cfd_usd', UK_BANK_HOLIDAY, '2026-09-02', UK_BANK_HOLIDAY],
+    ['saxo_cfd_gbp', CHRISTMAS, '2026-12-30', '2026-12-29'],
+    ['alpaca', '2028-01-04', '2028-01-05', '2028-01-04'],
+  ] as const)('%s from %s before %s: %s', (venue, from, before, session) => {
+    expect(firstSessionOn(venue, from, before)).toBe(session);
+  });
+
+  it('finds none when every day before the bound is closed, or the range is empty', () => {
+    expect(firstSessionOn('alpaca', SATURDAY, '2026-09-28')).toBeUndefined();
+    expect(firstSessionOn('alpaca', ORDINARY, ORDINARY)).toBeUndefined();
   });
 });
 

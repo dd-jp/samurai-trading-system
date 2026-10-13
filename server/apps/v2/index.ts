@@ -1,5 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
-import type { BrokerMode, CfdCosts, Sleeve, Venue } from '../../../contracts/index.js';
+import type {
+  BrokerMode,
+  CfdCosts,
+  LatestQuoteSource,
+  Sleeve,
+  Venue,
+} from '../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import { UsEquityRegularHoursCalendar } from '../../providers/calendar/index.js';
 import { AlpacaNewsClient } from '../../providers/news/index.js';
@@ -19,7 +25,9 @@ import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
 import { pushDailySummary } from './daily-summary.js';
 import {
+  type AlpacaDataCredentials,
   AlpacaNewsSource,
+  AlpacaSplitsClient,
   BarsMarketData,
   type BarsSource,
   bothVenuesClosed,
@@ -27,6 +35,7 @@ import {
   type CfdCatalogue,
   createVenueRouter,
   currentConstituents,
+  EodhdClient,
   FX_PATH,
   loadCfdCatalogue,
   MarketauxClient,
@@ -39,12 +48,13 @@ import {
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
   SqliteNewsLedger,
+  SqliteSplitReads,
   TABLE_VENUE_SESSIONS,
   type VenueRouter,
   type VenueSessionGate,
 } from './data/index.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
-import { saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
+import { alpacaQuotesFor, saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import {
   FlattenLedger,
   type FlattenPass,
@@ -87,8 +97,12 @@ import {
 } from './signal/index.js';
 import { processDueSignals, type SignalOutcome, signalsDue } from './signals/processor.js';
 import type { SignalStore } from './signals/store.js';
+import { panelVeto } from './signals/veto.js';
+import { SqliteSplitChecks } from './split-checks.js';
+import { liveSplitFeed, type SplitFeed } from './split-feed.js';
 
 export const V2_STORE_PATH = 'data/samurai-v2-paper.sqlite';
+export const CYCLE_CFD_CATALOGUE = { path: CFD_CATALOGUE_PATH, storePath: V2_STORE_PATH };
 export const V2_DRY_RUN_STORE_PATH = 'data/samurai-v2-dry-run.sqlite';
 export const CONSTITUENTS_PATH = 'data/bars/sp500-constituents.csv';
 export const SPREADS_PATH = 'data/bars/alpaca-spreads.csv';
@@ -121,8 +135,12 @@ export interface V2RootOptions {
   readonly constituents?: ((tradingDate: string) => readonly string[]) | undefined;
   readonly transportFor?: ((pin: ModelPin) => AnthropicMessagesClient) | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
+  readonly quotes?: LatestQuoteSource | undefined;
   readonly newsSource?: NewsSource | undefined;
   readonly marketauxApiKey?: string | undefined;
+  readonly eodhdApiKey?: string | undefined;
+  readonly alpacaDataCredentials?: AlpacaDataCredentials | undefined;
+  readonly splitFetch?: typeof fetch | undefined;
   readonly isUkStock?: ((symbol: string) => boolean) | undefined;
   readonly lseLegRefusal?: string | undefined;
   readonly knownSecrets?: SecretSource | undefined;
@@ -147,7 +165,18 @@ export interface V2Root {
   close(): void;
 }
 
-export type SignalProcessorStore = Pick<SignalStore, 'due' | 'appendEvent' | 'vetoVerdicts'>;
+export type SignalProcessorStore = Pick<
+  SignalStore,
+  | 'due'
+  | 'appendEvent'
+  | 'vetoVerdicts'
+  | 'recordVeto'
+  | 'vetoFor'
+  | 'claimVeto'
+  | 'vetoClaimed'
+  | 'recordRetryVeto'
+  | 'retryVetoFor'
+>;
 
 export type SignalPass =
   | { readonly ran: true; readonly outcomes: readonly SignalOutcome[] }
@@ -313,8 +342,35 @@ function refuseLiveMode(options: V2RootOptions): void {
   }
 }
 
+export function splitFeedFor(
+  options: V2RootOptions,
+  db: StoreHandle,
+  clock: Clock,
+): SplitFeed | undefined {
+  const apiKey = options.eodhdApiKey?.trim() ?? '';
+  if (options.dryRun || apiKey === '') return undefined;
+  const fetchImpl = options.splitFetch ?? fetch;
+  const now = () => clock.now();
+  const credentials = options.alpacaDataCredentials;
+  const store = guardedStore(db, 'v2');
+  return liveSplitFeed({
+    eodhd: new EodhdClient(apiKey, fetchImpl, now),
+    alpaca:
+      credentials === undefined ? undefined : new AlpacaSplitsClient(credentials, fetchImpl, now),
+    reads: new SqliteSplitReads(store),
+    checks: new SqliteSplitChecks(store, clock),
+    clock,
+  });
+}
+
 function brokerModeFor(options: V2RootOptions): BrokerMode {
   return options.samuraiMode === 'live' ? 'live' : 'paper';
+}
+
+// A dry run reads no broker or market feed, so its signal entries keep the daily-bar simulation
+function quotesFor(options: V2RootOptions): LatestQuoteSource | undefined {
+  if (options.quotes !== undefined || options.dryRun) return options.quotes;
+  return alpacaQuotesFor(brokerModeFor(options));
 }
 
 function storePathFor(options: V2RootOptions): string {
@@ -582,8 +638,10 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     brokerMode: brokerModeFor(options),
     venueSessions: venueSessionsFor(options),
     runStartedAt: options.runStartedAt,
+    splitFeed: splitFeedFor(options, db, clock),
   });
   const lease = new RunLease(db, clock);
+  const quotes = quotesFor(options);
   return {
     registry: cycle.registry,
     books: cycle.books,
@@ -623,9 +681,10 @@ export function composeV2Root(options: V2RootOptions): V2Root {
           cycle.journal.latestReconcile(date, venue),
         signals,
         faults: cycle.faults,
-        panel,
+        veto: panelVeto(panel),
         constituents,
         calendar: options.sessionCalendar ?? new UsEquityRegularHoursCalendar(),
+        quotes,
       };
       if (!signalsDue(deps, now)) {
         return { ran: false, reason: 'nothing_due', detail: 'market closed or no signal due' };
@@ -711,7 +770,15 @@ export async function main(
               env,
               clock,
               logger,
-              barRefresh ?? barRefreshFor(dryRun, env, tradingDate, CONSTITUENTS_PATH, logger),
+              barRefresh ??
+                barRefreshFor(
+                  dryRun,
+                  env,
+                  tradingDate,
+                  CONSTITUENTS_PATH,
+                  logger,
+                  CYCLE_CFD_CATALOGUE,
+                ),
               alerts.notify,
             ),
           backup,
@@ -755,6 +822,14 @@ export function logFaultFreeWeeks(
   });
 }
 
+// The data API takes either account's pair; the paper pair is the one every run already holds
+function alpacaDataCredentialsFrom(env: NodeJS.ProcessEnv): AlpacaDataCredentials | undefined {
+  const apiKey = env.ALPACA_API_KEY ?? '';
+  const apiSecret = env.ALPACA_API_SECRET ?? '';
+  if (apiKey === '' || apiSecret === '') return undefined;
+  return { apiKey, apiSecret };
+}
+
 export function rootOptionsFor(
   dryRun: boolean,
   tradingDate: string,
@@ -768,6 +843,8 @@ export function rootOptionsFor(
     ...nousOptionsFrom(env),
     samuraiMode: env.SAMURAI_MODE,
     marketauxApiKey: env.MARKETAUX_API_KEY,
+    eodhdApiKey: env.EODHD_API_KEY,
+    alpacaDataCredentials: alpacaDataCredentialsFrom(env),
     clock,
     logger,
     lseLegRefusal: saxoSessionRefusal(clock.now()),

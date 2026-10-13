@@ -76,6 +76,16 @@ export interface AlpacaPosition {
 export const ALPACA_ORDER_PAGE_LIMIT = 500;
 export const ALPACA_ORDER_MAX_PAGES = 20;
 
+export interface AlpacaLatestQuote {
+  t: string;
+  ap: number;
+  bp: number;
+}
+
+export interface AlpacaQuoteClient {
+  getLatestQuote(symbol: string): Promise<AlpacaLatestQuote>;
+}
+
 export interface AlpacaBrokerClient {
   submitOrder(request: AlpacaBracketOrderRequest): Promise<AlpacaOrder>;
   submitMarketOrder(request: AlpacaMarketOrderRequest): Promise<AlpacaOrder>;

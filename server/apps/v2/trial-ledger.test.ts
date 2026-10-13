@@ -114,6 +114,114 @@ describe('TrialLedger', () => {
   });
 });
 
+function links(db: StoreHandle) {
+  return db.prepare('SELECT trial, link FROM v2_trial_chain ORDER BY trial').all() as {
+    trial: number;
+    link: string;
+  }[];
+}
+
+function chained() {
+  const db = migratedMemoryStore();
+  const ledger = new TrialLedger(db, clock, SESSION_B);
+  ledger.record('trend', { lookback: 60 });
+  return { db, ledger };
+}
+
+describe('TrialLedger hash chain', () => {
+  it('links every trial to the one before it', () => {
+    const { db, ledger } = chained();
+    const chain = links(db);
+    expect(chain.map((row) => row.trial)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(chain.every((row) => /^[0-9a-f]{64}$/.test(row.link))).toBe(true);
+    expect(new Set(chain.map((row) => row.link)).size).toBe(9);
+    expect(ledger.chainHead()).toBe(chain.at(-1)?.link);
+    expect(new TrialLedger(db, clock, SESSION_B).chainHead()).toBe(chain.at(-1)?.link);
+  });
+
+  it('starts an empty ledger at the genesis head', () => {
+    expect(new TrialLedger(migratedMemoryStore(), clock, { entries: [] }).chainHead()).toBe('');
+  });
+
+  it('chains from the stored head when another ledger recorded in between', () => {
+    const db = migratedMemoryStore();
+    const first = new TrialLedger(db, clock, SESSION_B);
+    const second = new TrialLedger(db, clock, SESSION_B);
+    expect(first.record('trend', { lookback: 60 })).toBe(9);
+    expect(second.record('trend', { lookback: 90 })).toBe(10);
+    expect(new TrialLedger(db, clock, SESSION_B).count()).toBe(10);
+  });
+
+  it('refuses a ledger whose trial was edited outside it', () => {
+    const { db } = chained();
+    db.exec('DROP TRIGGER v2_trials_no_update');
+    db.prepare("UPDATE v2_trials SET config = '{}' WHERE trial = 3").run();
+    expect(() => new TrialLedger(db, clock, SESSION_B)).toThrow(
+      'TrialLedger: trial #3 does not match its chain link; v2_trials was changed outside the ledger',
+    );
+  });
+
+  it('refuses a trial inserted outside the ledger', () => {
+    const { db } = chained();
+    db.prepare(
+      `INSERT INTO v2_trials (trial, candidate, config_hash, config, source, recorded_at)
+       VALUES (10, 'trend', 'h', '{}', 'v2', 't')`,
+    ).run();
+    expect(() => new TrialLedger(db, clock, SESSION_B)).toThrow(
+      'TrialLedger: trial #10 does not match its chain link',
+    );
+  });
+
+  it('refuses a ledger with a trial removed from the middle', () => {
+    const { db } = chained();
+    db.pragma('foreign_keys = OFF');
+    db.exec('DROP TRIGGER v2_trials_no_delete');
+    db.prepare('DELETE FROM v2_trials WHERE trial = 4').run();
+    expect(() => new TrialLedger(db, clock, SESSION_B)).toThrow(
+      'TrialLedger: trial #5 does not match its chain link',
+    );
+  });
+
+  it('refuses a ledger with its last trial removed but its link kept', () => {
+    const { db } = chained();
+    db.pragma('foreign_keys = OFF');
+    db.exec('DROP TRIGGER v2_trials_no_delete');
+    db.prepare('DELETE FROM v2_trials WHERE trial = 9').run();
+    expect(() => new TrialLedger(db, clock, SESSION_B)).toThrow(
+      'TrialLedger: v2_trial_chain holds 9 links for 8 trials',
+    );
+  });
+
+  it('links a ledger recorded before the chain existed, once, as the ledger would have', () => {
+    const { db: source, ledger } = chained();
+    const legacy = migratedMemoryStore();
+    const insert = legacy.prepare(
+      `INSERT INTO v2_trials (trial, candidate, config_hash, config, source, recorded_at)
+       VALUES (@trial, @candidate, @config_hash, @config, @source, @recorded_at)`,
+    );
+    for (const row of rows(source)) insert.run(row);
+    expect(links(legacy)).toEqual([]);
+
+    const reopened = new TrialLedger(legacy, clock, SESSION_B);
+    expect(links(legacy)).toEqual(links(source));
+    expect(reopened.chainHead()).toBe(ledger.chainHead());
+    expect(reopened.record('trend', { lookback: 90 })).toBe(10);
+    expect(new TrialLedger(legacy, clock, SESSION_B).count()).toBe(10);
+  });
+
+  it('leaves a legacy ledger unlinked when its open is refused', () => {
+    const { db: source } = chained();
+    const legacy = migratedMemoryStore();
+    const insert = legacy.prepare(
+      `INSERT INTO v2_trials (trial, candidate, config_hash, config, source, recorded_at)
+       VALUES (@trial, @candidate, @config_hash, @config, @source, @recorded_at)`,
+    );
+    for (const row of rows(source).slice(1)) insert.run({ ...row, trial: row.trial - 1 });
+    expect(() => new TrialLedger(legacy, clock, SESSION_B)).toThrow("is not Session B's");
+    expect(links(legacy)).toEqual([]);
+  });
+});
+
 describe('main', () => {
   it('keeps one research ledger per machine outside the checkout unless overridden', () => {
     expect(researchStorePath({})).toBe(
@@ -129,9 +237,11 @@ describe('main', () => {
       expect(main(join(directory, 'a', 'b', 'research.sqlite'))).toBe(0);
       const printed = JSON.parse(String(write.mock.calls[0]?.[0])) as {
         trials_counted: number;
+        chain_head: string;
         trials: { trial: number; source: string }[];
       };
       expect(printed.trials_counted).toBe(8);
+      expect(printed.chain_head).toMatch(/^[0-9a-f]{64}$/);
       expect(printed.trials.map((row) => row.source)).toEqual(
         Array.from({ length: 8 }, () => 'session-b'),
       );

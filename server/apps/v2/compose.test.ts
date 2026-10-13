@@ -13,6 +13,7 @@ import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { type CycleCompositionOptions, composeCycle } from './compose.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { CapitalConfigStore } from './risk/index.js';
+import { declaredCfdCosts } from './signal/index.js';
 
 const clock = new SimulatedClock(new Date('2026-09-25T12:00:00.000Z'));
 const flat = () => undefined;
@@ -63,6 +64,7 @@ function options(overrides: Partial<CycleCompositionOptions> = {}): CycleComposi
     dryRun: true,
     brokerMode: 'paper',
     halfSpreadBps: () => 5,
+    cfdCosts: declaredCfdCosts(),
     ...overrides,
   };
 }
@@ -274,13 +276,11 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     crossesSpread: false,
   });
 
-  it('refuses a CFD entry as cfd_resting_stop_unverified while that gate alone is unset', () => {
-    const composed = composeCycle(options({ market: richMarket }));
-    expect(request(composed)).toEqual({
-      size: 0,
-      order: undefined,
-      refusal: 'cfd_resting_stop_unverified',
-    });
+  it('approves a CFD entry through the declared gates and Saxo tariff models (#1916)', () => {
+    const result = request(composeCycle(options({ market: richMarket })));
+    expect(result).not.toHaveProperty('refusal');
+    expect(result.size).toBeGreaterThan(0);
+    expect(result.order).toBeDefined();
   });
 
   it('refuses a CFD entry with whatever the injected CFD gate names, even with a model', () => {
@@ -319,11 +319,11 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
   });
 
   it('refuses to compose when CFD entries can open but no cost model would price their exits', () => {
-    expect(() => composeCycle(options({ cfdEntryRefusal: () => undefined }))).toThrow(
-      /stranded \(#1850\)/,
-    );
+    expect(() => composeCycle(options({ cfdCosts: undefined }))).toThrow(/stranded \(#1850\)/);
     expect(() =>
-      composeCycle(options({ cfdEntryRefusal: () => 'cfd_resting_stop_unverified' })),
+      composeCycle(
+        options({ cfdCosts: undefined, cfdEntryRefusal: () => 'cfd_resting_stop_unverified' }),
+      ),
     ).not.toThrow();
   });
 
@@ -395,7 +395,9 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
   });
 
   it('throws when a CFD fill is priced with no model rather than fee-free', () => {
-    const composed = composeCycle(options());
+    const composed = composeCycle(
+      options({ cfdCosts: undefined, cfdEntryRefusal: () => 'cfd_resting_stop_unverified' }),
+    );
     expect(() => composed.executor.quoteSimulatedFill('saxo_cfd_gbp', fill('buy', 1, 1))).toThrow(
       'needs #1850',
     );

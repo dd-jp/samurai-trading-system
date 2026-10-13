@@ -18,6 +18,7 @@ import {
   journalledNewsSource,
   quotePerGbp,
   SqliteNewsLedger,
+  SqliteSplitReads,
   TABLE_VENUE_SESSIONS,
   type VenueSessionGate,
 } from './data/index.js';
@@ -43,11 +44,19 @@ import {
   JournalReplayBrokerBooks,
   type MirroredBook,
 } from './replay-broker.js';
+import {
+  replaySignals,
+  type SettledSignal,
+  type SignalsNotReplayed,
+  settledSignals,
+  signalDivergences,
+  signalsGuard,
+} from './replay-signals.js';
 import { journalledSpendCap } from './replay-spend-cap.js';
 import {
   ARM2_SLEEVE_ID,
   buildLlmPanel,
-  cfdEntryRefusal,
+  CFD_ENTRY_GATES,
   commonPrefixLength,
   DEBATE_SLEEVE_ID,
   declaredCfdCosts,
@@ -58,8 +67,11 @@ import {
   type ReplayMiss,
   ReplayTransport,
   type SecretSource,
+  SIGNALS_SLEEVE_ID,
   secretWireForms,
 } from './signal/index.js';
+import { type SplitCheckLedger, SqliteSplitChecks } from './split-checks.js';
+import { journalledSplitFeed } from './split-feed.js';
 
 const REPLAYED_SLEEVES: readonly string[] = [DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID];
 const LSE_REFUSAL_PREFIX = 'LSE leg refused: ';
@@ -100,6 +112,7 @@ export type Divergence =
       readonly tradingDate: string;
       readonly earlierRuns: readonly string[];
     }
+  | SignalsNotReplayed
   | BookDivergence;
 
 export interface ReplayResult {
@@ -108,6 +121,7 @@ export interface ReplayResult {
   readonly calls: number;
   readonly orders: number;
   readonly fills: number;
+  readonly signals: number;
   readonly skipped: readonly SkippedStage[];
   readonly divergences: readonly Divergence[];
 }
@@ -119,7 +133,6 @@ export interface ReplayInputs {
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly market: BarsMarketData;
   readonly catalogue: CfdCatalogue | undefined;
-  readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
   readonly halfSpreadBps: (instrument: string) => number;
   readonly cfdCosts?: CfdCosts | undefined;
   readonly venueSessions?: VenueSessionGate | undefined;
@@ -145,6 +158,48 @@ const LSE_REFUSAL_SQL = `
    WHERE trading_date = ? AND scope = 'data' AND parameter = 'SAXO_SESSION'
    ORDER BY refusal_id LIMIT 1`;
 
+const PARAMETER_REFUSALS_SQL = `
+  SELECT DISTINCT parameter FROM v2_refusals
+   WHERE trading_date = ? AND scope = 'parameter'`;
+
+// The signals processor's entry passes read clears live and journal the same entry block, so
+// only the daily cycle's books count here
+const RUN_START_BLOCKS_SQL = `
+  SELECT DISTINCT r.instrument FROM v2_refusals r
+   WHERE r.trading_date = ?
+     AND (r.parameter = 'SPLIT_EXIT_FREEZE'
+       OR (r.parameter = 'SPLIT_CROSSCHECK_BLOCK'
+         AND EXISTS (SELECT 1 FROM v2_books b WHERE b.book_id = r.book_id AND b.sleeve_id <> ?)))`;
+
+const NO_CLEAR_COUNTS = '';
+
+// The live freeze and entry block read clears as of the run's start, the rewound copy holds them
+// up to the day's first journalled row; a clear landing between the two blocked the run, so the
+// journalled block stands
+export function journalledSplitBlocks(
+  db: StoreHandle,
+  checks: SplitCheckLedger,
+  tradingDate: string,
+): SplitCheckLedger {
+  const rows = db.prepare(RUN_START_BLOCKS_SQL).all(tradingDate, SIGNALS_SLEEVE_ID) as {
+    instrument: string;
+  }[];
+  const blocked = new Set(rows.map((row) => row.instrument));
+  return {
+    record: (check) => checks.record(check),
+    block: (instrument, exchange, date, clearedBy) =>
+      checks.block(
+        instrument,
+        exchange,
+        date,
+        clearedBy !== undefined && blocked.has(instrument) ? NO_CLEAR_COUNTS : clearedBy,
+      ),
+    blockedBetween: (instrument, exchange, from, before) =>
+      checks.blockedBetween(instrument, exchange, from, before),
+    carried: (date) => checks.carried(date),
+  };
+}
+
 function journalledDecisions(db: StoreHandle, tradingDate: string): readonly JournalledDecision[] {
   const rows = db.prepare(DECISIONS_SQL).all(tradingDate) as JournalledDecision[];
   return rows.filter((row) => REPLAYED_SLEEVES.includes(row.sleeve_id));
@@ -160,6 +215,20 @@ export function journalledLseRefusal(db: StoreHandle, tradingDate: string): stri
   return row?.message.startsWith(LSE_REFUSAL_PREFIX)
     ? row.message.slice(LSE_REFUSAL_PREFIX.length)
     : row?.message;
+}
+
+export function journalledCfdEntryRefusal(
+  db: StoreHandle,
+  tradingDate: string,
+): string | undefined {
+  const rows = db.prepare(PARAMETER_REFUSALS_SQL).all(tradingDate) as { parameter: string }[];
+  const refused = new Set(rows.map((row) => row.parameter));
+  return CFD_ENTRY_GATES.find(({ parameter }) => refused.has(parameter.name))?.refusal;
+}
+
+function cfdGateOf(inputs: ReplayInputs): () => string | undefined {
+  const refusal = journalledCfdEntryRefusal(inputs.db, inputs.tradingDate);
+  return () => refusal;
 }
 
 function fieldsOf(decision: SleeveDecision): Record<string, unknown> {
@@ -294,7 +363,7 @@ function replaySleeves(
     news: journalledNewsSource(new SqliteNewsLedger(inputs.db), loggedNewsSource(calls)),
     clock: { now: () => new Date(`${inputs.tradingDate}T00:00:00.000Z`) },
     logger,
-    router: venueRouterFor(inputs.catalogue, inputs.cfdEntryRefusal ?? cfdEntryRefusal),
+    router: venueRouterFor(inputs.catalogue, cfdGateOf(inputs)),
     lseLegRefusal: journalledLseRefusal(inputs.db, inputs.tradingDate),
   });
 }
@@ -313,16 +382,17 @@ interface ReplayCycle {
   readonly sleeves: readonly Sleeve[];
   readonly day: JournalledDay;
   readonly startedAt: string;
+  readonly clock: SimulatedClock;
+  readonly signals: readonly SettledSignal[];
 }
 
 function replayComposition(replay: ReplayCycle): CycleComposition {
   const { inputs, copy, day } = replay;
   const { db, tradingDate, market } = inputs;
-  const gate = inputs.cfdEntryRefusal ?? cfdEntryRefusal;
   let composition: CycleComposition | undefined;
   composition = composeCycle({
     db: copy,
-    clock: new SimulatedClock(new Date(replay.startedAt)),
+    clock: replay.clock,
     logger: inputs.logger ?? SILENT,
     market,
     sleeves: replay.sleeves,
@@ -332,12 +402,17 @@ function replayComposition(replay: ReplayCycle): CycleComposition {
     halfSpreadBps: inputs.halfSpreadBps,
     cfdCosts: inputs.cfdCosts ?? declaredCfdCosts(),
     quotedCfdBorrowPerDay: quotedBorrowPerDayFrom(inputs.catalogue),
-    cfdEntryRefusal: gate,
+    cfdEntryRefusal: cfdGateOf(inputs),
     brokerMode: day.brokerMode,
     venueSessions: journalledSessions(
       db,
       tradingDate,
       inputs.venueSessions ?? TABLE_VENUE_SESSIONS,
+    ),
+    splitFeed: journalledSplitFeed(
+      new SqliteSplitReads(db),
+      journalledSplitBlocks(db, new SqliteSplitChecks(copy, replay.clock), tradingDate),
+      tradingDate,
     ),
     brokerAccess: (pricing) =>
       brokerAccessFor({
@@ -391,7 +466,37 @@ async function replayTrading(replay: ReplayCycle): Promise<{
     markedAt: day.markedAt,
     startedAt: day.startedAt,
   });
-  return { state, trading: divergences, counts, skipped };
+  return {
+    state,
+    trading: [...divergences, ...(await signalsPhase(replay, composition))],
+    counts,
+    skipped,
+  };
+}
+
+async function signalsPhase(replay: ReplayCycle, cycle: CycleComposition): Promise<Divergence[]> {
+  const { inputs, day, signals } = replay;
+  const guard = signalsGuard(signals, inputs.tradingDate, day.markedAt);
+  if (guard !== undefined) return [guard];
+  if (signals.length === 0 || day.markedAt === undefined) return [];
+  const window = {
+    journal: inputs.db,
+    copy: replay.copy,
+    tradingDate: inputs.tradingDate,
+    markedAt: day.markedAt,
+  };
+  await replaySignals(
+    {
+      ...window,
+      cycle,
+      clock: replay.clock,
+      startedAt: replay.startedAt,
+      constituents: inputs.constituents,
+      dryRun: day.dryRun,
+    },
+    signals,
+  );
+  return signalDivergences(window, signals);
 }
 
 function multipleRuns(
@@ -399,6 +504,7 @@ function multipleRuns(
   decisions: number,
   calls: number,
   earlierRuns: readonly string[],
+  signals: number,
 ): ReplayResult {
   const { tradingDate } = inputs;
   (inputs.logger ?? SILENT).log({
@@ -415,6 +521,7 @@ function multipleRuns(
     calls,
     orders: 0,
     fills: 0,
+    signals,
     skipped: [],
     divergences: [{ kind: 'multiple_runs', tradingDate, earlierRuns }],
   };
@@ -425,19 +532,24 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
   const rows = journalledDecisions(db, tradingDate);
   const calls = loggedCalls(db, tradingDate);
   const day = journalledDay(db, tradingDate);
+  const signals = settledSignals(db, tradingDate);
   if (rows.length === 0 && day.markedAt === undefined) {
+    const unmarked = signalsGuard(signals, tradingDate, undefined);
     return {
       tradingDate,
       decisions: 0,
       calls: calls.length,
       orders: 0,
       fills: 0,
+      signals: signals.length,
       skipped: [],
-      divergences: [{ kind: 'nothing_to_replay', tradingDate }],
+      divergences: [unmarked ?? { kind: 'nothing_to_replay', tradingDate }],
     };
   }
   const earlierRuns = earlierRunsThatActed(db, tradingDate);
-  if (earlierRuns.length > 0) return multipleRuns(inputs, rows.length, calls.length, earlierRuns);
+  if (earlierRuns.length > 0) {
+    return multipleRuns(inputs, rows.length, calls.length, earlierRuns, signals.length);
+  }
   const changed = inputChangesSince(db, tradingDate, inputs.bars, inputs.catalogue).map(
     (change): Divergence => ({ kind: 'input_changed_since', tradingDate, ...change }),
   );
@@ -455,12 +567,15 @@ export async function replayDay(inputs: ReplayInputs): Promise<ReplayResult> {
       sleeves,
       day,
       startedAt,
+      clock: new SimulatedClock(new Date(startedAt)),
+      signals,
     });
     return {
       tradingDate,
       decisions: rows.length,
       calls: calls.length,
       ...counts,
+      signals: signals.length,
       skipped,
       divergences: [...changed, ...state, ...divergencesOf(rows, replayed, log, trading)],
     };
@@ -539,6 +654,10 @@ const DESCRIBERS: DescriberOf = {
   llm_request: (divergence, redact) => describeMiss(divergence.miss, redact),
   multiple_runs: ({ tradingDate, earlierRuns }) =>
     `${tradingDate} ran more than once: ${earlierRuns.length} earlier run(s) acted before the run that marked it, so it is not replayed; review it by hand`,
+  signals_not_replayed: ({ tradingDate, reason, events }) =>
+    reason === 'unmarked'
+      ? `${tradingDate}: ${events} signal events are journalled but the day has no mark, so the signals passes are not replayed; review them by hand`
+      : `${tradingDate}: a signal event of the ${events} journalled precedes the day's mark, so the signals passes are not replayed; review them by hand`,
   call_not_replayed: ({ call }) =>
     `logged call ${call.id} (${call.traceId}, ${call.model}) was never requested`,
   book_state: (divergence) =>
@@ -590,7 +709,7 @@ function describeSkip({ stage, migration }: SkippedStage): string {
 }
 
 export function formatReplay(result: ReplayResult, redact: Redact): string {
-  const counted = `replay ${result.tradingDate}: ${result.decisions} journalled decisions, ${result.calls} logged calls, ${result.orders} orders, ${result.fills} fills`;
+  const counted = `replay ${result.tradingDate}: ${result.decisions} journalled decisions, ${result.calls} logged calls, ${result.orders} orders, ${result.fills} fills, ${result.signals} signal events`;
   const head = [counted, ...result.skipped.map(describeSkip)].join('\n');
   const [first] = result.divergences;
   if (first === undefined) return `${head}\nidentical`;

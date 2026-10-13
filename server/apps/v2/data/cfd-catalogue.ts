@@ -140,10 +140,12 @@ export function parseCfdCatalogue(text: string, sha256: string = sha256Of(text))
   return new CfdCatalogue({ asOf: body.asOf, instruments }, sha256);
 }
 
-export function loadCfdCatalogue(path: string): CfdCatalogue | undefined {
-  if (!existsSync(path)) return undefined;
-  const bytes = readFileSync(path);
+export function parseCfdCatalogueBytes(bytes: Uint8Array): CfdCatalogue {
   return parseCfdCatalogue(new TextDecoder().decode(bytes), sha256Of(bytes));
+}
+
+export function loadCfdCatalogue(path: string): CfdCatalogue | undefined {
+  return existsSync(path) ? parseCfdCatalogueBytes(readFileSync(path)) : undefined;
 }
 
 export function borrowCostPerYear(instrument: CfdInstrument): number | undefined {

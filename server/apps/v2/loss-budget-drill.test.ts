@@ -125,7 +125,7 @@ function drill(years: readonly number[] = [2026]): Drill {
     brokerMode: 'paper' as const,
     reconcileCashToleranceGbp: undefined,
     cashAnchors,
-    risk: new V2RiskGate({ books, capital, market, spec: () => SPEC }),
+    risk: new V2RiskGate({ books, capital, cfdSleeveIds: ['debate'], market, spec: () => SPEC }),
     executor: new V2OrderExecutor({
       brokers: {},
       simulatedBrokers: {

@@ -13,6 +13,7 @@ import {
   saxoCfdBorrow,
 } from '../data/index.js';
 import type { VolTargetSizing } from '../risk/index.js';
+import { ALL_PINS, JUDGE_PIN, type ModelPin, PRE_DIGEST_ALL_PINS, pinDigest } from './models.js';
 
 export const UNSET: unique symbol = Symbol('unset');
 
@@ -103,7 +104,7 @@ export const CFD_BORROW_MODEL = set<CfdBorrowModel>(
   '#1850',
   saxoCfdBorrow(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR),
 );
-export const CFD_RESTING_STOP_VERIFIED = unset<boolean>('CFD_RESTING_STOP_VERIFIED', '#1916');
+export const CFD_RESTING_STOP_VERIFIED = set<boolean>('CFD_RESTING_STOP_VERIFIED', '#1916', true);
 // Setting it is a new counted trial (CLAUDE.md), so it stays unset until David pre-declares the
 // target, window and sleeves; unset, every sleeve sizes exactly as before
 export const VOL_TARGET_SIZING = unset<VolTargetSizing>('VOL_TARGET_SIZING', '#1860');
@@ -127,11 +128,14 @@ export const CFD_ENTRY_GATES: readonly CfdEntryGate[] = [
   { parameter: CFD_RESTING_STOP_VERIFIED, refusal: 'cfd_resting_stop_unverified' },
 ];
 
+function withholds(parameter: Parameter<unknown>): boolean {
+  return parameter.value === UNSET || parameter.value === false;
+}
+
 export function cfdEntryRefusal(
   gates: readonly CfdEntryGate[] = CFD_ENTRY_GATES,
 ): string | undefined {
-  return gates.find(({ parameter }) => parameter.value === UNSET || parameter.value === false)
-    ?.refusal;
+  return gates.find(({ parameter }) => withholds(parameter))?.refusal;
 }
 
 type CfdCostParameters = { readonly [K in keyof CfdCosts]: Parameter<CfdCosts[K]> };
@@ -192,6 +196,7 @@ export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
 };
 
 export const ARM2_SLEEVE_ID = 'arm2';
+export const VOL_TARGET_TRIAL_SLEEVE_ID = 'arm2-vol-target';
 
 // #1773: arm 2 never routes a real order (its only book variant is not 'primary', so
 // `V2OrderExecutor.simulates()` always simulates it), so its capital share is notional —
@@ -235,12 +240,51 @@ export const SIGNALS_SLEEVE_SPEC: SleeveSpec = {
   ],
 };
 
+// doc 66 (f), #1858: the rules-based candidates and the signals sleeve stay CFD-free. David
+// 2026-10-11 (#2105): the vol-target trial arm counts as arm 2, so it shorts as its baseline does
+export const CFD_SLEEVE_IDS: readonly string[] = [
+  DEBATE_SLEEVE_ID,
+  ARM2_SLEEVE_ID,
+  VOL_TARGET_TRIAL_SLEEVE_ID,
+];
+
 // A sleeve missing here is a build gap, not a trading-state check
 export const SLEEVE_SPECS_BY_ID: Readonly<Record<string, SleeveSpec>> = {
   [DEBATE_SLEEVE_ID]: DEBATE_SLEEVE_SPEC,
   [ARM2_SLEEVE_ID]: ARM2_SLEEVE_SPEC,
   [SIGNALS_SLEEVE_ID]: SIGNALS_SLEEVE_SPEC,
 };
+
+// David 2026-10-04 and 2026-10-10 (#1747): a book resets only on its own pins; a no-veto shadow
+// calls no model, so it never resets
+export const SLEEVE_PINS_BY_ID: Readonly<Record<string, readonly ModelPin[]>> = {
+  [DEBATE_SLEEVE_ID]: ALL_PINS,
+  [ARM2_SLEEVE_ID]: [],
+  [SIGNALS_SLEEVE_ID]: [JUDGE_PIN],
+};
+
+const PRE_DIGEST_SLEEVE_PINS_BY_ID: Readonly<Record<string, readonly ModelPin[]>> = {
+  ...SLEEVE_PINS_BY_ID,
+  [DEBATE_SLEEVE_ID]: PRE_DIGEST_ALL_PINS,
+};
+
+function digestOf(
+  pinsById: Readonly<Record<string, readonly ModelPin[]>>,
+  sleeveId: string,
+  variant: string,
+): string | undefined {
+  const pins = pinsById[sleeveId];
+  if (pins === undefined) return undefined;
+  return pinDigest(variant === 'no-veto' ? [] : pins);
+}
+
+export function bookPinDigest(sleeveId: string, variant: string): string | undefined {
+  return digestOf(SLEEVE_PINS_BY_ID, sleeveId, variant);
+}
+
+export function bookPreDigestPinDigest(sleeveId: string, variant: string): string | undefined {
+  return digestOf(PRE_DIGEST_SLEEVE_PINS_BY_ID, sleeveId, variant);
+}
 
 export const MOVERS_MIN_DOLLAR_VOLUME_USD = 50_000_000;
 
@@ -264,3 +308,24 @@ export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
 ];
+
+export interface WithheldParameter {
+  readonly parameter: string;
+  readonly ticket: string;
+  readonly message: string;
+}
+
+// A gate set to false refuses exactly as an unset one does, so it is journalled too: replay reads
+// the CFD entry gate back from these rows (#2104)
+export function withheldParameters(
+  parameters: readonly Parameter<unknown>[] = CYCLE_LEVEL_PARAMETERS,
+): WithheldParameter[] {
+  return parameters.filter(withholds).map(({ name, ticket, value }) => ({
+    parameter: name,
+    ticket,
+    message:
+      value === false
+        ? `${name} is false: needs David (${ticket})`
+        : new UnsetParameterError(name, ticket).message,
+  }));
+}

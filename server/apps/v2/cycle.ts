@@ -9,6 +9,7 @@ import type {
   ControlReader,
   DecisionJournal,
   EntryApproval,
+  EntryQuote,
   EntryRoom,
   ExecutionRoute,
   JournalledOrder,
@@ -43,8 +44,10 @@ import { readBrokerCashActivities } from './cash-activities.js';
 import type { CashAnchorLedger } from './cash-anchor.js';
 import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
+  addDays,
   CALENDAR_REFERENCE,
   fillFxOf,
+  firstSessionOn,
   isFresh,
   londonDateOf,
   MAX_BAR_AGE_CALENDAR_DAYS,
@@ -63,7 +66,7 @@ import {
   type StepThrow,
   type ThrowFailure,
 } from './reconcile.js';
-import { CYCLE_LEVEL_PARAMETERS, isSet, UnsetParameterError } from './signal/index.js';
+import { bookPinDigest, withheldParameters } from './signal/index.js';
 import {
   bracketExit,
   type LimitEntryOutcome,
@@ -77,6 +80,22 @@ import {
   type SplitReading,
   splitRatioAcross,
 } from './split.js';
+import { checkOf, type SplitRequest } from './split-checks.js';
+import { crossCheckSplits, exchangeOf, type SplitVerdict } from './split-crosscheck.js';
+import type { SplitFeed } from './split-feed.js';
+
+interface HeldBars {
+  readonly anchorDate: string;
+  readonly bars: readonly V2Bar[];
+  readonly latest: V2Bar;
+}
+
+const NO_SPLIT: SplitReading = { ratio: 1, steps: [], rejected: [] };
+const SPLIT_TICKET = '#2025';
+
+function splitKey(instrument: string, exchange: string): string {
+  return `${exchange}:${instrument}`;
+}
 
 interface CashInLieu {
   readonly fraction: number;
@@ -107,6 +126,7 @@ export interface CycleDeps {
   readonly venueSessions?: VenueSessionGate | undefined;
   readonly runStartedAt?: Date | undefined;
   readonly atomically?: (<T>(work: () => T) => T) | undefined;
+  readonly splitFeed?: SplitFeed | undefined;
 }
 
 export interface BookReport {
@@ -225,6 +245,11 @@ function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' ? value : undefined;
 }
 
+function journalledQuoteFill(payload: Record<string, unknown>): number | null | undefined {
+  const quote = payload.entry_quote as EntryQuote | undefined;
+  return quote?.fill;
+}
+
 function nativeRearmPrices(journal: DecisionJournal, held: Position): RearmPrices | undefined {
   const entry = journal.orderFor(held.clientOrderId);
   const stop = entry === undefined ? undefined : numberOrUndefined(entry.payload.stop);
@@ -289,6 +314,8 @@ class Cycle {
   readonly #entriesBlocked = new Set<string>();
   readonly #unrescaled = new Set<string>();
   readonly #unrescaledBooks = new Set<string>();
+  readonly #splitRequested = new Set<string>();
+  readonly #exitsFrozen = new Set<string>();
   readonly tally: Tally = {
     submitted: 0,
     simulated: 0,
@@ -508,15 +535,85 @@ class Cycle {
   }
 
   splitBefore(held: Position, fillDate: string): SplitReading {
+    const window = this.heldBars(held, fillDate);
+    if (window === undefined) return NO_SPLIT;
+    const verdict = this.splitVerdict(held, window);
+    if (verdict === undefined) return splitRatioAcross(window.bars);
+    return verdict.kind === 'agree' ? verdict.reading : NO_SPLIT;
+  }
+
+  heldBars(held: Position, through?: string): HeldBars | undefined {
     const anchorDate =
       held.splitAnchorDate ??
       this.deps.market.lastBarBefore(held.instrument, held.openedDate)?.date;
-    if (anchorDate === undefined) return splitRatioAcross([]);
+    if (anchorDate === undefined) return undefined;
     const days = calendarDaysBetween(anchorDate, this.tradingDate);
     const bars = this.deps.market
       .barsBefore(held.instrument, this.tradingDate, days)
-      .filter((dated) => dated.date >= anchorDate && dated.date <= fillDate);
-    return splitRatioAcross(bars);
+      .filter(
+        (dated) => dated.date >= anchorDate && (through === undefined || dated.date <= through),
+      );
+    const latest = bars.at(-1);
+    return latest === undefined ? undefined : { anchorDate, bars, latest };
+  }
+
+  splitVerdict(held: Position, window: HeldBars): SplitVerdict | undefined {
+    const feed = this.deps.splitFeed;
+    if (feed === undefined) return undefined;
+    const exchange = exchangeOf(held.venue);
+    return crossCheckSplits(
+      feed.sources(held.instrument, exchange, this.tradingDate),
+      { after: window.anchorDate, through: window.latest.date },
+      splitRatioAcross(window.bars),
+    );
+  }
+
+  heldPositions(): Position[] {
+    return this.deps.registry
+      .ids()
+      .flatMap((id) => this.deps.books.forSleeve(id))
+      .flatMap((book) => this.deps.books.positions(book.id));
+  }
+
+  splitRequests(feed: SplitFeed): SplitRequest[] {
+    const held = this.heldPositions().flatMap((position) => {
+      const window = this.heldBars(position);
+      if (window === undefined) return [];
+      return [
+        {
+          instrument: position.instrument,
+          exchange: exchangeOf(position.venue),
+          after: window.anchorDate,
+        },
+      ];
+    });
+    return [...feed.checks.carried(this.tradingDate), ...held];
+  }
+
+  unrequestedSplits(feed: SplitFeed): SplitRequest[] {
+    return this.splitRequests(feed).filter((request) => {
+      const key = `${splitKey(request.instrument, request.exchange)}:${request.after}`;
+      if (this.#splitRequested.has(key)) return false;
+      this.#splitRequested.add(key);
+      return true;
+    });
+  }
+
+  // Runs before the fill sweep and again after it books new positions; a refresh that throws
+  // leaves the day's reads short, so each check it missed blocks
+  async refreshSplitReads(): Promise<void> {
+    const feed = this.deps.splitFeed;
+    if (feed === undefined) return;
+    try {
+      const requests = this.unrequestedSplits(feed);
+      if (requests.length > 0) await feed.refresh(requests, this.tradingDate);
+    } catch (error) {
+      this.log(
+        'error',
+        'v2_split_feed_refresh_threw',
+        `split feed refresh threw: ${describeThrownSafely(error)}`,
+      );
+    }
   }
 
   // Alpaca re-reports each order's running filled_qty and average price under one order id
@@ -581,6 +678,7 @@ class Cycle {
         thrown.push(...this.rescaleBook(book));
     }
     if (thrown.length > 0) throw thrown[0];
+    this.checkCarriedSplits();
   }
 
   rescaleBook(book: BookSpec): unknown[] {
@@ -618,27 +716,12 @@ class Cycle {
   }
 
   rescaleForSplit(book: BookSpec, held: Position): void {
-    const anchorDate =
-      held.splitAnchorDate ??
-      this.deps.market.lastBarBefore(held.instrument, held.openedDate)?.date;
-    if (anchorDate === undefined) return;
-    const days = calendarDaysBetween(anchorDate, this.tradingDate);
-    const bars = this.deps.market
-      .barsBefore(held.instrument, this.tradingDate, days)
-      .filter((dated) => dated.date >= anchorDate);
-    const latest = bars.at(-1);
-    if (latest === undefined) return;
-    const reading = splitRatioAcross(bars);
-    const { ratio, rejected } = reading;
-    for (const step of rejected) {
-      this.log(
-        'warn',
-        'v2_split_implausible',
-        `${book.id} ${held.instrument}: adjustment step ${step.step} on ${step.date} with adjusted close gap ${step.adjustedGap} is a data discontinuity, not a split; no rescale`,
-      );
-    }
+    const window = this.heldBars(held);
+    if (window === undefined) return;
+    const reading = this.journalledSplit(book.id, held, window);
+    const { ratio } = reading;
     if (ratio === 1) return;
-    const qty = this.splitHeld(book.id, held, reading, 'detector', latest.date);
+    const qty = this.splitHeld(book.id, held, reading, 'detector', window.latest.date);
     this.log(
       'info',
       'v2_split_rescaled',
@@ -646,6 +729,115 @@ class Cycle {
     );
     if (!this.deps.executor.simulates(routeOf(book, held.venue))) {
       this.alertBrokerSplit(book.id, held, ratio, qty);
+    }
+  }
+
+  journalledSplit(bookId: string, held: Position, window: HeldBars): SplitReading {
+    const detected = splitRatioAcross(window.bars);
+    for (const step of detected.rejected) {
+      this.log(
+        'warn',
+        'v2_split_implausible',
+        `${bookId} ${held.instrument}: adjustment step ${step.step} on ${step.date} with adjusted close gap ${step.adjustedGap} is a data discontinuity, not a split; no rescale`,
+      );
+    }
+    const verdict = this.splitVerdict(held, window);
+    if (verdict === undefined) return this.unsetFeedSplit(bookId, held, detected);
+    this.recordSplitCheck(held, window, verdict);
+    if (verdict.kind === 'block') {
+      this.journalSplitBlock(bookId, held, verdict);
+      return NO_SPLIT;
+    }
+    for (const step of verdict.unconfirmed) {
+      this.log(
+        'warn',
+        'v2_split_bar_step_unconfirmed',
+        `${bookId} ${held.instrument}: bar step x${step.ratio} on ${step.date} has no matching EODHD split; no rescale from it`,
+      );
+    }
+    return verdict.reading;
+  }
+
+  // David, 2026-10-12 (#2025): with no EODHD key the bar step still rescales, and says so
+  unsetFeedSplit(bookId: string, held: Position, detected: SplitReading): SplitReading {
+    if (detected.ratio !== 1) {
+      this.log(
+        'warn',
+        'v2_split_feed_unset',
+        `${bookId} ${held.instrument}: x${detected.ratio} rescale from the bar step alone; the EODHD split feed is unset`,
+      );
+    }
+    return detected;
+  }
+
+  recordSplitCheck(held: Position, window: HeldBars, verdict: SplitVerdict): void {
+    const check = {
+      tradingDate: this.tradingDate,
+      instrument: held.instrument,
+      exchange: exchangeOf(held.venue),
+      window: { after: window.anchorDate, through: window.latest.date },
+    };
+    (this.deps.splitFeed as SplitFeed).checks.record(checkOf(check, verdict));
+  }
+
+  journalSplitBlock(
+    bookId: string,
+    held: Position,
+    verdict: Extract<SplitVerdict, { kind: 'block' }>,
+  ): void {
+    const message = `${bookId} ${held.instrument}: split sources ${verdict.reason} (${verdict.detail}); no rescale, entries blocked until the sources agree or David clears it`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'data',
+      parameter: 'SPLIT_CROSSCHECK',
+      ticket: SPLIT_TICKET,
+      message,
+      book_id: bookId,
+      instrument: held.instrument,
+    });
+    this.refusals.push(message);
+    this.log('error', 'v2_split_crosscheck_block', message);
+  }
+
+  // Unheld instruments still blocked are checked too, so their block lifts once the sources agree
+  checkCarriedSplits(): void {
+    const feed = this.deps.splitFeed;
+    if (feed === undefined) return;
+    const held = new Set(this.heldSplitKeys());
+    for (const request of feed.checks.carried(this.tradingDate)) {
+      if (held.has(splitKey(request.instrument, request.exchange))) continue;
+      this.checkCarried(feed, request);
+    }
+  }
+
+  heldSplitKeys(): string[] {
+    return this.heldPositions().map((held) => splitKey(held.instrument, exchangeOf(held.venue)));
+  }
+
+  checkCarried(feed: SplitFeed, request: SplitRequest): void {
+    const window = { after: request.after, through: addDays(this.tradingDate, -1) };
+    const verdict = crossCheckSplits(
+      feed.sources(request.instrument, request.exchange, this.tradingDate),
+      window,
+      NO_SPLIT,
+    );
+    feed.checks.record(
+      checkOf(
+        {
+          tradingDate: this.tradingDate,
+          instrument: request.instrument,
+          exchange: request.exchange,
+          window,
+        },
+        verdict,
+      ),
+    );
+    if (verdict.kind === 'block') {
+      this.log(
+        'error',
+        'v2_split_crosscheck_block',
+        `${request.instrument} (${request.exchange}): split sources ${verdict.reason} (${verdict.detail}); entries stay blocked until the sources agree or David clears it`,
+      );
     }
   }
 
@@ -786,6 +978,7 @@ class Cycle {
     const side = order.side as OrderSide;
     const daysOpen = calendarDaysBetween(order.trading_date, this.tradingDate);
     const bars = this.barsSince(order);
+    if (this.fillDayBarMissing(order, bars, daysOpen)) return;
     const ratios = cumulativeSplitRatios(
       this.deps.market.lastBarBefore(order.instrument, order.trading_date),
       bars,
@@ -796,6 +989,7 @@ class Cycle {
         limit,
         stop: numberOrUndefined(order.payload.stop),
         trigger: numberOrUndefined(order.payload.trigger),
+        quoteFill: journalledQuoteFill(order.payload),
       },
       bars.map((bar, index) => ({ ...bar, rawClose: bar.rawClose * (ratios[index] as number) })),
     );
@@ -811,6 +1005,41 @@ class Cycle {
       ratio: ratios.at(-1) as number,
       date: bars.at(-1)?.date as string,
     });
+  }
+
+  // Postmortem §2 (#2127): the first bar is taken as the fill day, so a later bar must never
+  // stand in for a missing one
+  fillDayBarMissing(order: JournalledOrder, bars: readonly V2Bar[], daysOpen: number): boolean {
+    const [first] = bars;
+    if (first === undefined) return false;
+    const expected = firstSessionOn(order.venue as Venue, order.trading_date, this.tradingDate);
+    if (first.date === expected) return false;
+    this.deferEntry(order, daysOpen > MAX_PENDING_CALENDAR_DAYS, {
+      first: first.date,
+      expected: expected ?? 'none',
+    });
+    return true;
+  }
+
+  deferEntry(
+    order: JournalledOrder,
+    expired: boolean,
+    dates: { readonly first: string; readonly expected: string },
+  ): void {
+    if (expired) this.deps.journal.markCancelled(order.client_order_id, this.tradingDate);
+    else this.#pendingEntries.add(positionKey(order.book_id, order.instrument));
+    const message = `${order.book_id} ${order.instrument}: simulated entry ${order.client_order_id} ${expired ? 'cancelled' : 'not booked'}, its first bar is ${dates.first}, not the fill session ${dates.expected}`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'fill',
+      parameter: 'FILL_DAY_BAR',
+      ticket: '#2127',
+      message,
+      book_id: order.book_id,
+      instrument: order.instrument,
+    });
+    this.refusals.push(message);
+    this.log('error', 'v2_fill_day_bar_missing', message);
   }
 
   // The order and its stop are in the units it was priced in, the position book in the latest
@@ -857,15 +1086,15 @@ class Cycle {
     units: { readonly ratio: number; readonly date: string },
   ): void {
     const held = this.deps.books.position(order.book_id, order.instrument);
-    if (outcome.stoppedAt !== undefined && held !== undefined) {
-      this.simulatedExit(
-        order.book_id,
-        held,
-        outcome.stoppedAt / units.ratio,
-        true,
-        'stop_on_entry_bar',
-      );
-    }
+    if (outcome.stoppedAt === undefined || held === undefined) return;
+    if (this.splitFrozen(order.book_id, held)) return;
+    this.simulatedExit(
+      order.book_id,
+      held,
+      outcome.stoppedAt / units.ratio,
+      true,
+      'stop_on_entry_bar',
+    );
   }
 
   // An add-on books qty x ratio in the latest bar's units, which the broker would floor too
@@ -936,15 +1165,33 @@ class Cycle {
     const order = this.deps.journal.orderFor(held.exitClientOrderId);
     if (
       order === undefined ||
-      !(SIMULATED_OUTCOMES as ReadonlySet<JournalledOutcome>).has(order.outcome)
+      !(SIMULATED_OUTCOMES as ReadonlySet<JournalledOutcome>).has(order.outcome) ||
+      this.splitFrozen(order.book_id, held)
     )
       return;
-    const price = simulateMarketExit(this.barsSince(order));
+    const price = simulateMarketExit(this.exitBars(order, held));
     if (price === undefined) {
       this.fillPendingExitAtLastClose(order, held);
       return;
     }
     this.settleExitFill(order, held, price);
+  }
+
+  // A flatten frozen by a split block fills on the latest bar, the one the resume rescale is in
+  // units of; an earlier bar may be in pre-split units
+  exitBars(order: JournalledOrder, held: Position): readonly V2Bar[] {
+    const bars = this.barsSince(order);
+    const feed = this.deps.splitFeed;
+    if (feed === undefined) return bars;
+    const exchange = exchangeOf(held.venue);
+    return feed.checks.blockedBetween(
+      held.instrument,
+      exchange,
+      order.trading_date,
+      this.tradingDate,
+    )
+      ? bars.slice(-1)
+      : bars;
   }
 
   settleExitFill(order: JournalledOrder, held: Position, price: number): boolean {
@@ -1487,7 +1734,10 @@ class Cycle {
   ): Promise<void> {
     if (this.rescaleThrew(book.id, held.instrument)) return;
     await this.resumePendingExit(book, held);
-    if (this.deps.executor.simulates(routeOf(book, held.venue))) {
+    if (
+      this.deps.executor.simulates(routeOf(book, held.venue)) &&
+      !this.splitFrozen(book.id, held)
+    ) {
       this.simulatedBracketExit(book, held);
       this.simulatedEndedSeriesExit(book.id, held.instrument);
     }
@@ -1551,7 +1801,7 @@ class Cycle {
       this.deps.journal.recordOrder({
         ...row,
         outcome: refused,
-        payload: this.entryPayload(decision, approval, side, approval.refusal, false),
+        payload: this.entryPayload(book, decision, approval, side, approval.refusal, false),
       });
       return refused;
     }
@@ -1561,7 +1811,7 @@ class Cycle {
     this.deps.journal.recordOrder({
       ...row,
       outcome: 'pending',
-      payload: this.entryPayload(decision, approval, side, '', sent),
+      payload: this.entryPayload(book, decision, approval, side, '', sent),
     });
     const submission = await this.deps.executor.submit(approval.order);
     this.count(submission.outcome);
@@ -1569,6 +1819,7 @@ class Cycle {
       clientOrderId,
       submission.outcome,
       this.entryPayload(
+        book,
         decision,
         approval,
         side,
@@ -1580,6 +1831,7 @@ class Cycle {
   }
 
   entryPayload(
+    book: BookSpec,
     decision: SleeveDecision,
     approval: EntryApproval,
     side: OrderSide,
@@ -1607,9 +1859,11 @@ class Cycle {
           )
         : undefined,
       trigger: decision.entry_trigger,
+      entry_quote: decision.entry_quote,
       stop: decision.stop_price,
       target: approval.order?.kind === 'bracket_entry' ? approval.order.target : undefined,
       approval: approval.order?.approvalId,
+      pin_digest: bookPinDigest(book.sleeve, book.variant),
     };
   }
 
@@ -1820,6 +2074,82 @@ class Cycle {
     this.refusals.push(message);
   }
 
+  // David, 2026-10-09 (#2025): a split the sources disagree on blocks entries; broker exits still run
+  withoutSplitBlocked(
+    book: BookSpec,
+    decisions: readonly SleeveDecision[],
+    clearedBy?: string,
+  ): SleeveDecision[] {
+    const feed = this.deps.splitFeed;
+    if (feed === undefined) return [...decisions];
+    return decisions.filter((proposed) => {
+      if (!isEntryAction(proposed)) return true;
+      const exchange = exchangeOf(proposed.venue);
+      const block = feed.checks.block(proposed.instrument, exchange, this.tradingDate, clearedBy);
+      if (block === undefined) return true;
+      this.journalSplitBlocked(book, proposed, `${block.reason} since ${block.since}`);
+      return false;
+    });
+  }
+
+  // Build note (#2126): the daily cycle's entries count clears as of the run's start, as its exits
+  // do; an event-driven entry pass reads them live, and its replay restores them to the event
+  withoutSplitBlockedAtStart(
+    book: BookSpec,
+    decisions: readonly SleeveDecision[],
+  ): SleeveDecision[] {
+    return this.withoutSplitBlocked(book, decisions, this.runStartedAt.toISOString());
+  }
+
+  // David, 2026-10-12 (#2025): a blocked line's simulated exits freeze. Build note: clears count
+  // as of the run's start, so a mid-run clear thaws next run; replay holds the journalled freeze
+  splitFrozen(bookId: string, held: Position): boolean {
+    const feed = this.deps.splitFeed;
+    if (feed === undefined) return false;
+    const block = feed.checks.block(
+      held.instrument,
+      exchangeOf(held.venue),
+      this.tradingDate,
+      this.runStartedAt.toISOString(),
+    );
+    if (block === undefined) return false;
+    this.journalExitFreeze(bookId, held, `${block.reason} since ${block.since}`);
+    return true;
+  }
+
+  journalExitFreeze(bookId: string, held: Position, why: string): void {
+    const key = positionKey(bookId, held.instrument);
+    if (this.#exitsFrozen.has(key)) return;
+    this.#exitsFrozen.add(key);
+    const message = `${bookId} ${held.instrument}: simulated exits frozen, split sources ${why}`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'exit',
+      parameter: 'SPLIT_EXIT_FREEZE',
+      ticket: SPLIT_TICKET,
+      message,
+      book_id: bookId,
+      instrument: held.instrument,
+    });
+    this.refusals.push(message);
+    this.log('warn', 'v2_split_exit_frozen', message);
+  }
+
+  journalSplitBlocked(book: BookSpec, proposed: SleeveDecision, why: string): void {
+    this.deps.journal.recordDecision(book.id, this.tradingDate, vetoApplied(book, proposed), 0);
+    const message = `${book.id} ${proposed.instrument}: entry blocked, split sources ${why}`;
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'entry',
+      parameter: 'SPLIT_CROSSCHECK_BLOCK',
+      ticket: SPLIT_TICKET,
+      message,
+      book_id: book.id,
+      instrument: proposed.instrument,
+    });
+    this.refusals.push(message);
+  }
+
   journalSizingRefusal(book: BookSpec, decision: SleeveDecision, refusal?: string): void {
     const parameter = SIZING_REFUSAL_PARAMETERS[refusal ?? ''];
     if (parameter === undefined) return;
@@ -1955,10 +2285,12 @@ const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   fx_year_start_stale: 'FX_YEAR_START_COVERAGE',
   short_requires_cfd: 'CFD_VENUE_ROUTE',
   long_on_cfd: 'CFD_VENUE_ROUTE',
+  cfd_sleeve_not_allowed: 'CFD_VENUE_ROUTE',
 };
 
 const SIZING_REFUSAL_TICKETS: Readonly<Record<string, string>> = {
   fx_year_start_stale: '#2009',
+  cfd_sleeve_not_allowed: '#1858',
 };
 
 function recordRefusal(
@@ -1991,15 +2323,8 @@ function recordFxRefusal(deps: CycleDeps, tradingDate: string, refusals: string[
 
 function cycleRefusals(deps: CycleDeps, tradingDate: string, macro: MacroGateVerdict): string[] {
   const refusals: string[] = [];
-  for (const parameter of CYCLE_LEVEL_PARAMETERS) {
-    if (isSet(parameter)) continue;
-    const { message } = new UnsetParameterError(parameter.name, parameter.ticket);
-    recordRefusal(deps, tradingDate, refusals, {
-      scope: 'parameter',
-      parameter: parameter.name,
-      ticket: parameter.ticket,
-      message,
-    });
+  for (const withheld of withheldParameters()) {
+    recordRefusal(deps, tradingDate, refusals, { scope: 'parameter', ...withheld });
   }
   const capital = deps.risk.capitalRefusal(tradingDate);
   if (capital !== undefined) {
@@ -2139,7 +2464,10 @@ const syncSteps = (): readonly SyncStep[] => [
   {
     event: 'v2_split_rescale_threw',
     what: 'split rescale',
-    run: (cycle) => cycle.rescaleSplitPositions(),
+    run: async (cycle) => {
+      await cycle.refreshSplitReads();
+      cycle.rescaleSplitPositions();
+    },
   },
   {
     event: 'v2_entry_cancel_threw',
@@ -2165,6 +2493,7 @@ async function syncBooksThenReconcile(
   cycle: Cycle,
   tradingDate: string,
 ): Promise<ReconcileOutcome> {
+  await cycle.refreshSplitReads();
   const thrown = await syncStepThrows(cycle);
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
@@ -2202,7 +2531,10 @@ async function tradeSleeveBooks(
   for (const book of books) {
     await cycle.cancelStaleEntries(book);
     await cycle.exits(book, decisions);
-    await cycle.entries(book, cycle.withoutSittingOut(book, decisions));
+    await cycle.entries(
+      book,
+      cycle.withoutSplitBlockedAtStart(book, cycle.withoutSittingOut(book, decisions)),
+    );
   }
   return [...books];
 }
@@ -2288,7 +2620,7 @@ export async function runEntryPass(deps: CycleDeps, pass: EntryPass): Promise<En
   );
   cycle.blockEntries({ blockedBookIds: pass.blockedBookIds, refusals: [] });
   for (const book of deps.books.forSleeve(pass.sleeveId)) {
-    await cycle.entries(book, pass.decisionsFor(book));
+    await cycle.entries(book, cycle.withoutSplitBlocked(book, pass.decisionsFor(book)));
   }
   const { tally } = cycle;
   return {

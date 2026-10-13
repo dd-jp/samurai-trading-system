@@ -8,6 +8,7 @@ import type { AnthropicMessageRequest } from '../../shared/debate/index.js';
 import type { DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
+import { EvidenceReader } from './api/evidence.js';
 import type { VenueSessionGate } from './data/index.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from './execution/alpaca/alpaca-client.js';
 import { composeV2Root } from './index.js';
@@ -15,6 +16,7 @@ import { type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
 import { ScriptedTransport } from './signal/index.js';
+import { ALL_PINS, pinDigest } from './signal/models.js';
 
 const ORIGIN = Date.UTC(2026, 0, 1);
 const dateAt = (day: number) => new Date(ORIGIN + day * 86_400_000).toISOString().slice(0, 10);
@@ -54,17 +56,22 @@ interface Broker {
 function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient {
   const orders: AlpacaOrder[] = [];
   const filledQty = (order: AlpacaOrder) => Math.floor(Number(order.qty) * broker.filledShare);
+  const targetStatus = (filled: boolean): string => {
+    if (broker.stopFilledAt !== undefined) return 'canceled';
+    return filled ? 'new' : 'held';
+  };
   const view = (order: AlpacaOrder): AlpacaOrder => {
     const qty = filledQty(order);
+    const filled = qty === Number(order.qty);
     const [target, stop] = order.legs as [Leg, Leg];
     return {
       ...order,
-      status: qty < Number(order.qty) ? 'partially_filled' : 'filled',
+      status: filled ? 'filled' : 'partially_filled',
       filled_qty: String(qty),
       filled_avg_price: qty > 0 ? (order.limit_price ?? null) : null,
       filled_at: qty > 0 ? clock.now().toISOString() : null,
       legs: [
-        target,
+        { ...target, status: targetStatus(filled) },
         {
           ...stop,
           ...(broker.stopFilledAt === undefined
@@ -85,6 +92,9 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
       const id = `alp-${orders.length + 1}`;
       const leg = (suffix: string, type: Leg['type']): Leg => ({
         id: `${id}-${suffix}`,
+        client_order_id: `${id}-${suffix}-uuid`,
+        side: request.side === 'buy' ? 'sell' : 'buy',
+        qty: request.qty,
         type,
         status: 'held',
         filled_qty: '0',
@@ -104,7 +114,7 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
         filled_at: null,
         limit_price: request.limit_price,
         legs: [
-          leg('tp', 'limit'),
+          { ...leg('tp', 'limit'), limit_price: request.take_profit.limit_price },
           { ...leg('sl', 'stop'), stop_price: request.stop_loss.stop_price },
         ],
       };
@@ -126,21 +136,28 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
     cancelOrder: vi.fn().mockResolvedValue(undefined),
     listOpenOrders: vi.fn(() =>
       Promise.resolve(
-        held().map((order) => ({
-          ...order,
-          id: `${order.id}-sl`,
-          client_order_id: `${order.client_order_id}-stop`,
-          side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
-          type: 'stop',
-          order_class: 'simple',
-          status: 'new',
-          qty: String(filledQty(order)),
-          filled_qty: '0',
-          stop_price: order.legs?.[1]?.stop_price ?? null,
-        })),
+        orders.flatMap((order) =>
+          (view(order).legs ?? [])
+            .filter((leg) => leg.status === 'new')
+            .map((leg) => ({
+              ...leg,
+              client_order_id: leg.client_order_id ?? leg.id,
+              symbol: order.symbol,
+              side: leg.side ?? order.side,
+              qty: leg.qty ?? order.qty,
+              order_class: 'bracket',
+            })),
+        ),
       ),
     ),
-    listOrderHistory: vi.fn().mockResolvedValue([]),
+    listOrderHistory: vi.fn((symbols: readonly string[]) => {
+      const history = orders.filter((order) => symbols.includes(order.symbol)).map(view);
+      if (broker.stopAtReconcile) {
+        broker.stopAtReconcile = false;
+        broker.stopFilledAt = clock.now().toISOString();
+      }
+      return Promise.resolve(history);
+    }),
     getPositions: vi.fn(() =>
       Promise.resolve(
         held().map((order) => ({
@@ -151,13 +168,7 @@ function paperAlpaca(clock: SimulatedClock, broker: Broker): AlpacaBrokerClient 
         })),
       ),
     ),
-    getAccount: vi.fn(() => {
-      if (broker.stopAtReconcile) {
-        broker.stopAtReconcile = false;
-        broker.stopFilledAt = clock.now().toISOString();
-      }
-      return Promise.resolve({ cash: '100000', equity: '100000' });
-    }),
+    getAccount: vi.fn().mockResolvedValue({ cash: '100000', equity: '100000' }),
   };
 }
 
@@ -337,6 +348,91 @@ describe('replay of a paper store against journalled Alpaca fills', () => {
       const result = await replayFromFiles({ ...options, storePath: before, tradingDate });
       expect(result.divergences).toEqual([]);
     }
+  });
+
+  it('journals each book its own sleeve pin digest on every entry (#1747)', () => {
+    expect(
+      journalRows(
+        `SELECT book_id, json_extract(payload, '$.pin_digest') AS pin_digest FROM v2_orders
+          WHERE leg = 'entry' AND trading_date = '${ENTRY_DAY}' ORDER BY book_id`,
+      ),
+    ).toEqual([
+      { book_id: 'arm2/technical-only', pin_digest: pinDigest([]) },
+      { book_id: 'debate/no-macro-gate', pin_digest: pinDigest(ALL_PINS) },
+      { book_id: 'debate/primary', pin_digest: pinDigest(ALL_PINS) },
+    ]);
+  });
+
+  it('counts the closed trade toward G1 under the current pins, and none after a pin swap (#1747)', () => {
+    const tradeCount = (path: string) => {
+      const db = openSharedStore(path);
+      try {
+        const count = new EvidenceReader(db, new SimulatedClock(new Date())).read().trade_count;
+        if (count.status !== 'fed') throw new Error(`trade count ${count.status}`);
+        return count.books.find((book) => book.book_id === 'debate/primary');
+      } finally {
+        db.close();
+      }
+    };
+    const current = tradeCount(options.storePath);
+    expect(current?.closed_trades).toBeGreaterThan(0);
+    expect(current?.by_model_pins).toEqual([
+      { pin_digest: pinDigest(ALL_PINS), closed_trades: current?.closed_trades },
+    ]);
+    const swapped = join(directory, 'pin-swap.sqlite');
+    copyFileSync(options.storePath, swapped);
+    const db = new BetterSqlite3(swapped);
+    try {
+      db.prepare(`UPDATE v2_orders SET payload = json_set(payload, '$.pin_digest', 'old')
+                   WHERE json_extract(payload, '$.pin_digest') IS NOT NULL`).run();
+    } finally {
+      db.close();
+    }
+    expect(tradeCount(swapped)).toMatchObject({
+      closed_trades: 0,
+      by_entry_offset: current?.by_entry_offset,
+      by_model_pins: [{ pin_digest: 'old', closed_trades: current?.closed_trades }],
+    });
+  });
+
+  it('replays a day journalled before #1747, whose entries carry no pin digest, identical', async () => {
+    const before = join(directory, 'before-1747.sqlite');
+    copyFileSync(options.storePath, before);
+    const db = new BetterSqlite3(before);
+    try {
+      const stripped = db
+        .prepare(`UPDATE v2_orders SET payload = json_remove(payload, '$.pin_digest')`)
+        .run();
+      expect(stripped.changes).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+    for (const tradingDate of [ENTRY_DAY, FILL_DAY, STOP_DAY]) {
+      const result = await replayFromFiles({ ...options, storePath: before, tradingDate });
+      expect(result.divergences).toEqual([]);
+    }
+  });
+
+  it('holds a journalled pin digest to the replayed one', async () => {
+    const swapped = join(directory, 'replay-pin-swap.sqlite');
+    copyFileSync(options.storePath, swapped);
+    const db = new BetterSqlite3(swapped);
+    try {
+      db.prepare(`UPDATE v2_orders SET payload = json_set(payload, '$.pin_digest', 'old')
+                   WHERE trading_date = ? AND book_id = 'debate/primary' AND leg = 'entry'`).run(
+        ENTRY_DAY,
+      );
+    } finally {
+      db.close();
+    }
+    const result = await replayFromFiles({
+      ...options,
+      storePath: swapped,
+      tradingDate: ENTRY_DAY,
+    });
+    expect(result.divergences).toContainEqual(
+      expect.objectContaining({ kind: 'row_field', stage: 'orders', field: 'payload' }),
+    );
   });
 
   it('replays a day the journal ran live in live mode, re-anchoring the cash the reconcile read (#2035)', async () => {

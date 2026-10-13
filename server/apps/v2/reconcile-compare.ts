@@ -100,6 +100,12 @@ function closingStops(broker: VenueView, instrument: string, held: number): Brok
   );
 }
 
+export function protectingStops(store: VenueView, broker: VenueView): BrokerOpenOrder[] {
+  return matchedHoldings(store, broker).flatMap(([instrument, held]) =>
+    closingStops(broker, instrument, held),
+  );
+}
+
 // An entry or add-on still open at the venue is filling: its bracket stop is sized for the whole
 // order and rests beside the held position's
 function entryWorking(store: StoreView, broker: VenueView, instrument: string): boolean {

@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { V2Bar } from '../../../../contracts/index.js';
 import { MockLlmClient, type SpendCap, UNCAPPED_SPEND } from '../../../shared/debate/index.js';
 import {
+  callFailed,
+  panelVeto,
   parseVetoReply,
   SIGNAL_VETO_BARS,
   SIGNAL_VETO_PROMPT,
@@ -98,6 +100,19 @@ describe('parseVetoReply', () => {
   });
 });
 
+describe('panelVeto', () => {
+  it('asks the panel judge under the signal trace, whichever attempt it is', async () => {
+    const judge = new MockLlmClient();
+    judge.enqueueText('{"veto": true, "reason": "stop inside noise"}');
+    const verdict = await panelVeto({ judge, spendCap: UNCAPPED_SPEND })('sig-1', 2, INPUT);
+    expect(verdict).toEqual({ kind: 'veto', reason: 'stop inside noise' });
+    expect(judge.requests[0]?.context.attribution).toEqual({
+      trace_id: 'v2-signal-sig-1',
+      stage: 'v2_signal_veto',
+    });
+  });
+});
+
 describe('signalVeto', () => {
   it('asks the judge with the veto prompt and the signal as untrusted data', async () => {
     const judge = new MockLlmClient();
@@ -138,5 +153,19 @@ describe('signalVeto', () => {
       kind: 'unavailable',
       reason: 'llm_call_failed: timeout',
     });
+  });
+});
+
+describe('callFailed (David 2026-10-09, #2024)', () => {
+  it('is true only for an unavailable verdict from a failed call', () => {
+    expect(callFailed({ kind: 'unavailable', reason: 'llm_call_failed: timeout' })).toBe(true);
+    expect(callFailed({ kind: 'unavailable', reason: 'llm_spend_cap:budget' })).toBe(false);
+    expect(callFailed({ kind: 'veto', reason: 'llm_call_failed: quoted by the model' })).toBe(
+      false,
+    );
+    expect(callFailed({ kind: 'pass', reason: 'llm_call_failed: quoted by the model' })).toBe(
+      false,
+    );
+    expect(callFailed({ kind: 'unavailable', reason: 'x llm_call_failed: later' })).toBe(false);
   });
 });

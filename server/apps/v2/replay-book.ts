@@ -23,7 +23,13 @@ export type ReplayStage =
   | 'reconciles'
   | 'anchors'
   | 'carry'
-  | 'marks';
+  | 'marks'
+  | 'signal_events'
+  | 'signal_vetoes'
+  | 'signal_decisions'
+  | 'signal_refusals'
+  | 'signal_orders'
+  | 'signal_faults';
 
 export type BookDivergence =
   | {
@@ -66,6 +72,7 @@ const DATED_TABLES = [
   'v2_reconciles',
   'v2_faults',
   'v2_rescales',
+  'v2_split_checks',
 ] as const;
 
 const APPEND_ONLY_TRIGGERS = [
@@ -76,11 +83,24 @@ const APPEND_ONLY_TRIGGERS = [
   'v2_controls_no_delete',
   'v2_rescales_no_delete',
   'v2_cash_anchors_no_delete',
+  'v2_signal_events_no_delete',
+  'v2_signal_vetoes_no_delete',
+  'v2_signal_veto_claims_no_delete',
+  'v2_signal_veto_retry_verdicts_no_delete',
+  'v2_split_checks_no_delete',
+  'v2_split_clears_no_delete',
+] as const;
+
+const SIGNAL_REWIND_SQL = [
+  'DELETE FROM v2_signal_veto_retry_verdicts WHERE recorded_at >= @startedAt',
+  'DELETE FROM v2_signal_veto_claims WHERE claimed_at >= @startedAt',
+  'DELETE FROM v2_signal_vetoes WHERE recorded_at >= @startedAt',
+  "DELETE FROM v2_signal_events WHERE status <> 'queued' AND recorded_at >= @startedAt",
 ] as const;
 
 // An order cancelled after the cut still rested at it; the outcome it rested under follows from
 // the route, as V2OrderExecutor.simulates and failedSubmission decide it
-function reopenedSql(after: string): { condition: string; outcome: string } {
+export function reopenedSql(after: string): { condition: string; outcome: string } {
   return {
     condition: `o.outcome = 'cancelled' AND json_extract(o.payload, '$.cancelled') ${after} @date`,
     outcome: `CASE
@@ -220,6 +240,8 @@ export function rewoundCopy(db: StoreHandle, tradingDate: string, startedAt: str
       copy.prepare(`DELETE FROM ${table} WHERE trading_date >= ?`).run(tradingDate);
     }
     copy.prepare('DELETE FROM v2_controls WHERE set_at > ?').run(startedAt);
+    copy.prepare('DELETE FROM v2_split_clears WHERE cleared_at > ?').run(startedAt);
+    for (const sql of SIGNAL_REWIND_SQL) copy.prepare(sql).run({ startedAt });
     copy
       .prepare(
         `UPDATE v2_orders AS o SET outcome = ${reopened.outcome},
@@ -520,12 +542,15 @@ export function lossBudgetDivergences(check: LossBudgetCheck): BookDivergence[] 
   }
 }
 
-type Row = Record<string, unknown> & { readonly key: string };
+export type Row = Record<string, unknown> & { readonly key: string };
 
-interface TableSpec {
+export interface RowStage {
   readonly stage: Exclude<ReplayStage, 'book' | 'gate'>;
-  readonly sql: (cancelledAfter: string, journalled: boolean) => string;
   readonly presence: boolean;
+}
+
+interface TableSpec extends RowStage {
+  readonly sql: (cancelledAfter: string, journalled: boolean) => string;
 }
 
 export const MIRRORED_DIFF_KINDS: ReadonlySet<string> = new Set([
@@ -625,21 +650,22 @@ function rowsOf(db: StoreHandle, sql: string, tradingDate: string, end: string):
   return db.prepare(sql).all({ date: tradingDate, end }) as Row[];
 }
 
-const MODELLED_SLIPPAGE_KEY = 'modelled_slippage_bps';
+// An order journalled before #1884 carries no modelled slippage, and an entry before #1747 no pin
+// digest, so the replayed one cannot be held to them: every such day would diverge on the payload
+// whatever the tables say
+const LATER_PAYLOAD_KEYS = ['modelled_slippage_bps', 'pin_digest'];
 
-// An order journalled before #1884 carries no modelled slippage, so the replayed one cannot be
-// held to it: every such day would diverge on the payload whatever the tables say
 function comparableTo(journalled: Row, replayed: Row): Row {
   const [before, after] = [journalled.payload, replayed.payload];
   if (typeof before !== 'string' || typeof after !== 'string') return replayed;
-  if (MODELLED_SLIPPAGE_KEY in (JSON.parse(before) as Record<string, unknown>)) return replayed;
+  const held = JSON.parse(before) as Record<string, unknown>;
   const kept = Object.entries(JSON.parse(after) as Record<string, unknown>).filter(
-    ([name]) => name !== MODELLED_SLIPPAGE_KEY,
+    ([name]) => name in held || !LATER_PAYLOAD_KEYS.includes(name),
   );
   return { ...replayed, payload: JSON.stringify(Object.fromEntries(kept)) };
 }
 
-function rowDivergence(spec: TableSpec, journalled: Row, replayedRow: Row | undefined) {
+function rowDivergence(spec: RowStage, journalled: Row, replayedRow: Row | undefined) {
   if (replayedRow === undefined) {
     return spec.presence
       ? ({ kind: 'row_missing', stage: spec.stage, key: journalled.key } as const)
@@ -658,7 +684,11 @@ function rowDivergence(spec: TableSpec, journalled: Row, replayedRow: Row | unde
   } as const;
 }
 
-function tableDivergences(spec: TableSpec, journalled: Row[], replayed: Row[]): BookDivergence[] {
+export function tableDivergences(
+  spec: RowStage,
+  journalled: readonly Row[],
+  replayed: readonly Row[],
+): BookDivergence[] {
   const byKey = new Map(replayed.map((row) => [row.key, row]));
   const known = new Set(journalled.map((row) => row.key));
   const extra = spec.presence

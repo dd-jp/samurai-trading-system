@@ -7,6 +7,7 @@ export interface LimitEntry {
   readonly limit: number;
   readonly stop: number | undefined;
   readonly trigger?: number | undefined;
+  readonly quoteFill?: number | null | undefined;
 }
 
 export type LimitEntryOutcome =
@@ -64,13 +65,32 @@ function entryFill(
     : stopLimitFill(entry, entry.trigger, bar);
 }
 
-function stopOnFillBar(entry: LimitEntry, price: number, bar: QuotedBar): number | undefined {
+function stopOnFillBar(
+  entry: LimitEntry,
+  price: number,
+  bar: Pick<QuotedBar, 'low' | 'high'>,
+): number | undefined {
   if (entry.stop === undefined) return undefined;
   if (entry.side === 'buy') return bar.low <= entry.stop ? Math.min(entry.stop, price) : undefined;
   return bar.high >= entry.stop ? Math.max(entry.stop, price) : undefined;
 }
 
+// The quote fill already paid the spread at the ask. A daily bar cannot say whether its range came
+// before the quote, so the fill day stops out only on its close (David 2026-10-12, #2024)
+function quotedEntry(
+  entry: LimitEntry,
+  fill: number | null,
+  bars: readonly V2Bar[],
+): LimitEntryOutcome {
+  if (fill === null) return { kind: 'cancelled' };
+  const [bar] = bars;
+  if (bar === undefined) return { kind: 'pending' };
+  const stoppedAt = stopOnFillBar(entry, fill, { low: bar.rawClose, high: bar.rawClose });
+  return { kind: 'filled', bar, price: fill, crossesSpread: false, stoppedAt };
+}
+
 export function simulateLimitEntry(entry: LimitEntry, bars: readonly V2Bar[]): LimitEntryOutcome {
+  if (entry.quoteFill !== undefined) return quotedEntry(entry, entry.quoteFill, bars);
   if (bars.length === 0) return { kind: 'pending' };
   for (const bar of bars) {
     const prices = quoted(bar);

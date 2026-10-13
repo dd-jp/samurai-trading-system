@@ -101,3 +101,18 @@ export function exitCodeOrOne(
     return 1;
   });
 }
+
+export function flagPairs(
+  argv: readonly string[],
+  names: readonly string[],
+  usage: string,
+): Map<string, string> {
+  const values = new Map<string, string>();
+  for (let index = 0; index < argv.length; index += 2) {
+    const name = argv[index] ?? '';
+    const value = argv[index + 1];
+    if (!names.includes(name) || value === undefined) throw new Error(usage);
+    values.set(name.slice(2), value);
+  }
+  return values;
+}

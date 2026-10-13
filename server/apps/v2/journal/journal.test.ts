@@ -583,6 +583,34 @@ describe('journal before submit (David 2026-10-04, #1747)', () => {
 });
 
 describe('Journal.recordReconcile (#1872)', () => {
+  it('stores the stops a read counted as protection as JSON (#2090)', () => {
+    const db = migratedMemoryStore();
+    const journal = new Journal(db, new SimulatedClock(new Date('2026-09-28T07:00:00.000Z')));
+    const stop = {
+      clientOrderId: 'stop-4df6',
+      instrument: 'CRL',
+      protects: 'long' as const,
+      qty: 1,
+      stopPrice: 290.65,
+    };
+    journal.recordReconcile({
+      trading_date: '2026-09-28',
+      venue: 'alpaca',
+      source: 'broker',
+      status: 'clean',
+      book_ids: ['debate/primary'],
+      diffs: [],
+      detail: '',
+      broker_mode: 'paper',
+      cash_quote: 100,
+      protecting_stops: [stop],
+    });
+    const row = db.prepare('SELECT protecting_stops FROM v2_reconciles').get() as {
+      protecting_stops: string;
+    };
+    expect(JSON.parse(row.protecting_stops)).toEqual([stop]);
+  });
+
   it('appends each run with its diff, and the row can be neither changed nor removed', () => {
     const db = migratedMemoryStore();
     const journal = new Journal(db, new SimulatedClock(new Date('2026-09-28T07:00:00.000Z')));
@@ -615,6 +643,9 @@ describe('Journal.recordReconcile (#1872)', () => {
         detail: 'position_qty AAPL store 6 broker 5',
         recorded_at: '2026-09-28T07:00:00.000Z',
       },
+    ]);
+    expect(db.prepare('SELECT protecting_stops FROM v2_reconciles').all()).toEqual([
+      { protecting_stops: null },
     ]);
     expect(() => db.prepare("UPDATE v2_reconciles SET status = 'clean'").run()).toThrow();
     expect(() => db.prepare('DELETE FROM v2_reconciles').run()).toThrow();

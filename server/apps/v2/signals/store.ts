@@ -5,6 +5,7 @@ import { digest } from '../../../shared/index.js';
 import type { StoreHandle } from '../../../shared/store/index.js';
 import { toStoredTimestamp } from '../../../shared/store/index.js';
 import type { SignalPayload } from './payload.js';
+import type { SignalVeto, SignalVetoAttempt } from './veto.js';
 import type { SignalWindow } from './window.js';
 
 export const SIGNAL_LIST_MAX = 200;
@@ -104,6 +105,52 @@ export class SignalStore {
       )
       .all(limit) as { verdict: SignalVetoVerdict }[];
     return rows.map((row) => row.verdict);
+  }
+
+  recordVeto(signalId: string, veto: SignalVeto): void {
+    this.#insertVeto('v2_signal_vetoes', signalId, veto);
+  }
+
+  vetoFor(signalId: string): SignalVeto | undefined {
+    return this.db
+      .prepare('SELECT kind, reason FROM v2_signal_vetoes WHERE signal_id = ?')
+      .get(signalId) as SignalVeto | undefined;
+  }
+
+  claimVeto(signalId: string, attempt: SignalVetoAttempt): void {
+    this.db
+      .prepare(
+        'INSERT INTO v2_signal_veto_claims (signal_id, attempt, claimed_at) VALUES (?, ?, ?)',
+      )
+      .run(signalId, attempt, toStoredTimestamp(this.clock.now()));
+  }
+
+  vetoClaimed(signalId: string, attempt: SignalVetoAttempt): boolean {
+    return (
+      this.db
+        .prepare('SELECT 1 FROM v2_signal_veto_claims WHERE signal_id = ? AND attempt = ?')
+        .get(signalId, attempt) !== undefined
+    );
+  }
+
+  recordRetryVeto(signalId: string, veto: SignalVeto): void {
+    this.#insertVeto('v2_signal_veto_retry_verdicts', signalId, veto);
+  }
+
+  retryVetoFor(signalId: string): SignalVeto | undefined {
+    return this.db
+      .prepare('SELECT kind, reason FROM v2_signal_veto_retry_verdicts WHERE signal_id = ?')
+      .get(signalId) as SignalVeto | undefined;
+  }
+
+  #insertVeto(
+    table: 'v2_signal_vetoes' | 'v2_signal_veto_retry_verdicts',
+    signalId: string,
+    veto: SignalVeto,
+  ): void {
+    this.db
+      .prepare(`INSERT INTO ${table} (signal_id, kind, reason, recorded_at) VALUES (?, ?, ?, ?)`)
+      .run(signalId, veto.kind, veto.reason, toStoredTimestamp(this.clock.now()));
   }
 
   #idForDigest(key: string): string | undefined {

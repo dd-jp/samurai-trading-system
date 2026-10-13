@@ -49,7 +49,25 @@ export interface SleeveDecision {
   readonly inputs_hash: string;
   readonly debate_id: string | undefined;
   readonly veto?: string | undefined;
+  readonly entry_quote?: EntryQuote | undefined;
   readonly payload: Record<string, unknown>;
+}
+
+export interface EntryQuote {
+  readonly ask: number;
+  readonly bid: number;
+  readonly quoted_at: string;
+  readonly fill: number | null;
+}
+
+export interface LatestQuote {
+  readonly ask: number;
+  readonly bid: number;
+  readonly quoted_at: string;
+}
+
+export interface LatestQuoteSource {
+  latestQuote(symbol: string): Promise<LatestQuote>;
 }
 
 export interface SleeveContext {
@@ -538,6 +556,7 @@ export interface JournalledReconcile {
   readonly detail: string;
   readonly broker_mode: BrokerMode;
   readonly cash_quote: number | null;
+  readonly protecting_stops?: readonly BrokerOpenOrder[] | undefined;
 }
 
 export interface JournalledOrder {

@@ -191,6 +191,10 @@ export function evidence(overrides: Partial<EvidenceWire> = {}): EvidenceWire {
             { entry_offset_bps: 0, closed_trades: 3 },
             { entry_offset_bps: 50, closed_trades: 12 },
           ],
+          by_model_pins: [
+            { pin_digest: null, closed_trades: 4 },
+            { pin_digest: '0123456789abcdef', closed_trades: 11 },
+          ],
         },
       ],
     },

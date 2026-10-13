@@ -95,6 +95,7 @@ function size(testCase: Case): number {
   const spec = { ...testCase.spec, minimumCapitalGbp: testCase.minimumCapitalGbp };
   const gate = new V2RiskGate({
     books: { lastDay: () => undefined },
+    cfdSleeveIds: ['s'],
     capital: { inForce: () => capital },
     market: {
       lastBarBefore: () => undefined,

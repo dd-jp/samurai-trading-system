@@ -10,7 +10,7 @@ import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { VenueSessionGate } from './data/index.js';
 import type { AlpacaBrokerClient, AlpacaOrder } from './execution/alpaca/alpaca-client.js';
-import { composeV2Root } from './index.js';
+import { composeV2Root, type V2RootOptions } from './index.js';
 import { type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
@@ -63,14 +63,11 @@ interface Venue {
 }
 
 function legStatus(venue: Venue, leg: Leg): string {
-  return venue.cancelled.has(leg.id) ? 'canceled' : 'new';
+  if (venue.cancelled.has(leg.id)) return 'canceled';
+  return leg.type === 'stop' ? 'held' : 'new';
 }
 
-function listedStop(order: AlpacaOrder, broker: Broker, venue: Venue): Record<string, unknown> {
-  const oco = venue.ocos.find(
-    (placed) => placed.client_order_id === `${order.client_order_id}:rearm`,
-  );
-  if (oco !== undefined) return { qty: oco.qty, stop_price: oco.legs?.[0]?.stop_price ?? null };
+function restingStop(order: AlpacaOrder, broker: Broker, venue: Venue): Partial<Leg> {
   const stop = Number(order.legs?.[1]?.stop_price);
   return venue.staleStop
     ? { qty: order.qty, stop_price: String(stop) }
@@ -78,6 +75,17 @@ function listedStop(order: AlpacaOrder, broker: Broker, venue: Venue): Record<st
         qty: String(Number(order.qty) * broker.positionScale),
         stop_price: String(stop / broker.positionScale),
       };
+}
+
+function flatLeg(order: AlpacaOrder, leg: Leg): AlpacaOrder {
+  return {
+    ...leg,
+    client_order_id: leg.client_order_id ?? leg.id,
+    symbol: order.symbol,
+    side: leg.side ?? order.side,
+    qty: leg.qty ?? order.qty,
+    order_class: order.order_class,
+  };
 }
 
 function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
@@ -111,6 +119,9 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
       const id = `alp-${orders.length + 1}`;
       const leg = (suffix: string, type: Leg['type']): Leg => ({
         id: `${id}-${suffix}`,
+        client_order_id: `${id}-${suffix}-uuid`,
+        side: request.side === 'buy' ? 'sell' : 'buy',
+        qty: request.qty,
         type,
         status: 'held',
         filled_qty: '0',
@@ -175,8 +186,11 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
         legs: [
           {
             id: `oco-${venue.ocos.length + 1}-sl`,
+            client_order_id: `oco-${venue.ocos.length + 1}-sl-uuid`,
+            side: request.side,
+            qty: request.qty,
             type: 'stop',
-            status: 'new',
+            status: 'held',
             filled_qty: '0',
             filled_avg_price: null,
             filled_at: null,
@@ -192,21 +206,45 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
       return Promise.resolve();
     }),
     listOpenOrders: vi.fn(() =>
-      Promise.resolve(
-        held().map((order) => ({
-          ...order,
-          id: `${order.id}-sl`,
-          client_order_id: `${order.client_order_id}-stop`,
-          side: order.side === 'buy' ? ('sell' as const) : ('buy' as const),
-          type: 'stop',
-          order_class: 'simple',
-          status: 'new',
-          filled_qty: '0',
-          ...listedStop(order, broker, venue),
-        })),
-      ),
+      Promise.resolve([
+        ...held().flatMap((order) => {
+          const viewed = view(order);
+          if (viewed.status !== 'filled') return [];
+          return (viewed.legs ?? [])
+            .filter((leg) => leg.status === 'new')
+            .map((leg) => flatLeg(order, leg));
+        }),
+        ...venue.ocos
+          .filter((oco) => !venue.cancelled.has(oco.id))
+          .map(({ legs: _legs, ...parent }) => parent),
+      ]),
     ),
-    listOrderHistory: vi.fn().mockResolvedValue([]),
+    listOrderHistory: vi.fn((symbols: readonly string[]) =>
+      Promise.resolve([
+        ...held()
+          .filter((order) => symbols.includes(order.symbol))
+          .map((order) => {
+            const viewed = view(order);
+            return {
+              ...viewed,
+              legs: (viewed.legs ?? []).map((leg) =>
+                leg.type === 'stop' ? { ...leg, ...restingStop(order, broker, venue) } : leg,
+              ),
+            };
+          }),
+        ...venue.ocos
+          .filter((oco) => symbols.includes(oco.symbol))
+          .map((oco) =>
+            venue.cancelled.has(oco.id)
+              ? {
+                  ...oco,
+                  status: 'canceled',
+                  legs: (oco.legs ?? []).map((leg) => ({ ...leg, status: 'canceled' })),
+                }
+              : oco,
+          ),
+      ]),
+    ),
     getPositions: vi.fn(() =>
       Promise.resolve(
         held().map((order) => ({
@@ -262,11 +300,84 @@ let staleOptions: ReplayCliOptions;
 
 let partOptions: ReplayCliOptions;
 
+let fedOptions: ReplayCliOptions;
+
+let blockedOptions: ReplayCliOptions;
+
+let clearedOptions: ReplayCliOptions;
+
+let base: ReplayCliOptions;
+
+const fedFrom = (read: typeof splitFetch): Partial<V2RootOptions> => ({
+  eodhdApiKey: 'eodhd-test-key',
+  alpacaDataCredentials: { apiKey: 'alpaca-data-key', apiSecret: 'alpaca-data-secret' },
+  splitFetch: read,
+});
+
+const splitFetches: URL[] = [];
+
+// EODHD and Alpaca answer per their documented shapes; the split is the bars' 2:1 on SPLIT_BAR
+const splitFetchFor = (eodhdLists: boolean) =>
+  (async (input: URL) => {
+    splitFetches.push(input);
+    const inside = (date: string, from: string | null, to: string | null) =>
+      date >= (from ?? '') && date <= (to ?? '');
+    const exDate = dateAt(SPLIT_BAR);
+    if (input.host === 'eodhd.com') {
+      const listed =
+        eodhdLists &&
+        input.pathname.endsWith('/UP.US') &&
+        inside(exDate, input.searchParams.get('from'), input.searchParams.get('to'));
+      return new Response(
+        JSON.stringify(listed ? [{ date: exDate, split: '2.000000/1.000000' }] : []),
+      );
+    }
+    const listed =
+      input.searchParams.get('symbols') === 'UP' &&
+      inside(exDate, input.searchParams.get('start'), input.searchParams.get('end'));
+    return new Response(
+      JSON.stringify({
+        corporate_actions: {
+          forward_splits: listed
+            ? [{ symbol: 'UP', new_rate: 2, old_rate: 1, ex_date: exDate }]
+            : [],
+        },
+        next_page_token: null,
+      }),
+    );
+  }) as typeof fetch;
+
+const splitFetch = splitFetchFor(true);
+
+const MID_RUN_CLEAR = `${DAY_AFTER}T07:30:01.000Z`;
+
+function clearingOnce(storePath: string, clock: SimulatedClock) {
+  const respond = answer(clock);
+  let cleared = false;
+  return (request: AnthropicMessageRequest): string => {
+    const text = respond(request);
+    if (cleared) return text;
+    cleared = true;
+    const db = new BetterSqlite3(storePath);
+    try {
+      db.prepare(
+        `INSERT INTO v2_split_clears (instrument, exchange, reason, cleared_at)
+         VALUES ('UP', 'US', 'David checked the filing', ?)`,
+      ).run(clock.now().toISOString());
+    } finally {
+      db.close();
+    }
+    return text;
+  };
+}
+
 async function journalDays(
   name: string,
   base: ReplayCliOptions,
   staleStop: boolean,
   splitDay: Broker = { filled: true, positionScale: 2 },
+  extra: Partial<V2RootOptions> = {},
+  clearMidRun = false,
 ) {
   const storePath = join(directory, `${name}.sqlite`);
   const seed = openSharedStore(storePath);
@@ -288,6 +399,8 @@ async function journalDays(
   for (const [tradingDate, state] of days) {
     clock.advanceTo(new Date(`${tradingDate}T07:30:00.000Z`));
     Object.assign(broker, state);
+    const respond =
+      clearMidRun && tradingDate === DAY_AFTER ? clearingOnce(storePath, clock) : undefined;
     const root = composeV2Root({
       ...base,
       tradingDate,
@@ -295,9 +408,10 @@ async function journalDays(
       storePath,
       clock,
       logger: { log: () => {} },
-      transportFor: (pin: ModelPin) => new ScriptedTransport(pin, answer(clock)),
+      transportFor: (pin: ModelPin) => new ScriptedTransport(pin, respond ?? answer(clock)),
       newsSource: { headlines: () => Promise.resolve([]) },
       alpacaClient,
+      ...extra,
     });
     try {
       await root.run();
@@ -323,7 +437,7 @@ beforeAll(async () => {
   writeFileSync(fxPath, 'DATE,XUDLUSS\n31 Dec 2025,1.25\n02 Jan 2026,1.26\n');
   const spreadsPath = join(directory, 'spreads.csv');
   writeFileSync(spreadsPath, 'symbol,sessions,median_half_spread_bps\nUP,10,2\n');
-  const base: ReplayCliOptions = {
+  base = {
     tradingDate: SPLIT_DAY,
     storePath: join(directory, 'unused.sqlite'),
     barStoreRoot,
@@ -335,13 +449,6 @@ beforeAll(async () => {
     venueSessions: OPEN_EVERY_DAY,
   };
   options = await journalDays('paper', base, false);
-  staleOptions = await journalDays('stale-stop', base, true);
-  partOptions = await journalDays('part-fill', base, false, {
-    filled: false,
-    positionScale: 2,
-    partial: 3,
-    failSweeps: 1,
-  });
 });
 
 afterAll(() => {
@@ -487,6 +594,10 @@ describe('replay of positions held across a 2:1 split (#1983)', () => {
 });
 
 describe('replay of a split the broker left the stop unchanged on (#1990)', () => {
+  beforeAll(async () => {
+    staleOptions = await journalDays('stale-stop', base, true);
+  });
+
   it('journals the mismatch, the stop replace on the split day, and a clean reconcile the day after', () => {
     const rows = (sql: string) => journalRows(sql, staleOptions.storePath);
     expect(
@@ -513,6 +624,15 @@ describe('replay of a split the broker left the stop unchanged on (#1990)', () =
 });
 
 describe('replay of an entry part filled at the venue before the journal booked it (#1990)', () => {
+  beforeAll(async () => {
+    partOptions = await journalDays('part-fill', base, false, {
+      filled: false,
+      positionScale: 2,
+      partial: 3,
+      failSweeps: 1,
+    });
+  });
+
   const rows = (sql: string) => journalRows(sql, partOptions.storePath);
 
   it('reads the part fill, cancels the remainder, books the fill at a mid-run sweep and re-arms it', () => {
@@ -755,4 +875,155 @@ describe('replay of a date a crashed run acted on before the retry that marked i
     },
     60_000,
   );
+});
+
+describe('replay of a split read from the EODHD feed (#2025)', () => {
+  beforeAll(async () => {
+    fedOptions = await journalDays('fed', base, false, undefined, fedFrom(splitFetch));
+  });
+
+  const rows = (sql: string) => journalRows(sql, fedOptions.storePath);
+
+  it('rescales from the feed once both sources list the split, journalling every read and check', () => {
+    expect(splitFetches.length).toBeGreaterThan(0);
+    expect(
+      rows(
+        `SELECT trading_date, source, ratio, anchor_date FROM v2_rescales
+           WHERE book_id = 'debate/primary' AND source = 'detector'`,
+      ),
+    ).toEqual([
+      { trading_date: SPLIT_DAY, source: 'detector', ratio: 2, anchor_date: dateAt(SPLIT_BAR) },
+    ]);
+    expect(
+      rows(
+        `SELECT DISTINCT trading_date, source, symbol, status FROM v2_split_reads ORDER BY trading_date, source`,
+      ),
+    ).toEqual([
+      { trading_date: SPLIT_DAY, source: 'alpaca', symbol: 'UP', status: 'ok' },
+      { trading_date: SPLIT_DAY, source: 'eodhd', symbol: 'UP.US', status: 'ok' },
+      { trading_date: DAY_AFTER, source: 'alpaca', symbol: 'UP', status: 'ok' },
+      { trading_date: DAY_AFTER, source: 'eodhd', symbol: 'UP.US', status: 'ok' },
+    ]);
+    expect(
+      rows(
+        `SELECT DISTINCT trading_date, verdict, ratio FROM v2_split_checks ORDER BY trading_date, ratio`,
+      ),
+    ).toEqual([
+      { trading_date: SPLIT_DAY, verdict: 'agree', ratio: 2 },
+      { trading_date: DAY_AFTER, verdict: 'agree', ratio: 1 },
+    ]);
+    expect(JSON.stringify(rows('SELECT * FROM v2_split_reads'))).not.toMatch(
+      /eodhd-test-key|alpaca-data/,
+    );
+  });
+
+  it('replays the split day and the day after identical from the journalled reads, fetching nothing', async () => {
+    const fetched = splitFetches.length;
+    for (const tradingDate of [SPLIT_DAY, DAY_AFTER]) {
+      const result = await replayFromFiles({ ...fedOptions, tradingDate });
+      expect(result.divergences).toEqual([]);
+    }
+    expect(splitFetches.length).toBe(fetched);
+  });
+
+  it('diverges when the journalled EODHD read is changed, never refetching it', async () => {
+    const storePath = tamperedCopy(
+      'fed-no-split',
+      `DROP TRIGGER IF EXISTS v2_split_reads_no_update;
+       UPDATE v2_split_reads SET splits = '[]' WHERE trading_date = '${SPLIT_DAY}';`,
+      fedOptions.storePath,
+    );
+    const result = await replayFromFiles({ ...fedOptions, storePath, tradingDate: SPLIT_DAY });
+    expect(result.divergences).toContainEqual({
+      kind: 'row_missing',
+      stage: 'rescales',
+      key: `debate/primary|UP|detector|${dateAt(SPLIT_BAR)}|1`,
+    });
+  });
+});
+
+describe('replay of a line blocked by the split cross-check (#2025)', () => {
+  beforeAll(async () => {
+    blockedOptions = await journalDays(
+      'fed-blocked',
+      base,
+      false,
+      undefined,
+      fedFrom(splitFetchFor(false)),
+    );
+  });
+
+  const rows = (sql: string) => journalRows(sql, blockedOptions.storePath);
+
+  it('freezes the simulated books on the blocked line and journals why', () => {
+    const checks = rows(
+      `SELECT DISTINCT trading_date, verdict, reason FROM v2_split_checks ORDER BY trading_date`,
+    );
+    for (const tradingDate of [SPLIT_DAY, DAY_AFTER]) {
+      expect(checks).toContainEqual({
+        trading_date: tradingDate,
+        verdict: 'block',
+        reason: 'sources_disagree',
+      });
+    }
+    expect(rows(`SELECT COUNT(*) AS n FROM v2_rescales WHERE source = 'detector'`)).toEqual([
+      { n: 0 },
+    ]);
+    const frozen = rows(
+      `SELECT DISTINCT trading_date, scope, book_id, instrument FROM v2_refusals
+         WHERE parameter = 'SPLIT_EXIT_FREEZE' ORDER BY trading_date, book_id`,
+    ) as { trading_date: string; scope: string; book_id: string; instrument: string }[];
+    expect(frozen.length).toBeGreaterThan(0);
+    expect(frozen.every((row) => row.scope === 'exit' && row.instrument === 'UP')).toBe(true);
+    expect(frozen.map((row) => row.book_id)).not.toContain('debate/primary');
+  });
+
+  it('replays the frozen days identical from the journalled reads and checks', async () => {
+    for (const tradingDate of [SPLIT_DAY, DAY_AFTER]) {
+      const result = await replayFromFiles({ ...blockedOptions, tradingDate });
+      expect(result.divergences).toEqual([]);
+    }
+  });
+});
+
+describe('replay of a blocked line cleared between the run start and the entry check (#2126)', () => {
+  beforeAll(async () => {
+    clearedOptions = await journalDays(
+      'fed-cleared-mid-run',
+      base,
+      false,
+      undefined,
+      fedFrom(splitFetchFor(false)),
+      true,
+    );
+  });
+
+  const rows = (sql: string) => journalRows(sql, clearedOptions.storePath);
+
+  it("blocks the run's entries and freezes its exits, the clear counting from the next run", () => {
+    expect(rows('SELECT instrument, cleared_at FROM v2_split_clears')).toEqual([
+      { instrument: 'UP', cleared_at: MID_RUN_CLEAR },
+    ]);
+    const blocks = rows(
+      `SELECT parameter, MIN(recorded_at) AS first FROM v2_refusals
+         WHERE trading_date = '${DAY_AFTER}' AND instrument = 'UP'
+           AND parameter IN ('SPLIT_CROSSCHECK_BLOCK', 'SPLIT_EXIT_FREEZE')
+         GROUP BY parameter ORDER BY parameter`,
+    ) as { parameter: string; first: string }[];
+    expect(blocks.map((row) => row.parameter)).toEqual([
+      'SPLIT_CROSSCHECK_BLOCK',
+      'SPLIT_EXIT_FREEZE',
+    ]);
+    expect(blocks.every((row) => row.first > MID_RUN_CLEAR)).toBe(true);
+    expect(
+      rows(`SELECT MIN(recorded_at) AS at FROM v2_refusals WHERE trading_date = '${DAY_AFTER}'`),
+    ).toEqual([{ at: `${DAY_AFTER}T07:30:00.000Z` }]);
+  });
+
+  it('replays the day identical, the rewound copy holding no clear', async () => {
+    for (const tradingDate of [SPLIT_DAY, DAY_AFTER]) {
+      const result = await replayFromFiles({ ...clearedOptions, tradingDate });
+      expect(result.divergences).toEqual([]);
+    }
+  });
 });

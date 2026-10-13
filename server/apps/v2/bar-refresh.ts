@@ -24,14 +24,8 @@ import {
   roundPrices,
   type SymbolOutcome,
 } from './bar-refresh-core.js';
-import { cfdCatalogueRefreshFor } from './cfd-catalogue-refresh.js';
-import {
-  CALENDAR_REFERENCE,
-  CFD_CATALOGUE_PATH,
-  currentConstituents,
-  FX_PATH,
-  isFresh,
-} from './data/index.js';
+import { type CfdCatalogueTarget, cfdCatalogueRefreshFor } from './cfd-catalogue-refresh.js';
+import { CALENDAR_REFERENCE, currentConstituents, FX_PATH, isFresh } from './data/index.js';
 import { type FxFetch, fxRefreshFor } from './fx-refresh.js';
 import { saxoBarRefreshFor } from './saxo-bar-refresh.js';
 
@@ -162,7 +156,7 @@ export function barRefreshFor(
   tradingDate: string,
   constituentsPath: string,
   logger: Logger,
-  cfdCataloguePath: string = CFD_CATALOGUE_PATH,
+  cfdCatalogue: CfdCatalogueTarget,
   fx: { readonly path: string; readonly fetch: FxFetch } = { path: FX_PATH, fetch },
 ): BarRefresh {
   if (dryRun) return NO_BAR_REFRESH;
@@ -178,16 +172,10 @@ export function barRefreshFor(
       }
     },
   };
-  const cfdCatalogue = cfdCatalogueRefreshFor(env, {
-    tradingDate,
-    constituents,
-    path: cfdCataloguePath,
-    logger,
-  });
   return inSequence([
     alpaca,
     saxoBarRefreshFor(env, tradingDate, logger),
-    cfdCatalogue,
+    cfdCatalogueRefreshFor(env, { ...cfdCatalogue, tradingDate, constituents, logger }),
     fxRefreshFor({ ...fx, logger }),
   ]);
 }

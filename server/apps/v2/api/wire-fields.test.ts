@@ -268,6 +268,7 @@ describe('the Evidence and Records routes the client reads, served over the seed
     expect(keysOf(first(first(count.books).by_entry_offset))).toEqual(
       fieldsOf('entryOffsetTrades'),
     );
+    expect(keysOf(first(first(count.books).by_model_pins))).toEqual(fieldsOf('modelPinsTrades'));
     for (const owned of [
       served.vs_arm2,
       served.vs_benchmark,

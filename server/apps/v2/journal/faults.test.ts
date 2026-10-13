@@ -180,7 +180,7 @@ describe('fault classification', () => {
     message: `${parameter} message`,
   });
 
-  it('maps stale bars, a missing backstop and a lost Saxo session, and nothing else', () => {
+  it('maps stale or missing bars, a missing backstop and a lost Saxo session, and nothing else', () => {
     expect(refusalFault(refusal('MARK_FRESHNESS'))).toEqual({
       kind: 'stale_bar',
       trading_date: '2026-10-01',
@@ -188,6 +188,7 @@ describe('fault classification', () => {
       detail: 'MARK_FRESHNESS message',
     });
     expect(refusalFault(refusal('CALENDAR_REFERENCE'))?.kind).toBe('stale_bar');
+    expect(refusalFault(refusal('FILL_DAY_BAR'))?.kind).toBe('stale_bar');
     expect(refusalFault(refusal('REARM_BACKSTOP'))?.kind).toBe('missed_stop');
     expect(refusalFault(refusal('SAXO_SESSION'))?.kind).toBe('token_failure');
     for (const standing of ['MACRO_CALENDARS', 'CAPITAL_CONFIG', 'MANUAL_CONTROL', 'LOSS_BUDGET']) {

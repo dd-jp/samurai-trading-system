@@ -38,7 +38,7 @@ One strategy with its own capital share, universe, entry rule, benchmark, book a
 LLM-debate entry at a **swing** horizon: one debate per screened name per day, pre-open, on daily bars and news, plus sentiment and social as counted trials; holds days to weeks; exits by a venue-resting stop and a time stop. May short, bounded. Benchmark: **arm 2**. Cannot be honestly backtested (the LLM has seen the history), so its proof is forward paper only.
 
 **Debate**
-A structured disagreement between three debaters (one model per provider: Sonnet 5, DeepSeek, GPT) settled by a judge (Opus 5.5), producing a directional conviction for one name on one day. Roles rotate across providers daily so a stance is not a provider's bias. Only market data and news leave the system — never account data or keys.
+A structured disagreement between three debaters (one model per provider: Sonnet 5.5, DeepSeek, GPT) settled by a judge (Opus 5.5), producing a directional conviction for one name on one day. Roles rotate across providers daily so a stance is not a provider's bias. Only market data and news leave the system — never account data or keys.
 
 **Shadow book**
 A paper book that runs the same sleeve with one input or rule removed, so the input's value is measured rather than assumed: no-macro-gate, no-sentiment, no-social, large-cap-only (debate). Each shadow comparison is a counted **trial**.
@@ -84,7 +84,7 @@ Live capital ≤ £1,500 / (backtest maximum drawdown × 1.5). Capital is derive
 ### Proof
 
 **Trial**
-One configuration tried, anywhere: a backtest variant, a shadow comparison, a model swap, a stop on or off. Every trial increments a global, append-only **trial counter**, and DSR is deflated over all of them. A pinned model version changing is a new trial and restarts that sleeve's paper evaluation.
+One configuration tried, anywhere: a backtest variant, a shadow comparison, a model swap, a stop on or off. Every trial increments a global, append-only **trial counter**, and DSR is deflated over all of them. A pinned model version changing is a new trial and restarts the closed-trade count of each book whose own pins changed; books that use no model, such as arm 2 and the no-veto shadows, never restart.
 
 **Gate**
 The pre-declared conditions a sleeve passes before live capital: backtest beats its benchmark after a 40% Sharpe haircut with **DSR ≥ 0.95** and **PBO ≤ 0.10** on 10+ years; 8–12 weeks of paper **in band**; 4 consecutive **fault-free weeks**; then the **approval request**. The debate sleeve substitutes its arm-2 forward test for the backtest clause.

@@ -64,6 +64,9 @@ const TABLES = [
   'v2_news',
   'v2_signals',
   'v2_signal_events',
+  'v2_signal_vetoes',
+  'v2_signal_veto_claims',
+  'v2_signal_veto_retry_verdicts',
   'v2_run_lease',
   'v2_faults',
   'v2_heartbeat_pings',
@@ -77,13 +80,18 @@ const TABLES = [
   'v2_cash_in_lieu',
   'v2_cfd_carry',
   'v2_canary_runs',
+  'v2_trial_chain',
+  'v2_cfd_catalogue_snapshots',
+  'v2_split_reads',
+  'v2_split_checks',
+  'v2_split_clears',
 ];
 
-const CONSOLIDATED_SCHEMA_TABLE_COUNT = 64;
+const CONSOLIDATED_SCHEMA_TABLE_COUNT = 72;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 97;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 103;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));

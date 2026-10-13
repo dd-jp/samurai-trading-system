@@ -455,23 +455,25 @@ describe('NO_BAR_REFRESH', () => {
   });
 });
 
+const TARGET = { path: 'x/catalogue.json', storePath: 'x/v2.sqlite' };
+
 describe('barRefreshFor', () => {
   it('is a no-op on a dry run, without reading constituents or credentials', () => {
-    expect(barRefreshFor(true, {}, TRADING_DATE, '/does/not/exist.csv', recorder().logger)).toBe(
-      NO_BAR_REFRESH,
-    );
+    expect(
+      barRefreshFor(true, {}, TRADING_DATE, '/does/not/exist.csv', recorder().logger, TARGET),
+    ).toBe(NO_BAR_REFRESH);
   });
 
   it('refuses synchronously without Alpaca credentials', () => {
     expect(() =>
-      barRefreshFor(false, {}, TRADING_DATE, '/does/not/exist.csv', recorder().logger),
+      barRefreshFor(false, {}, TRADING_DATE, '/does/not/exist.csv', recorder().logger, TARGET),
     ).toThrow(/ALPACA_API_KEY and ALPACA_API_SECRET must be set/);
   });
 
   it('refuses synchronously when the constituents file is missing', () => {
     const env = { ALPACA_API_KEY: 'k', ALPACA_API_SECRET: 's' };
     expect(() =>
-      barRefreshFor(false, env, TRADING_DATE, '/does/not/exist.csv', recorder().logger),
+      barRefreshFor(false, env, TRADING_DATE, '/does/not/exist.csv', recorder().logger, TARGET),
     ).toThrow(/ENOENT/);
   });
 
@@ -479,7 +481,7 @@ describe('barRefreshFor', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'bar-refresh-csv-')), 'constituents.csv');
     writeFileSync(path, 'date,tickers\n2016-01-01,"AAPL,MSFT"\n');
     const env = { ALPACA_API_KEY: 'k', ALPACA_API_SECRET: 's' };
-    const refresh = barRefreshFor(false, env, TRADING_DATE, path, recorder().logger);
+    const refresh = barRefreshFor(false, env, TRADING_DATE, path, recorder().logger, TARGET);
     expect(refresh).not.toBe(NO_BAR_REFRESH);
     expect(typeof refresh.run).toBe('function');
   });

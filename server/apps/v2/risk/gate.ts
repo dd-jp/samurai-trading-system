@@ -85,18 +85,25 @@ function closingLeg(
   return { size, side: held.qty > 0 ? 'sell' : 'buy' };
 }
 
-function venueRefusalFor(
-  decision: SleeveDecision,
-  extra: RiskGateDeps['venueRefusal'],
-): string | undefined {
+function sideRefusal(decision: SleeveDecision): string | undefined {
   const cfd = isCfdVenue(decision.venue);
   if (decision.action === 'enter_short' && !cfd) return 'short_requires_cfd';
-  if (decision.action === 'enter_long' && cfd) return 'long_on_cfd';
-  return (extra ?? closedCfdVenue)(decision.venue);
+  return decision.action === 'enter_long' && cfd ? 'long_on_cfd' : undefined;
 }
 
-function closedCfdVenue(venue: Venue): string | undefined {
-  return isCfdVenue(venue) ? 'cfd_cost_model_unset' : undefined;
+function venueRefusalFor(
+  decision: SleeveDecision,
+  sleeveId: string,
+  deps: Pick<RiskGateDeps, 'cfdSleeveIds' | 'venueRefusal'>,
+): string | undefined {
+  const refusal = sideRefusal(decision);
+  if (refusal !== undefined || !isCfdVenue(decision.venue)) return refusal;
+  if (!deps.cfdSleeveIds.includes(sleeveId)) return 'cfd_sleeve_not_allowed';
+  return (deps.venueRefusal ?? closedCfdVenue)(decision.venue);
+}
+
+function closedCfdVenue(): string {
+  return 'cfd_not_backtested';
 }
 
 function gapBudgetGbp(decision: SleeveDecision, capital: CapitalYear): number | undefined {
@@ -107,6 +114,7 @@ function gapBudgetGbp(decision: SleeveDecision, capital: CapitalYear): number | 
 export interface RiskGateDeps {
   readonly books: Pick<BookLedger, 'lastDay'>;
   readonly capital: Pick<CapitalConfigStore, 'inForce'>;
+  readonly cfdSleeveIds: readonly string[];
   readonly market: MarketData;
   readonly spec: (sleeveId: string) => SleeveSpec;
   readonly venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
@@ -152,7 +160,7 @@ export class V2RiskGate implements RiskGate {
     if (isEntryDecision(decision) && this.fxRefusal(request.tradingDate) !== undefined) {
       return { size: 0, order: undefined, refusal: 'fx_year_start_stale' };
     }
-    const venueRefusal = venueRefusalFor(decision, this.deps.venueRefusal);
+    const venueRefusal = venueRefusalFor(decision, request.book.sleeve, this.deps);
     if (venueRefusal !== undefined) return { size: 0, order: undefined, refusal: venueRefusal };
     const { size, refusal: sizingRefusal } = this.#size(request);
     if (sizingRefusal !== undefined) return { size, order: undefined, refusal: sizingRefusal };

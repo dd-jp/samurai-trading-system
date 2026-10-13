@@ -5,8 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../shared/index.js';
 import { main, parseCfdCatalogueArgs, summarise } from './cfd-catalogue-cli.js';
 import type { CfdReferenceApi } from './cfd-catalogue-refresh.js';
-import { CFD_CATALOGUE_PATH, loadCfdCatalogue } from './data/index.js';
-import { CONSTITUENTS_PATH } from './index.js';
+import { CFD_CATALOGUE_PATH, loadCfdCatalogue, loadCfdCatalogueArchive } from './data/index.js';
+import { CONSTITUENTS_PATH, V2_STORE_PATH } from './index.js';
 
 const TODAY = '2026-09-30';
 const SILENT: Logger = { log: () => undefined };
@@ -15,6 +15,7 @@ describe('parseCfdCatalogueArgs', () => {
   it('defaults to the loader path, the live token file, today and the constituents file', () => {
     expect(parseCfdCatalogueArgs([], TODAY)).toEqual({
       out: CFD_CATALOGUE_PATH,
+      storePath: V2_STORE_PATH,
       tokenPath: undefined,
       date: TODAY,
       constituentsPath: CONSTITUENTS_PATH,
@@ -25,6 +26,8 @@ describe('parseCfdCatalogueArgs', () => {
     const argv = [
       '--out',
       'o.json',
+      '--store',
+      's.sqlite',
       '--token',
       't.json',
       '--date',
@@ -34,6 +37,7 @@ describe('parseCfdCatalogueArgs', () => {
     ];
     expect(parseCfdCatalogueArgs(argv, TODAY)).toEqual({
       out: 'o.json',
+      storePath: 's.sqlite',
       tokenPath: 't.json',
       date: '2026-01-02',
       constituentsPath: 'c.csv',
@@ -76,7 +80,17 @@ describe('main', () => {
     const out = join(dir, 'catalogue.json');
     const stop = vi.fn().mockResolvedValue(undefined);
     const connect = vi.fn(() => ({ api: fakeApi(), stop }));
-    const argv = ['--out', out, '--token', 'tok.json', '--constituents', constituents];
+    const store = join(dir, 'v2.sqlite');
+    const argv = [
+      '--out',
+      out,
+      '--store',
+      store,
+      '--token',
+      'tok.json',
+      '--constituents',
+      constituents,
+    ];
     const summary = await main(argv, TODAY, connect, SILENT);
     expect(connect).toHaveBeenCalledWith('tok.json', SILENT);
     expect(stop).toHaveBeenCalledOnce();
@@ -89,6 +103,9 @@ describe('main', () => {
     });
     expect(summary.unmatched).toContain('MSFT');
     expect(loadCfdCatalogue(out)?.freshOn(TODAY)).toBe(true);
+    expect(loadCfdCatalogueArchive(store).inForceOn(TODAY)?.sha256).toBe(
+      loadCfdCatalogue(out)?.sha256,
+    );
   });
 
   it('stops the session when the refresh fails', async () => {
@@ -96,7 +113,8 @@ describe('main', () => {
     const constituents = join(dir, 'c.csv');
     writeFileSync(constituents, 'date,tickers\n2026-01-01,"MSFT"\n');
     const stop = vi.fn().mockResolvedValue(undefined);
-    const argv = ['--out', join(dir, 'o.json'), '--constituents', constituents];
+    const argv = ['--out', join(dir, 'o.json'), '--store', join(dir, 'v2.sqlite')];
+    argv.push('--constituents', constituents);
     await expect(main(argv, TODAY, () => ({ api: fakeApi(), stop }), SILENT)).rejects.toThrow(
       /no instruments/,
     );

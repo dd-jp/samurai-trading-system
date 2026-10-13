@@ -30,7 +30,9 @@ import {
   divergencesOf,
   formatReplay,
   type JournalledDecision,
+  journalledCfdEntryRefusal,
   journalledLseRefusal,
+  journalledSplitBlocks,
   type ReplayResult,
   redactor,
   replayExitCode,
@@ -38,7 +40,14 @@ import {
 import { main, parseReplayArgs, type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore } from './risk/index.js';
 import type { LoggedCall, ModelPin } from './signal/index.js';
-import { ReplayLog, ScriptedTransport } from './signal/index.js';
+import {
+  CFD_ENTRY_GATES,
+  cfdEntryRefusal,
+  ReplayLog,
+  ScriptedTransport,
+  withheldParameters,
+} from './signal/index.js';
+import { SqliteSplitChecks } from './split-checks.js';
 
 vi.mock('../../shared/store/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../shared/store/index.js')>();
@@ -53,10 +62,10 @@ const OPEN_EVERY_DAY: VenueSessionGate = {
   timeStopPausedVenues: () => [],
 };
 
-function rising(): DailyBar[] {
+function rising(slope = 0.001): DailyBar[] {
   const bars: DailyBar[] = [];
   for (let i = 0; i <= 260; i += 1) {
-    const close = 20 * (1 + 0.001 * i);
+    const close = 20 * (1 + slope * i);
     bars.push({
       date: dateAt(i),
       open: close,
@@ -91,12 +100,19 @@ const FIXTURE_NEWS: NewsSource = {
 
 const scripted = (pin: ModelPin) => new ScriptedTransport(pin, answer);
 
+interface SeededDay {
+  readonly files?: Partial<typeof files>;
+  readonly cfdEntryRefusal?: () => string | undefined;
+}
+
 async function seedDay(
   name: string,
   transportFor: (pin: ModelPin) => AnthropicMessagesClient,
   newsSource: NewsSource = FIXTURE_NEWS,
   prepare: (seed: StoreHandle) => void = () => {},
+  day: SeededDay = {},
 ): Promise<ReplayCliOptions> {
+  const base = { ...files, ...day.files };
   const storePath = join(directory, `${name}.sqlite`);
   const seed = openSharedStore(storePath);
   new CapitalConfigStore(seed, new SimulatedClock(new Date('2026-01-01T00:00:00.000Z'))).setYear(
@@ -107,12 +123,13 @@ async function seedDay(
   prepare(seed);
   seed.close();
   const root = composeV2Root({
-    tradingDate: files.tradingDate,
-    barStoreRoot: files.barStoreRoot,
-    constituentsPath: files.constituentsPath,
-    fxPath: files.fxPath,
-    spreadsPath: files.spreadsPath,
-    cfdCataloguePath: files.cfdCataloguePath,
+    tradingDate: base.tradingDate,
+    barStoreRoot: base.barStoreRoot,
+    constituentsPath: base.constituentsPath,
+    fxPath: base.fxPath,
+    spreadsPath: base.spreadsPath,
+    cfdCataloguePath: base.cfdCataloguePath,
+    cfdEntryRefusal: day.cfdEntryRefusal,
     dryRun: true,
     storePath,
     clock: new SimulatedClock(new Date(`${TRADING_DATE}T07:30:00.000Z`)),
@@ -126,7 +143,7 @@ async function seedDay(
   } finally {
     root.close();
   }
-  return { ...files, storePath, venueSessions: OPEN_EVERY_DAY };
+  return { ...base, storePath, venueSessions: OPEN_EVERY_DAY };
 }
 
 beforeAll(async () => {
@@ -758,6 +775,7 @@ describe('main', () => {
           calls: 0,
           orders: 0,
           fills: 0,
+          signals: 0,
           skipped: [],
           divergences: [
             {
@@ -903,6 +921,183 @@ describe('journalledLseRefusal', () => {
   });
 });
 
+describe('journalledSplitBlocks', () => {
+  const check = (tradingDate: string, instrument: string) => ({
+    tradingDate,
+    instrument,
+    exchange: 'US' as const,
+    window: { after: '2026-10-01', through: tradingDate },
+    verdict: 'block' as const,
+    reason: 'sources_disagree',
+    ratio: 1,
+  });
+  const blocked = {
+    after: '2026-10-01',
+    reason: 'sources_disagree',
+    since: '2026-10-05',
+  };
+  const instruments = ['AAPL', 'MSFT', 'NVDA', 'AMD'] as const;
+  const runStart = '2026-10-06T07:30:00.000Z';
+
+  function journalOf(): StoreHandle {
+    const journal = migratedMemoryStore();
+    const book = journal.prepare(
+      `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+       VALUES (?, ?, 'primary', 1, 1, 'now')`,
+    );
+    book.run('debate/primary', 'debate');
+    book.run('signals/primary', 'signals');
+    const refusal = journal.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at, book_id, instrument)
+       VALUES (?, ?, ?, '#2025', 'm', 'now', ?, ?)`,
+    );
+    refusal.run('2026-10-06', 'exit', 'SPLIT_EXIT_FREEZE', 'debate/no-veto', 'AAPL');
+    refusal.run('2026-10-06', 'entry', 'SPLIT_CROSSCHECK_BLOCK', 'debate/primary', 'NVDA');
+    refusal.run('2026-10-06', 'entry', 'SPLIT_CROSSCHECK_BLOCK', 'signals/primary', 'AMD');
+    refusal.run('2026-10-05', 'entry', 'SPLIT_CROSSCHECK_BLOCK', 'debate/primary', 'MSFT');
+    return journal;
+  }
+
+  function clearedCopy(journal: StoreHandle) {
+    const clock = new SimulatedClock(new Date('2026-10-05T07:00:00.000Z'));
+    const copy = new SqliteSplitChecks(migratedMemoryStore(), clock);
+    const checks = journalledSplitBlocks(journal, copy, '2026-10-06');
+    for (const instrument of instruments) checks.record(check('2026-10-05', instrument));
+    clock.advanceTo(new Date('2026-10-06T07:29:30.000Z'));
+    for (const instrument of instruments) copy.clear(instrument, 'US', 'David checked');
+    return { copy, checks };
+  }
+
+  it('holds a line the live run journalled frozen against a clear the rewound copy holds', () => {
+    const journal = journalOf();
+    const { copy, checks } = clearedCopy(journal);
+    expect(checks.block('AAPL', 'US', '2026-10-06', runStart)).toEqual(blocked);
+    expect(checks.block('AAPL', 'US', '2026-10-06')).toBeUndefined();
+    expect(checks.block('MSFT', 'US', '2026-10-06', runStart)).toBeUndefined();
+    expect(checks.blockedBetween('AAPL', 'US', '2026-10-05', '2026-10-06')).toBe(true);
+    expect(checks.carried('2026-10-06')).toEqual(copy.carried('2026-10-06'));
+    expect(checks.carried('2026-10-06')).not.toEqual([]);
+    journal.close();
+  });
+
+  it("holds a daily cycle's journalled entry block, never a signals entry pass's, against the clear", () => {
+    const journal = journalOf();
+    const { checks } = clearedCopy(journal);
+    expect(checks.block('NVDA', 'US', '2026-10-06', runStart)).toEqual(blocked);
+    expect(checks.block('NVDA', 'US', '2026-10-06')).toBeUndefined();
+    expect(checks.block('AMD', 'US', '2026-10-06', runStart)).toBeUndefined();
+    journal.close();
+  });
+});
+
+describe('journalledCfdEntryRefusal', () => {
+  it('reads the first CFD entry gate the day refused, in gate order, from parameter rows only', () => {
+    const db = migratedMemoryStore();
+    const insert = db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES (?, ?, ?, '#1916', 'm', 'now')`,
+    );
+    insert.run('2026-09-29', 'parameter', 'CFD_RESTING_STOP_VERIFIED');
+    insert.run('2026-09-29', 'parameter', 'CFD_COST_MODEL');
+    insert.run('2026-09-30', 'parameter', 'CFD_RESTING_STOP_VERIFIED');
+    insert.run('2026-09-30', 'parameter', 'G18_SOCIAL_SOURCE');
+    insert.run('2026-10-01', 'entry', 'CFD_COST_MODEL');
+    insert.run('2026-10-01', 'parameter', 'G18_SOCIAL_SOURCE');
+    expect(journalledCfdEntryRefusal(db, '2026-09-29')).toBe('cfd_cost_model_unset');
+    expect(journalledCfdEntryRefusal(db, '2026-09-30')).toBe('cfd_resting_stop_unverified');
+    expect(journalledCfdEntryRefusal(db, '2026-10-01')).toBeUndefined();
+    expect(journalledCfdEntryRefusal(db, '2026-10-02')).toBeUndefined();
+    db.close();
+  });
+});
+
+describe('a CFD entry gate set to false', () => {
+  it('journals the cycle refusal replay reads back as the live refusal', () => {
+    const gates = CFD_ENTRY_GATES.map((gate) =>
+      gate.parameter.name === 'CFD_RESTING_STOP_VERIFIED'
+        ? { ...gate, parameter: { ...gate.parameter, value: false } }
+        : gate,
+    );
+    const db = migratedMemoryStore();
+    const insert = db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES ('2026-09-29', 'parameter', ?, ?, ?, 'now')`,
+    );
+    for (const row of withheldParameters(gates.map(({ parameter }) => parameter))) {
+      insert.run(row.parameter, row.ticket, row.message);
+    }
+    expect(cfdEntryRefusal(gates)).toBe('cfd_resting_stop_unverified');
+    expect(journalledCfdEntryRefusal(db, '2026-09-29')).toBe(cfdEntryRefusal(gates));
+    db.close();
+  });
+});
+
+describe('replay of a day the CFD entry gate refused (#2104)', { timeout: 30_000 }, () => {
+  let gated: ReplayCliOptions;
+
+  function shortReasons(path: string): unknown[] {
+    const db = new BetterSqlite3(path, { readonly: true });
+    try {
+      return db
+        .prepare(
+          `SELECT DISTINCT d.reason FROM v2_decisions d JOIN v2_books b ON b.book_id = d.book_id
+            WHERE b.sleeve_id = 'arm2' AND d.instrument = 'DN'`,
+        )
+        .all();
+    } finally {
+      db.close();
+    }
+  }
+
+  beforeAll(async () => {
+    const barStoreRoot = join(directory, 'parquet-falling');
+    const store = await ParquetBarStore.open(barStoreRoot);
+    await store.write('alpaca', [
+      { symbol: 'DN', bars: rising(-0.001) },
+      { symbol: 'SPY', bars: rising() },
+    ]);
+    store.close();
+    const constituentsPath = join(directory, 'constituents-falling.csv');
+    writeFileSync(constituentsPath, 'date,tickers\n2016-01-04,DN\n');
+    gated = await seedDay('cfd-gated', scripted, FIXTURE_NEWS, () => {}, {
+      files: { barStoreRoot, constituentsPath },
+      cfdEntryRefusal: () => 'cfd_resting_stop_unverified',
+    });
+    const db = new BetterSqlite3(gated.storePath);
+    db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES (?, 'parameter', 'CFD_RESTING_STOP_VERIFIED', '#1916', 'unset', 'now')`,
+    ).run(TRADING_DATE);
+    db.close();
+  }, 30_000);
+
+  it('replays identical under the all-set gates of today from the journalled refusal', async () => {
+    expect(shortReasons(gated.storePath)).toEqual([
+      { reason: 'short_unavailable:cfd_resting_stop_unverified' },
+    ]);
+    const result = await replayFromFiles(gated);
+    expect(result.decisions).toBeGreaterThan(0);
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('diverges on the reason once the journalled refusal is gone', async () => {
+    const storePath = join(directory, 'cfd-gated-unjournalled.sqlite');
+    copyFileSync(gated.storePath, storePath);
+    const db = new BetterSqlite3(storePath);
+    db.exec(`DELETE FROM v2_refusals WHERE parameter = 'CFD_RESTING_STOP_VERIFIED'`);
+    db.close();
+    const result = await replayFromFiles({ ...gated, storePath });
+    expect(result.divergences).toContainEqual({
+      kind: 'decision_field',
+      bookId: expect.stringContaining('arm2'),
+      instrument: 'DN',
+      field: 'reason',
+      journalled: 'short_unavailable:cfd_resting_stop_unverified',
+      replayed: 'short_unavailable:no_catalogue',
+    });
+  });
+});
+
 const BARS_DIGEST: InputDigest = {
   input: 'bars',
   name: 'UP',
@@ -930,6 +1125,7 @@ describe('formatReplay', () => {
     calls: 3,
     orders: 4,
     fills: 1,
+    signals: 2,
     skipped: [],
     divergences,
   });
@@ -962,7 +1158,7 @@ describe('formatReplay', () => {
         '\n',
       ),
     ).toEqual([
-      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills',
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills, 2 signal events',
       'INPUT CHANGED (2 inputs changed since the day, 4 divergences); every changed input:',
       'UP: bars changed since 2026-09-30',
       '  journalled: sha256 e3b0c44298fc, 2 bars 2026-09-28..2026-09-29',
@@ -998,7 +1194,7 @@ describe('formatReplay', () => {
       { stage: 'carry', migration: 94 },
     ] as const;
     const head = [
-      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills',
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills, 2 signal events',
       'rescales: not compared, the day ran before migration 0087',
       'carry: not compared, the day ran before migration 0094',
     ].join('\n');
@@ -1022,7 +1218,7 @@ describe('formatReplay', () => {
 
   it('says identical when nothing diverged', () => {
     expect(formatReplay(result([]), (text) => text)).toBe(
-      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills\nidentical',
+      'replay 2026-09-30: 2 journalled decisions, 3 logged calls, 4 orders, 1 fills, 2 signal events\nidentical',
     );
   });
 
@@ -1032,6 +1228,14 @@ describe('formatReplay', () => {
       'no debate or arm 2 decision and no mark is journalled for 2026-09-30',
     ],
     [{ kind: 'decision_missing', bookId: 'b', instrument: 'UP' }, 'b UP: journalled, not replayed'],
+    [
+      { kind: 'signals_not_replayed', tradingDate: '2026-09-30', reason: 'unmarked', events: 2 },
+      '2026-09-30: 2 signal events are journalled but the day has no mark, so the signals passes are not replayed; review them by hand',
+    ],
+    [
+      { kind: 'signals_not_replayed', tradingDate: '2026-09-30', reason: 'before_mark', events: 3 },
+      "2026-09-30: a signal event of the 3 journalled precedes the day's mark, so the signals passes are not replayed; review them by hand",
+    ],
     [
       {
         kind: 'input_changed_since',
@@ -1172,6 +1376,7 @@ describe('main redaction', () => {
           calls: 1,
           orders: 0,
           fills: 0,
+          signals: 0,
           skipped: [],
           divergences: [
             {

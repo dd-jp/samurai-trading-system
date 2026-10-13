@@ -67,11 +67,12 @@ function nextDate(date: string): string {
   return next.toISOString().slice(0, 10);
 }
 
-function sessionSince(exchange: Exchange, from: string, before: string): boolean {
+export function firstSessionOn(venue: Venue, from: string, before: string): string | undefined {
+  const exchange = exchangeOf(venue);
   for (let date = from; date < before; date = nextDate(date)) {
-    if (sessionDay(exchange, date) !== 'closed') return true;
+    if (sessionDay(exchange, date) !== 'closed') return date;
   }
-  return false;
+  return undefined;
 }
 
 export function bothVenuesClosed(date: string): boolean {
@@ -102,7 +103,7 @@ export const TABLE_VENUE_SESSIONS: VenueSessionGate = {
   timeStopPausedVenues(previousMarkDate, tradingDate) {
     if (previousMarkDate === undefined) return [];
     return VENUES.filter(
-      (venue) => !sessionSince(exchangeOf(venue), previousMarkDate, tradingDate),
+      (venue) => firstSessionOn(venue, previousMarkDate, tradingDate) === undefined,
     );
   },
 };

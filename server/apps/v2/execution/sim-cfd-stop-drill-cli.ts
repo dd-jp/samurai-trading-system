@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from '../../../shared/index.js';
-import { exitCodeOrOne, isMainModule } from '../../../tools/cli-entrypoint.js';
+import { exitCodeOrOne, flagPairs, isMainModule } from '../../../tools/cli-entrypoint.js';
 import { type FetchLike, resolveSaxoOAuthConfig } from './saxo/saxo-oauth.js';
 import { readTokenFile, tokenFilePath } from './saxo/saxo-token-file.js';
 import {
@@ -35,21 +35,8 @@ export interface DrillArgs {
   readonly outDir: string;
 }
 
-function flagValues(argv: readonly string[]): Map<string, string> {
-  const values = new Map<string, string>();
-  for (let index = 0; index < argv.length; index += 2) {
-    const name = argv[index] ?? '';
-    const value = argv[index + 1];
-    if (!['--stock', '--etf', '--out-dir'].includes(name) || value === undefined) {
-      throw new Error(DRILL_USAGE);
-    }
-    values.set(name.slice(2), value);
-  }
-  return values;
-}
-
 export function parseDrillArgs(argv: readonly string[]): DrillArgs {
-  const values = flagValues(argv);
+  const values = flagPairs(argv, ['--stock', '--etf', '--out-dir'], DRILL_USAGE);
   const [stock, etf] = DEFAULT_DRILL_TARGETS;
   const chosen = [
     { symbol: values.get('stock') ?? stock?.symbol, assetType: 'CfdOnStock' as const },

@@ -3,6 +3,7 @@ import type { BrokerOpenOrder } from '../../../contracts/index.js';
 import {
   compareVenue,
   type HeldProtection,
+  protectingStops,
   rearmable,
   type StoreView,
 } from './reconcile-compare.js';
@@ -362,5 +363,25 @@ describe('rearmable (#1990)', () => {
         view({ AAPL: 6 }, [stop('AAPL', 'entry-AAPL', null)]),
       )('AAPL'),
     ).toBe(false);
+  });
+});
+
+describe('protectingStops (#2090)', () => {
+  it('names each closing stop on a name both sides hold alike, and nothing else', () => {
+    const held = { AAPL: 6, MSFT: -3, NVDA: 2 };
+    const broker = view({ ...held, NVDA: 1, TSLA: 4 }, [
+      stop('AAPL'),
+      stop('AAPL', 'aapl-oco-stop'),
+      stop('AAPL', 'add-aapl', null),
+      stop('MSFT', 'buy-stop', 'short'),
+      stop('MSFT', 'wrong-side', 'long'),
+      stop('NVDA'),
+      stop('TSLA'),
+    ]);
+    expect(protectingStops(view(held), broker).map((order) => order.clientOrderId)).toEqual([
+      'stop-AAPL',
+      'aapl-oco-stop',
+      'buy-stop',
+    ]);
   });
 });

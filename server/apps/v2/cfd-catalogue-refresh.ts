@@ -7,6 +7,7 @@ import {
 } from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
 import { isFiniteNumber } from '../../shared/index.js';
+import { openSharedStore } from '../../shared/store/index.js';
 import {
   type BarRefresh,
   logRefresh,
@@ -16,7 +17,12 @@ import {
   UNLIMITED,
   withinTimeLimit,
 } from './bar-refresh-core.js';
-import { type CfdInstrument, parseCfdCatalogue, type QuoteCurrency } from './data/index.js';
+import {
+  type CfdInstrument,
+  parseCfdCatalogue,
+  type QuoteCurrency,
+  recordCfdCatalogueSnapshot,
+} from './data/index.js';
 import {
   connectUnlessLost,
   ledgerFor,
@@ -332,17 +338,37 @@ function logReport(report: CfdCatalogueRefreshReport, path: string, logger: Logg
   );
 }
 
+export interface CfdCatalogueTarget {
+  readonly path: string;
+  readonly storePath: string;
+  readonly now?: () => Date;
+}
+
+function recordSnapshot(target: CfdCatalogueTarget, text: string): void {
+  const db = openSharedStore(target.storePath);
+  try {
+    recordCfdCatalogueSnapshot(db, Buffer.from(text), target.now?.() ?? new Date());
+  } finally {
+    db.close();
+  }
+}
+
 export async function refreshCfdCatalogue(
   api: CfdReferenceApi,
   scopes: readonly CfdScope[],
   asOf: string,
-  path: string,
+  target: CfdCatalogueTarget,
   logger: Logger,
   limit: TimeLimit = UNLIMITED,
 ): Promise<CfdCatalogueRefreshReport> {
   const report = await buildCfdCatalogue(api, scopes, asOf);
-  await limit.atomic(async () => writeAtomically(path, catalogueText(report)));
-  logReport(report, path, logger);
+  const text = catalogueText(report);
+  // Recorded first (#2105, #2118): a file the cycle reads is always a snapshot the backtest can date
+  await limit.atomic(async () => {
+    recordSnapshot(target, text);
+    writeAtomically(target.path, text);
+  });
+  logReport(report, target.path, logger);
   return report;
 }
 
@@ -358,14 +384,12 @@ export type CfdSessionConnect = (
   signal: AbortSignal,
 ) => CfdSession;
 
-export interface CfdCatalogueLeg {
+export interface CfdCatalogueLeg extends CfdCatalogueTarget {
   readonly tradingDate: string;
   readonly constituents: readonly string[];
-  readonly path: string;
   readonly logger: Logger;
   readonly connect?: CfdSessionConnect;
   readonly tokenPath?: string;
-  readonly now?: () => Date;
   readonly timeLimitMs?: number;
 }
 
@@ -377,7 +401,7 @@ async function refreshInSession(
 ): Promise<void> {
   try {
     const scopes = cfdScopes(leg.constituents);
-    await refreshCfdCatalogue(session.api, scopes, leg.tradingDate, leg.path, leg.logger, limit);
+    await refreshCfdCatalogue(session.api, scopes, leg.tradingDate, leg, leg.logger, limit);
   } finally {
     noteSessionLoss(session.lostReason?.(), ledger);
     await session.stop();

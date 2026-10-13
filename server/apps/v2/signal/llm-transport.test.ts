@@ -13,7 +13,7 @@ import { SimulatedClock } from '../../../shared/index.js';
 import { NousAccountInFlightGate, NousApiError } from '../../../shared/llm/index.js';
 import { migratedMemoryStore } from '../../../shared/store/migrated-template.js';
 import { NousPinnedTransport } from './llm-transport.js';
-import { DEEPSEEK_V4_PRO_PIN, JUDGE_PIN, type ModelPin, SONNET_5_PIN } from './models.js';
+import { DEEPSEEK_V4_PRO_PIN, JUDGE_PIN, type ModelPin, SONNET_5_5_PIN } from './models.js';
 import { SqliteMonthlySpendCap } from './monthly-spend-cap.js';
 import { ScriptedTransport } from './scripted-transport.js';
 import { SECRET_WITHHELD, secretGuardedSink } from './secret-guard.js';
@@ -80,21 +80,21 @@ describe('NousPinnedTransport', () => {
     const logs: LogEntry[] = [];
     stubFetch(
       200,
-      completion('anthropic/claude-sonnet-5', '{"stance":"bullish","rationale":"x"}'),
+      completion('anthropic/claude-sonnet-5.5', '{"stance":"bullish","rationale":"x"}'),
       captured,
     );
-    const reply = await transportFor(SONNET_5_PIN, {
+    const reply = await transportFor(SONNET_5_5_PIN, {
       log: (entry) => logs.push(entry),
-    }).createMessage(request('anthropic/claude-sonnet-5'), { stage: 'debate' });
+    }).createMessage(request('anthropic/claude-sonnet-5.5'), { stage: 'debate' });
     expect(captured[0]?.url).toBe('https://nous.test/v1/chat/completions');
     expect(captured[0]?.headers.authorization).toBe('Bearer nous-secret');
     expect(captured[0]?.body).toEqual({
-      model: 'anthropic/claude-sonnet-5',
+      model: 'anthropic/claude-sonnet-5.5',
       max_tokens: 64,
       messages: [{ role: 'user', content: 'hello' }],
     });
-    expect(reply.model).toBe('anthropic/claude-sonnet-5');
-    expect(reply.upstream_model).toBe('anthropic/claude-sonnet-5');
+    expect(reply.model).toBe('anthropic/claude-sonnet-5.5');
+    expect(reply.upstream_model).toBe('anthropic/claude-sonnet-5.5');
     expect(reply.content[0]?.text).toBe('{"stance":"bullish","rationale":"x"}');
     expect(reply.usage).toEqual({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0 });
     expect(typeof reply.ttfb_ms).toBe('number');
@@ -104,8 +104,8 @@ describe('NousPinnedTransport', () => {
         level: 'info',
         event: 'v2_llm_upstream_model',
         stage: 'debate',
-        message: 'anthropic/claude-sonnet-5 answered as anthropic/claude-sonnet-5',
-        payload: { pinned: 'anthropic/claude-sonnet-5', upstream: 'anthropic/claude-sonnet-5' },
+        message: 'anthropic/claude-sonnet-5.5 answered as anthropic/claude-sonnet-5.5',
+        payload: { pinned: 'anthropic/claude-sonnet-5.5', upstream: 'anthropic/claude-sonnet-5.5' },
       },
     ]);
     expect(JSON.stringify(logs)).not.toContain('nous-secret');
@@ -115,26 +115,26 @@ describe('NousPinnedTransport', () => {
     const captured: Captured[] = [];
     stubFetch(200, {}, captured);
     await expect(
-      transportFor(SONNET_5_PIN).createMessage(request('anthropic/claude-fable-5')),
-    ).rejects.toThrow(/transport for anthropic\/claude-sonnet-5 refused a request for model/);
+      transportFor(SONNET_5_5_PIN).createMessage(request('anthropic/claude-fable-5')),
+    ).rejects.toThrow(/transport for anthropic\/claude-sonnet-5.5 refused a request for model/);
     expect(captured).toHaveLength(0);
   });
 
   it('refuses a request carrying a known secret before send, naming it and never its value', async () => {
     const captured: Captured[] = [];
     const logs: LogEntry[] = [];
-    stubFetch(200, completion('anthropic/claude-sonnet-5', '{}'), captured);
+    stubFetch(200, completion('anthropic/claude-sonnet-5.5', '{}'), captured);
     const leaky = {
-      ...request('anthropic/claude-sonnet-5'),
+      ...request('anthropic/claude-sonnet-5.5'),
       messages: [{ role: 'user' as const, content: 'cash fake-alpaca-secret-7f' }],
     };
-    const error = await transportFor(SONNET_5_PIN, { log: (entry) => logs.push(entry) })
+    const error = await transportFor(SONNET_5_5_PIN, { log: (entry) => logs.push(entry) })
       .createMessage(leaky, { stage: 'debate' })
       .catch((e: unknown) => e);
     expect(captured).toHaveLength(0);
     expect(error).toBeInstanceOf(LlmProviderError);
     expect((error as Error).message).toBe(
-      'anthropic/claude-sonnet-5 request refused before send: it carries the value of ALPACA_API_SECRET',
+      'anthropic/claude-sonnet-5.5 request refused before send: it carries the value of ALPACA_API_SECRET',
     );
     expect(logs).toMatchObject([
       {
@@ -142,7 +142,7 @@ describe('NousPinnedTransport', () => {
         stage: 'debate',
         level: 'error',
         event: 'v2_llm_secret_refused',
-        payload: { pinned: 'anthropic/claude-sonnet-5', secret: 'ALPACA_API_SECRET' },
+        payload: { pinned: 'anthropic/claude-sonnet-5.5', secret: 'ALPACA_API_SECRET' },
       },
     ]);
     expect(JSON.stringify(logs)).not.toContain('fake-alpaca-secret-7f');
@@ -151,12 +151,12 @@ describe('NousPinnedTransport', () => {
 
   it('refuses its own key anywhere but the authorization header', async () => {
     const captured: Captured[] = [];
-    stubFetch(200, completion('anthropic/claude-sonnet-5', '{}'), captured);
+    stubFetch(200, completion('anthropic/claude-sonnet-5.5', '{}'), captured);
     const leaky = {
-      ...request('anthropic/claude-sonnet-5'),
+      ...request('anthropic/claude-sonnet-5.5'),
       messages: [{ role: 'user' as const, content: 'key nous-secret' }],
     };
-    await expect(transportFor(SONNET_5_PIN).createMessage(leaky)).rejects.toThrow(
+    await expect(transportFor(SONNET_5_5_PIN).createMessage(leaky)).rejects.toThrow(
       /it carries the value of NOUS_API_KEY/,
     );
     expect(captured).toHaveLength(0);

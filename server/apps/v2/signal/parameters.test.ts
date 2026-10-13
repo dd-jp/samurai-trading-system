@@ -1,19 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { SAXO_CFD_COMMISSION, SAXO_CFD_FINANCING, SAXO_CFD_SPREAD } from '../data/index.js';
+import { CROSS_ASSET_TREND_CANDIDATE_ID } from './cross-asset-trend.js';
+import { MEAN_REVERSION_CANDIDATE_ID } from './mean-reversion.js';
+import { ALL_PINS, DEBATER_PINS, JUDGE_PIN, PRE_DIGEST_ALL_PINS, pinDigest } from './models.js';
 import {
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
+  ARM2_SLEEVE_ID,
+  bookPinDigest,
+  bookPreDigestPinDigest,
   CFD_BORROW_MODEL,
   CFD_COST_MODEL,
   CFD_ENTRY_GATES,
   CFD_FINANCING_MODEL,
   CFD_RESTING_STOP_VERIFIED,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+  CFD_SLEEVE_IDS,
   CFD_SPREAD_MODEL,
   type CfdEntryGate,
   CYCLE_LEVEL_PARAMETERS,
   cfdEntryRefusal,
   DEBATE_RISK_FRACTION,
+  DEBATE_SLEEVE_ID,
+  DEBATE_SLEEVE_SPEC,
   DEBATE_TARGET_ATR_MULTIPLE,
   DEBATE_TIME_STOP_TRADING_DAYS,
   DECLARED_PARAMETERS,
@@ -29,10 +38,16 @@ import {
   RECONCILE_CASH_TOLERANCE_GBP,
   requireSet,
   SAXO_APPROPRIATENESS_TEST_TAKEN,
+  SIGNALS_SLEEVE_ID,
+  SIGNALS_SLEEVE_SPEC,
+  SLEEVE_PINS_BY_ID,
+  SLEEVE_SPECS_BY_ID,
   UNSET,
   UnsetParameterError,
   VOL_TARGET_SIZING,
+  withheldParameters,
 } from './parameters.js';
+import { VOL_TARGET_INDEX_CANDIDATE_ID } from './vol-target-index.js';
 
 const CFD_GATE_PARAMETERS = [
   CFD_COST_MODEL,
@@ -53,7 +68,7 @@ const SET_PARAMETERS: readonly Parameter<unknown>[] = [
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
   RECONCILE_CASH_TOLERANCE_GBP,
-  ...CFD_COST_PARAMETERS,
+  ...CFD_GATE_PARAMETERS,
 ];
 
 describe('parameters', () => {
@@ -155,10 +170,10 @@ describe('parameters', () => {
     expect(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR).toBe(0.02);
   });
 
-  it('with the cost models set, only the resting stop (#1916) still refuses a CFD entry', () => {
+  it('sets the resting stop as verified (#1916, SIM drill 2026-10-09), so every CFD entry gate admits', () => {
     expect(CFD_RESTING_STOP_VERIFIED.ticket).toBe('#1916');
-    expect(isSet(CFD_RESTING_STOP_VERIFIED)).toBe(false);
-    expect(cfdEntryRefusal()).toBe('cfd_resting_stop_unverified');
+    expect(CFD_RESTING_STOP_VERIFIED.value).toBe(true);
+    expect(cfdEntryRefusal()).toBeUndefined();
   });
 
   describe('declaredCfdCosts', () => {
@@ -217,12 +232,107 @@ describe('parameters', () => {
       expect(cfdEntryRefusal(gates)).toBe('cfd_resting_stop_unverified');
     });
 
-    it('names the first unset gate in order when several are missing', () => {
-      expect(cfdEntryRefusal([...CFD_ENTRY_GATES].reverse())).toBe('cfd_resting_stop_unverified');
+    it('withholds a false gate as it withholds an unset one, naming each (#2104)', () => {
+      const gates = allSet.map((gate) =>
+        gate.parameter.name === 'CFD_RESTING_STOP_VERIFIED'
+          ? setGate(gate, false)
+          : gate.parameter.name === 'CFD_COST_MODEL'
+            ? setGate(gate, UNSET)
+            : gate,
+      );
+      expect(withheldParameters(gates.map(({ parameter }) => parameter))).toEqual([
+        {
+          parameter: 'CFD_COST_MODEL',
+          ticket: '#1850',
+          message: 'CFD_COST_MODEL is not set: needs David (#1850)',
+        },
+        {
+          parameter: 'CFD_RESTING_STOP_VERIFIED',
+          ticket: '#1916',
+          message: 'CFD_RESTING_STOP_VERIFIED is false: needs David (#1916)',
+        },
+      ]);
+      expect(withheldParameters(allSet.map(({ parameter }) => parameter))).toEqual([]);
     });
+
+    it('names the first unset gate in order when several are missing', () => {
+      const allUnset = CFD_ENTRY_GATES.map((gate) => setGate(gate, UNSET));
+      expect(cfdEntryRefusal(allUnset)).toBe('cfd_cost_model_unset');
+      expect(cfdEntryRefusal([...allUnset].reverse())).toBe('cfd_resting_stop_unverified');
+    });
+  });
+
+  it('allows CFD routes to the debate sleeve and arm 2 only (doc 66 (f), #1858, #2105)', () => {
+    expect(CFD_SLEEVE_IDS).toEqual(['debate', 'arm2', 'arm2-vol-target']);
+    for (const cfdFree of [
+      SIGNALS_SLEEVE_ID,
+      CROSS_ASSET_TREND_CANDIDATE_ID,
+      MEAN_REVERSION_CANDIDATE_ID,
+      VOL_TARGET_INDEX_CANDIDATE_ID,
+    ]) {
+      expect(CFD_SLEEVE_IDS).not.toContain(cfdFree);
+    }
   });
 
   it('the Saxo appropriateness test is recorded as taken (doc 66 ruling (l), #1774 (b))', () => {
     expect(SAXO_APPROPRIATENESS_TEST_TAKEN).toBe(true);
+  });
+});
+
+describe('sleeve pin sets (#1747, David 2026-10-04 and 2026-10-10)', () => {
+  it('declares a pin set for every sleeve that has a spec', () => {
+    expect(Object.keys(SLEEVE_PINS_BY_ID).sort()).toEqual(Object.keys(SLEEVE_SPECS_BY_ID).sort());
+  });
+
+  it('pins every debate book to all three debaters, the idle rotation seat included, and the judge', () => {
+    expect(DEBATER_PINS.map((pin) => pin.seat)).toEqual(['sonnet', 'gpt', 'deepseek']);
+    for (const { variant } of DEBATE_SLEEVE_SPEC.books) {
+      expect(bookPinDigest(DEBATE_SLEEVE_ID, variant)).toBe(pinDigest(ALL_PINS));
+    }
+  });
+
+  it('pins the signals primary to the judge alone, so a debater swap leaves it alone', () => {
+    expect(bookPinDigest(SIGNALS_SLEEVE_ID, 'primary')).toBe(pinDigest([JUDGE_PIN]));
+  });
+
+  it('gives arm 2 and every no-veto book the empty set, so they never reset', () => {
+    const none = pinDigest([]);
+    expect(bookPinDigest(ARM2_SLEEVE_ID, 'technical-only')).toBe(none);
+    expect(SIGNALS_SLEEVE_SPEC.books.map((book) => book.variant)).toContain('no-veto');
+    expect(bookPinDigest(SIGNALS_SLEEVE_ID, 'no-veto')).toBe(none);
+    expect(bookPinDigest(DEBATE_SLEEVE_ID, 'no-veto')).toBe(none);
+  });
+
+  it('has no digest for a sleeve with no declared pins', () => {
+    expect(bookPinDigest('trend', 'primary')).toBeUndefined();
+  });
+});
+
+describe('pins before #2110 (David 2026-10-12, #2121)', () => {
+  it('puts the debate books on Sonnet 5, so an undigested debate entry is not under the current pins', () => {
+    expect(PRE_DIGEST_ALL_PINS.map((pin) => pin.wire)).toEqual([
+      'anthropic/claude-sonnet-5',
+      'openai/gpt-5.5',
+      'deepseek/deepseek-v4-pro-0813',
+      'anthropic/claude-opus-5.5',
+    ]);
+    expect(bookPreDigestPinDigest(DEBATE_SLEEVE_ID, 'primary')).toBe(
+      pinDigest(PRE_DIGEST_ALL_PINS),
+    );
+    expect(bookPreDigestPinDigest(DEBATE_SLEEVE_ID, 'primary')).not.toBe(
+      bookPinDigest(DEBATE_SLEEVE_ID, 'primary'),
+    );
+  });
+
+  it('matches the current pins wherever they have not changed', () => {
+    for (const [sleeve, variant] of [
+      [SIGNALS_SLEEVE_ID, 'primary'],
+      [SIGNALS_SLEEVE_ID, 'no-veto'],
+      [ARM2_SLEEVE_ID, 'technical-only'],
+      [DEBATE_SLEEVE_ID, 'no-veto'],
+    ] as const) {
+      expect(bookPreDigestPinDigest(sleeve, variant)).toBe(bookPinDigest(sleeve, variant));
+    }
+    expect(bookPreDigestPinDigest('trend', 'primary')).toBeUndefined();
   });
 });

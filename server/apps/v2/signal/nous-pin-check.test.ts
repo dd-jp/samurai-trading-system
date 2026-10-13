@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LogEntry } from '../../../shared/index.js';
-import { ALL_PINS } from './models.js';
+import { ALL_PINS, type ModelPin } from './models.js';
 import { verifyNousPins } from './nous-pin-check.js';
 import type { KnownSecret } from './secret-guard.js';
 
 const KEY = 'nous-secret-key';
 
 const LISTED = [
-  { id: 'anthropic/claude-sonnet-5', canonical_slug: 'anthropic/claude-sonnet-5' },
+  { id: 'anthropic/claude-sonnet-5.5', canonical_slug: 'anthropic/claude-sonnet-5.5-20260928' },
   { id: 'openai/gpt-5.5', canonical_slug: 'openai/gpt-5.5-20260423' },
   { id: 'deepseek/deepseek-v4-pro-0813', canonical_slug: 'deepseek/deepseek-v4-pro-20260813' },
   { id: 'anthropic/claude-opus-5.5', canonical_slug: 'anthropic/claude-opus-5.5-20260921' },
@@ -28,13 +28,14 @@ async function check(
   apiKey: string | undefined = KEY,
   secrets: readonly KnownSecret[] = [{ name: 'NOUS_API_KEY', value: KEY }],
   baseUrl = 'https://nous.test/v1',
+  pins: readonly ModelPin[] = ALL_PINS,
 ) {
   const entries: LogEntry[] = [];
   const outcome = await verifyNousPins({
     dryRun,
     baseUrl,
     apiKey,
-    pins: ALL_PINS,
+    pins,
     logger: { log: (entry) => entries.push(entry) },
     secrets: () => secrets,
     fetch: fetchImpl,
@@ -62,13 +63,13 @@ describe('verifyNousPins', () => {
       event: 'v2_llm_pins_verified',
       level: 'info',
       message:
-        'anthropic/claude-sonnet-5 = anthropic/claude-sonnet-5 (slug unverified), openai/gpt-5.5 = openai/gpt-5.5-20260423, deepseek/deepseek-v4-pro-0813 = deepseek/deepseek-v4-pro-20260813, anthropic/claude-opus-5.5 = anthropic/claude-opus-5.5-20260921',
+        'anthropic/claude-sonnet-5.5 = anthropic/claude-sonnet-5.5-20260928, openai/gpt-5.5 = openai/gpt-5.5-20260423, deepseek/deepseek-v4-pro-0813 = deepseek/deepseek-v4-pro-20260813, anthropic/claude-opus-5.5 = anthropic/claude-opus-5.5-20260921',
       payload: [
         {
           seat: 'sonnet',
-          wire: 'anthropic/claude-sonnet-5',
-          canonical_slug: 'anthropic/claude-sonnet-5',
-          slug_verified: false,
+          wire: 'anthropic/claude-sonnet-5.5',
+          canonical_slug: 'anthropic/claude-sonnet-5.5-20260928',
+          slug_verified: true,
         },
         {
           seat: 'gpt',
@@ -94,35 +95,38 @@ describe('verifyNousPins', () => {
   });
 
   it.each([
-    ['the dated shape', 'anthropic/claude-sonnet-5-20260630'],
+    ['a dated slug', 'other/model-20260101'],
     ['a slug-less row', undefined],
-  ])('accepts Sonnet 5 listed with %s and logs the slug it observed', async (_label, slug) => {
-    const rows = LISTED.map((row) =>
-      row.id === 'anthropic/claude-sonnet-5' ? { id: row.id, canonical_slug: slug } : row,
-    );
-    const { entries, error } = await check(json({ data: rows }));
-    expect(error).toBeUndefined();
-    expect(entries[0]?.message).toContain(
-      `anthropic/claude-sonnet-5 = ${String(slug)} (slug unverified), openai/gpt-5.5`,
-    );
-    expect(entries[0]?.payload).toContainEqual({
-      seat: 'sonnet',
-      wire: 'anthropic/claude-sonnet-5',
-      canonical_slug: slug,
-      slug_verified: false,
-    });
-  });
-
-  it('refuses when Sonnet 5 is not listed at all', async () => {
-    const rows = LISTED.filter((row) => row.id !== 'anthropic/claude-sonnet-5');
-    const { entries, error } = await check(json({ data: rows }));
-    expect(error?.message).toBe(
-      'v2 refuses the paper run: Nous GET /models: sonnet anthropic/claude-sonnet-5 is not listed — a changed snapshot is a new trial',
-    );
-    expect(entries).toEqual([]);
-  });
+  ])(
+    'accepts a pin with no configured slug listed with %s and logs the slug it observed',
+    async (_label, slug) => {
+      const undated: ModelPin = {
+        seat: 'sonnet',
+        wire: 'other/model',
+        priced: 'other/model',
+        canonicalSlug: undefined,
+      };
+      const rows = LISTED.map((row) =>
+        row.id === 'other/model' ? { id: row.id, canonical_slug: slug } : row,
+      );
+      const { entries, error } = await check(
+        json({ data: rows }),
+        false,
+        KEY,
+        undefined,
+        undefined,
+        [undated],
+      );
+      expect(error).toBeUndefined();
+      expect(entries[0]?.message).toBe(`other/model = ${String(slug)} (slug unverified)`);
+      expect(entries[0]?.payload).toEqual([
+        { seat: 'sonnet', wire: 'other/model', canonical_slug: slug, slug_verified: false },
+      ]);
+    },
+  );
 
   it.each([
+    ['sonnet', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-5.5-20260928'],
     ['gpt', 'openai/gpt-5.5', 'openai/gpt-5.5-20260423'],
     ['deepseek', 'deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-pro-20260813'],
     ['judge', 'anthropic/claude-opus-5.5', 'anthropic/claude-opus-5.5-20260921'],

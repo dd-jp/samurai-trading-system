@@ -12,16 +12,26 @@ import {
   type BacktestInput,
   type BacktestTrial,
   backtestSessions,
+  cfdCatalogueIdentity,
+  datedCfdBorrowPerDay,
   entryOffsetIdentity,
   fencedMarket,
   randomVolTarget,
   runBacktest,
+  type SimulationInput,
   type SleeveFactory,
+  simulateBacktest,
   volTargetIdentity,
 } from './backtest.js';
 import { capitalCeilingGbp } from './backtest-verdict.js';
 import { CanaryLog } from './canary-log.js';
-import { addDays, BarsMarketData, parseBoeGbpUsdCsv } from './data/index.js';
+import {
+  addDays,
+  BarsMarketData,
+  CfdCatalogue,
+  CfdCatalogueArchive,
+  parseBoeGbpUsdCsv,
+} from './data/index.js';
 import { delayedTrial } from './look-ahead-canary.js';
 import { ENTRY_LIMIT_OFFSET } from './risk/index.js';
 import { type SessionBLedger, TrialLedger, trialHash } from './trial-ledger.js';
@@ -66,6 +76,7 @@ const BARS = new Map<string, BarSeries>([
   ['FLAT', series('FLAT', 0, 0.03)],
   ['DOWN', series('DOWN', -0.004, 0.005)],
   ['GONE', { symbol: 'GONE', bars: series('GONE', 0, 0).bars.slice(0, 71) }],
+  ['CRASH', series('CRASH', -0.03, 0)],
 ]);
 
 const market = new BarsMarketData(
@@ -359,10 +370,91 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       expect(row.edge).toBe(random?.edges[index]);
       expect(row.matched).toBeGreaterThan(0);
       expect(row.scheduled).toBe(row.matched);
+      expect(row.redraws).toBe(0);
+      expect(row.unmatched).toBe(0);
       expect(row.traded).toBe(row.matched);
       expect(row.matchedSessions).toBeGreaterThan(row.matched);
       expect(row.heldSessions).toBe(row.matchedSessions);
     }
+  });
+
+  it('re-enters a random run after an early stop and counts the run whose last redraw has no session left to hold', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const log = new CanaryLog(db, clock);
+    const wide =
+      (lookback: number): SleeveFactory =>
+      (market) => ({
+        ...trendSleeve(`trend-${lookback}`, 'UP', lookback)(market),
+        universe: () => ({ instruments: ['UP', 'CRASH'], refusals: [] }),
+      });
+    const trials = [3, 5].map((lookback) => ({ config: { lookback }, sleeve: wide(lookback) }));
+    const { verdict } = await runBacktest(input({ trials, randomCanary: { log, runs: 3 } }));
+    const rows = log
+      .list()
+      .filter((row) => row.kind === 'random')
+      .map((row) => JSON.parse(row.result));
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => [row.seed, row.redraws, row.unmatched])).toEqual([
+      [1, 14, 1],
+      [2, 9, 0],
+      [3, 11, 0],
+    ]);
+    expect(rows.map((row) => row.heldSessions)).toEqual([93, 96, 96]);
+    expect(rows.every((row) => row.matchedSessions === 96)).toBe(true);
+    expect(rows.map((row) => row.excluded)).toEqual([true, false, false]);
+    expect(verdict.randomEntries?.excludedRuns).toBe(1);
+    expect(verdict.randomEntries?.beats).toBe(false);
+  });
+
+  it('fails the random check when every run is over the unserved tolerance at the window end', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const log = new CanaryLog(db, clock);
+    const crashing =
+      (lookback: number): SleeveFactory =>
+      (market) => ({
+        ...trendSleeve(`trend-${lookback}`, 'UP', lookback)(market),
+        universe: () => ({ instruments: ['CRASH'], refusals: [] }),
+      });
+    const trials = [3, 5].map((lookback) => ({ config: { lookback }, sleeve: crashing(lookback) }));
+    const { verdict } = await runBacktest(input({ trials, randomCanary: { log, runs: 2 } }));
+    const rows = log
+      .list()
+      .filter((row) => row.kind === 'random')
+      .map((row) => JSON.parse(row.result));
+    expect(rows.map((row) => [row.seed, row.unmatched])).toEqual([
+      [1, 7],
+      [2, 10],
+    ]);
+    for (const row of rows) expect(row.heldSessions).toBeLessThan(row.matchedSessions);
+    const random = verdict.randomEntries as NonNullable<typeof verdict.randomEntries>;
+    expect(rows.map((row) => row.excluded)).toEqual([true, true]);
+    expect(random.excludedRuns).toBe(2);
+    expect(random.band).toBeNull();
+    expect(random.beats).toBe(false);
+    expect(verdict.checks.beatsRandomEntries).toBe(false);
+  });
+
+  it('marks the path trade and the random position still open at the window end at its last session', async () => {
+    const db = migratedMemoryStore();
+    const clock = new SimulatedClock(new Date('2026-10-08T00:00:00Z'));
+    const log = new CanaryLog(db, clock);
+    const run = input({ to: DATES[200] as string, randomCanary: { log, runs: 2 } });
+    const { verdict } = await runBacktest(run);
+    const rows = log
+      .list()
+      .filter((row) => row.kind === 'random')
+      .map((row) => JSON.parse(row.result));
+    expect(rows.map((row) => [row.matched, row.matchedSessions])).toEqual([
+      [13, 12 * 6 + 5],
+      [13, 12 * 6 + 5],
+    ]);
+    expect(rows.map((row) => [row.traded, row.heldSessions, row.unmatched])).toEqual([
+      [13, 12 * 6, 0],
+      [12, 12 * 6, 1],
+    ]);
+    expect(verdict.randomEntries?.excludedRuns).toBe(1);
   });
 
   it('#1860: vol-targets the random runs exactly when the trial they copy is vol-targeted', async () => {
@@ -391,6 +483,21 @@ describe('runBacktest', { timeout: 120_000 }, () => {
       sleeveIds: ['trend-5', ...randomIds],
     });
     expect(randomVolTarget(input(), 'trend-5', randomIds)).toBeUndefined();
+  });
+
+  it('#1860: a simulation refuses either canary, which binds candidates only', async () => {
+    const db = migratedMemoryStore();
+    const log = new CanaryLog(db, new SimulatedClock(new Date('2026-10-08T00:00:00Z')));
+    const { shiftCanary: _shift, randomCanary: _random, ...plain } = input();
+    const candidate: BacktestInput = { ...plain, randomCanary: { log } };
+    // @ts-expect-error a candidate's input, canaries and all, is not a simulation's
+    const typed: SimulationInput = candidate;
+    const shifted = { ...plain, shiftCanary: { trials: [], log } } as unknown as SimulationInput;
+    const random = typed;
+    const refusal = 'backtest: a simulation takes no canary; the canaries bind candidates only';
+    await expect(simulateBacktest(shifted)).rejects.toThrow(refusal);
+    await expect(simulateBacktest(random)).rejects.toThrow(refusal);
+    expect((await simulateBacktest(plain)).trials).toHaveLength(2);
   });
 
   it('refuses a shift canary that does not delay every trial', async () => {
@@ -901,5 +1008,73 @@ describe('volTargetIdentity (#1860)', () => {
       at({ ...sizing, sleeveIds: ['debate'] }),
       at(sizing),
     ]).toEqual([3, 4, 5, 6, 7, 4]);
+  });
+});
+
+describe('CFD catalogue archive in the backtest (#2105)', () => {
+  const borrowed = (asOf: string, borrowCostPerDay: number) =>
+    new CfdCatalogue({
+      asOf,
+      instruments: [
+        {
+          symbol: 'AAPL',
+          saxoSymbol: 'AAPL:xnas',
+          uic: 211,
+          assetType: 'CfdOnStock',
+          currency: 'USD',
+          priceToContractFactor: 1,
+          tradable: true,
+          shortTradeDisabled: false,
+          borrowCostPerDay,
+        },
+      ],
+    });
+  const archive = new CfdCatalogueArchive([
+    borrowed('2026-10-12', 0.00001),
+    borrowed('2026-10-15', 0.00002),
+  ]);
+
+  it('carries a short at the borrow quoted by the snapshot in force on the simulated day', () => {
+    const today = { current: '2026-10-11' };
+    const borrow = datedCfdBorrowPerDay(archive, () => today.current);
+    expect(borrow('AAPL')).toBeUndefined();
+    today.current = '2026-10-12';
+    expect(borrow('AAPL')).toBe(0.00001);
+    today.current = '2026-10-14';
+    expect(borrow('AAPL')).toBe(0.00001);
+    today.current = '2026-10-15';
+    expect(borrow('AAPL')).toBe(0.00002);
+    expect(borrow('MSFT')).toBeUndefined();
+    expect(datedCfdBorrowPerDay(undefined, () => today.current)('AAPL')).toBeUndefined();
+  });
+
+  it('leaves a window no snapshot reaches hashing as before the archive', () => {
+    const run = { from: '2016-01-04', to: '2025-09-24' };
+    expect(cfdCatalogueIdentity({ ...run, cfdCatalogues: archive })).toEqual({});
+    expect(cfdCatalogueIdentity({ ...run, cfdCatalogues: undefined })).toEqual({});
+  });
+
+  it('makes the snapshots a window reads part of its trial', () => {
+    const shared = ledger();
+    const at = (from: string, to: string, cfdCatalogues = archive) =>
+      shared.record('candidate', {
+        lookback: 5,
+        run: { from, to, ...cfdCatalogueIdentity({ from, to, cfdCatalogues }) },
+      });
+    expect(
+      cfdCatalogueIdentity({ from: '2026-01-02', to: '2026-10-14', cfdCatalogues: archive }),
+    ).toEqual({
+      cfdCatalogues: [{ asOf: '2026-10-12', sha256: borrowed('2026-10-12', 0.00001).sha256 }],
+    });
+    const grown = new CfdCatalogueArchive([
+      borrowed('2026-10-12', 0.00001),
+      borrowed('2026-10-13', 0.00003),
+      borrowed('2026-10-15', 0.00002),
+    ]);
+    expect([
+      at('2026-01-02', '2026-10-14'),
+      at('2026-01-02', '2026-10-14', grown),
+      at('2026-01-02', '2026-10-14'),
+    ]).toEqual([3, 4, 3]);
   });
 });

@@ -7,7 +7,7 @@ import type {
 } from '../../../contracts/index.js';
 import type { Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import { guardedStore, openSharedStore } from '../../shared/store/index.js';
+import { guardedStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import {
   type BacktestVerdict,
   type BookSeries,
@@ -17,18 +17,26 @@ import {
 import type { CanaryLog } from './canary-log.js';
 import { type CycleComposition, composeCycle } from './compose.js';
 import { type CycleReport, runCycle } from './cycle.js';
-import { addDays, CALENDAR_REFERENCE } from './data/index.js';
+import {
+  addDays,
+  CALENDAR_REFERENCE,
+  type CfdCatalogueArchive,
+  type CfdSnapshotIdentity,
+} from './data/index.js';
 import { walkForwardPath } from './evidence/index.js';
 import {
   bookTrades,
+  fillLedger,
   matchedSessions,
   matchedTrades,
   RANDOM_CANARY_FIRST_SEED,
   RANDOM_CANARY_RUNS,
+  type RandomDraws,
+  type RandomSleeve,
   randomEntrySleeve,
   randomScheduler,
-  type ScheduledTrade,
   type ScheduleInput,
+  servedWithinTolerance,
   sessionsHeld,
   type Trade,
 } from './random-canary.js';
@@ -39,7 +47,7 @@ import {
   sleeveAllocationGbp,
   type VolTargetSizing,
 } from './risk/index.js';
-import { declaredVolTarget } from './signal/index.js';
+import { declaredCfdCosts, declaredVolTarget } from './signal/index.js';
 import { type TrialConfig, type TrialLedger, trialHash } from './trial-ledger.js';
 
 export type SleeveFactory = (market: MarketData) => Sleeve;
@@ -81,6 +89,9 @@ export interface BacktestInput {
   // must resolve to the SAME trial hash as its 1x baseline, not a new permanent ledger entry
   readonly costMultiple?: number | undefined;
   readonly volTarget?: VolTargetSizing | undefined;
+  // #2105: must be the archive the trial sleeves route by, or a short is carried at another
+  // snapshot's borrow than the one that admitted it
+  readonly cfdCatalogues?: CfdCatalogueArchive | undefined;
   // The input's trials, in their order, one bar later (doc 66, 2026-10-07 rulings on #1747)
   readonly shiftCanary?: ShiftCanaryInput | undefined;
   readonly randomCanary?: RandomCanaryInput | undefined;
@@ -287,6 +298,22 @@ export function volTargetIdentity(sizing: VolTargetSizing | undefined): {
   return sizing === undefined ? {} : { volTarget: sizing };
 }
 
+// #2105: a snapshot in force inside the window changes what a CFD route admits, so the snapshots
+// are part of the trial; none in force, they are omitted so earlier trials keep their hashes
+export function cfdCatalogueIdentity(input: Pick<BacktestInput, 'cfdCatalogues' | 'from' | 'to'>): {
+  cfdCatalogues?: readonly CfdSnapshotIdentity[];
+} {
+  const snapshots = input.cfdCatalogues?.inForceWithin(input.from, input.to) ?? [];
+  return snapshots.length === 0 ? {} : { cfdCatalogues: snapshots };
+}
+
+export function datedCfdBorrowPerDay(
+  archive: CfdCatalogueArchive | undefined,
+  today: () => string,
+): (instrument: string) => number | undefined {
+  return (instrument) => archive?.inForceOn(today())?.lookup(instrument)?.borrowCostPerDay;
+}
+
 function volTargetOf(input: BacktestInput): VolTargetSizing | undefined {
   return input.volTarget ?? declaredVolTarget();
 }
@@ -305,6 +332,7 @@ function trialConfigs(
     lossCapGbp: input.lossCapGbp,
     ...entryOffsetIdentity(ENTRY_LIMIT_OFFSET),
     ...volTargetIdentity(volTargetOf(input)),
+    ...cfdCatalogueIdentity(input),
     benchmark: { id: benchmark.id, spec: benchmark.spec, config: input.benchmark.config },
   };
   return input.trials.map((trial, index) => ({
@@ -335,10 +363,12 @@ async function simulate(
   sleeves: readonly Sleeve[],
   today: { current: string },
   dates: readonly string[],
+  attach?: (db: StoreHandle) => void,
 ): Promise<Simulation> {
   const first = dates[0] as string;
   const db = openSharedStore(':memory:');
   try {
+    attach?.(db);
     const clock = new SimulatedClock(new Date(`${first}T00:00:00.000Z`));
     const opening = seedCapital(
       new CapitalConfigStore(guardedStore(db, 'v2'), clock),
@@ -356,6 +386,8 @@ async function simulate(
       dryRun: true,
       brokerMode: 'paper',
       halfSpreadBps: input.halfSpreadBps,
+      cfdCosts: declaredCfdCosts(),
+      quotedCfdBorrowPerDay: datedCfdBorrowPerDay(input.cfdCatalogues, () => today.current),
       costMultiple: input.costMultiple,
       volTarget: volTargetOf(input),
     });
@@ -419,6 +451,8 @@ interface CandidateRun {
 interface RandomRun {
   readonly seed: number;
   readonly scheduled: number;
+  readonly redraws: number;
+  readonly unmatched: number;
   readonly traded: number;
   readonly heldSessions: number;
 }
@@ -426,6 +460,7 @@ interface RandomRun {
 interface RandomCanaryRuns {
   readonly matched: number;
   readonly matchedSessions: number;
+  readonly excluded: readonly boolean[];
   readonly runs: readonly RandomRun[];
   readonly series: readonly BookSeries[];
 }
@@ -453,7 +488,8 @@ function randomPlan(input: BacktestInput, run: CandidateRun): RandomPlan {
       .instruments;
   return {
     schedule: {
-      matched: matchedTrades(path, run.trades),
+      matched: matchedTrades(path, run.trades, run.dates.length - 1),
+      folds: path.testRanges,
       dates: run.dates,
       market: input.market,
       universe,
@@ -482,19 +518,22 @@ async function randomCanaryRuns(
     { length: canary.runs ?? RANDOM_CANARY_RUNS },
     (_, index) => RANDOM_CANARY_FIRST_SEED + index,
   );
-  const schedules = seeds.map(randomScheduler(schedule));
+  const draws = seeds.map(randomScheduler(schedule));
   const view = fenced(input);
-  const sleeves = seeds.map((seed, index) =>
-    randomEntrySleeve(
+  const ledger = fillLedger(run.dates);
+  const sleeves = seeds.map((seed, index) => {
+    const id = `${input.candidate}-random-${seed}`;
+    return randomEntrySleeve(
       {
-        id: `${input.candidate}-random-${seed}`,
+        id,
         spec: source.spec,
-        schedule: schedules[index] as readonly ScheduledTrade[],
+        draws: draws[index] as RandomDraws,
         dates: run.dates,
+        book: ledger.book(`${id}/primary`),
       },
       view.market,
-    ),
-  );
+    );
+  });
   const sizing = randomVolTarget(
     input,
     source.id,
@@ -505,19 +544,23 @@ async function randomCanaryRuns(
     sleeves,
     view.today,
     run.dates,
+    ledger.attach,
   );
+  const runs = seeds.map((seed, index) => {
+    const traded = simulation.trades[index] as readonly Trade[];
+    return {
+      seed,
+      ...(sleeves[index] as RandomSleeve).report(),
+      traded: traded.length,
+      heldSessions: sessionsHeld(traded, run.dates.length - 1),
+    };
+  });
+  const matched = schedule.matched.length;
   return {
-    matched: schedule.matched.length,
+    matched,
     matchedSessions: matchedSessions(schedule.matched),
-    runs: seeds.map((seed, index) => {
-      const traded = simulation.trades[index] as readonly Trade[];
-      return {
-        seed,
-        scheduled: (schedules[index] as readonly ScheduledTrade[]).length,
-        traded: traded.length,
-        heldSessions: sessionsHeld(traded),
-      };
-    }),
+    excluded: runs.map((row) => !servedWithinTolerance(row.unmatched, matched)),
+    runs,
     series: seriesOf(simulation, sleeves),
   };
 }
@@ -541,6 +584,7 @@ function logRandom(
         ...run,
         matched: random.matched,
         matchedSessions: random.matchedSessions,
+        excluded: random.excluded[index],
         edge: entries.edges[index],
       },
     });
@@ -589,7 +633,16 @@ async function simulateRecorded(input: BacktestInput): Promise<RecordedSimulatio
   };
 }
 
-export async function simulateBacktest(input: BacktestInput): Promise<BacktestSimulation> {
+// #1860: the canaries bind candidates; the vol-target trial sizes arm 2's own entries
+export type SimulationInput = Omit<BacktestInput, 'shiftCanary' | 'randomCanary'> & {
+  readonly shiftCanary?: never;
+  readonly randomCanary?: never;
+};
+
+export async function simulateBacktest(input: SimulationInput): Promise<BacktestSimulation> {
+  if (input.shiftCanary !== undefined || input.randomCanary !== undefined) {
+    throw new Error('backtest: a simulation takes no canary; the canaries bind candidates only');
+  }
   const { dates, trials, benchmark, trialsShare } = await simulateRecorded(input);
   return { dates, trials, benchmark, trialsShare };
 }
@@ -618,6 +671,7 @@ export async function runBacktest(input: BacktestInput): Promise<BacktestResult>
     embargo: input.embargo,
     delayed: canary === undefined ? undefined : await delayedSeries(input, canary, dates),
     random: random?.series,
+    randomExcluded: random?.excluded,
   });
   const hash = candidateHash(input, configs);
   logShift(input, hash, verdict);

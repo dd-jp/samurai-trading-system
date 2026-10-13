@@ -31,12 +31,14 @@ import {
   type VolTargetSizing,
 } from './risk/index.js';
 import {
+  CFD_SLEEVE_IDS,
   cfdEntryRefusal,
   declaredVolTarget,
   isSet,
   RECONCILE_CASH_TOLERANCE_GBP,
   SleeveRegistry,
 } from './signal/index.js';
+import type { SplitFeed } from './split-feed.js';
 
 export interface CycleCompositionOptions {
   readonly db: StoreHandle;
@@ -62,6 +64,7 @@ export interface CycleCompositionOptions {
   readonly runStartedAt?: Date | undefined;
   // Replay only: answers every broker call from the journal, so no venue adapter is built
   readonly brokerAccess?: ((pricing: FillPricing) => BrokerAccess) | undefined;
+  readonly splitFeed?: SplitFeed | undefined;
 }
 
 export interface CycleComposition extends CycleDeps {
@@ -136,6 +139,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
   const risk = new V2RiskGate({
     books,
     capital,
+    cfdSleeveIds: CFD_SLEEVE_IDS,
     market,
     spec: (sleeveId) => registry.spec(sleeveId),
     venueRefusal: (venue) => (isCfdVenue(venue) ? cfdGate() : undefined),
@@ -175,5 +179,6 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     venueSessions: options.venueSessions,
     runStartedAt: options.runStartedAt,
     atomically: (work) => v2Store.transaction(work)(),
+    splitFeed: options.splitFeed,
   };
 }

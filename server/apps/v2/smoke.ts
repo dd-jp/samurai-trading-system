@@ -25,6 +25,7 @@ import {
   ARM2_SLEEVE_ID,
   CFD_BORROW_MODEL,
   CFD_COST_MODEL,
+  CFD_ENTRY_GATES,
   CFD_FINANCING_MODEL,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   CFD_SPREAD_MODEL,
@@ -50,7 +51,7 @@ const SET_PARAMETERS: readonly Parameter<unknown>[] = [
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
   RECONCILE_CASH_TOLERANCE_GBP,
-  ...CFD_COST_PARAMETERS,
+  ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
 ];
 const STILL_UNSET_PARAMETERS = DECLARED_PARAMETERS.filter(
   (parameter) => !SET_PARAMETERS.includes(parameter),
@@ -145,10 +146,9 @@ function staticProbes(): SmokeProbe[] {
       `tighten £${SMOKE_LOSS_CAP_GBP} to £${SMOKE_LOSS_CAP_GBP + 1}`,
     ),
     probe(
-      'CFD shorts fail closed: the unverified resting stop refuses, then no catalogue refuses',
-      shortRefusal(cfdEntryRefusal) === 'cfd_resting_stop_unverified' &&
-        shortRefusal(() => undefined) === 'no_catalogue',
-      `${shortRefusal(cfdEntryRefusal)}, ${shortRefusal(() => undefined)}`,
+      'CFD shorts clear every entry gate (#1916) and still fail closed without a catalogue',
+      cfdEntryRefusal() === undefined && shortRefusal(cfdEntryRefusal) === 'no_catalogue',
+      `${cfdEntryRefusal() ?? 'admitted'}, ${shortRefusal(cfdEntryRefusal)}`,
     ),
     probe(
       'the four CFD cost models are set from the sourced Saxo tariff (#1850)',

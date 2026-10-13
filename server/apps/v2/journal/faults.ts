@@ -52,6 +52,7 @@ export interface FaultKindCount {
 const REFUSAL_FAULTS: Readonly<Record<string, FaultKind>> = {
   MARK_FRESHNESS: 'stale_bar',
   CALENDAR_REFERENCE: 'stale_bar',
+  FILL_DAY_BAR: 'stale_bar',
   REARM_BACKSTOP: 'missed_stop',
   SAXO_SESSION: 'token_failure',
 };

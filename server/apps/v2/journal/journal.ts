@@ -434,8 +434,8 @@ export class Journal implements DecisionJournal {
     this.db
       .prepare(
         `INSERT INTO v2_reconciles (trading_date, venue, source, status, book_ids, diffs, detail,
-           broker_mode, cash_quote, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           broker_mode, cash_quote, protecting_stops, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         run.trading_date,
@@ -447,6 +447,7 @@ export class Journal implements DecisionJournal {
         run.detail,
         run.broker_mode,
         run.cash_quote,
+        run.protecting_stops === undefined ? null : JSON.stringify(run.protecting_stops),
         this.#now(),
       );
     for (const fault of reconcileFaults(run)) this.#recordFault(fault);

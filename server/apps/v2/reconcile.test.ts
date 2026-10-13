@@ -267,6 +267,7 @@ describe('reconcileBooks', () => {
         detail: CASH_MATCHES,
         broker_mode: 'live',
         cash_quote: CLEAN_BROKER.cashQuote,
+        protecting_stops: [CLEAN_BROKER.openOrders[0]],
       },
       {
         trading_date: DATE,
@@ -313,6 +314,16 @@ describe('reconcileBooks', () => {
         cash_quote: null,
       },
     ]);
+  });
+
+  it('journals the stops it counted as protection on a mismatch too, and none on a failed read (#2090)', async () => {
+    const mismatch = harness({ ...CLEAN_BROKER, positions: [{ instrument: 'AAPL', qty: 5 }] });
+    await reconcileBooks(mismatch.deps, DATE);
+    expect(mismatch.reconciles[0]).toMatchObject({ status: 'mismatch', protecting_stops: [] });
+    const failed = harness(new Error('ECONNRESET'));
+    await reconcileBooks(failed.deps, DATE);
+    expect(failed.reconciles[0]).toMatchObject({ status: 'read_failed' });
+    expect(failed.reconciles[0]?.protecting_stops).toBeUndefined();
   });
 
   it('never reads a broker when every route is simulated (dry run, backtest)', async () => {

@@ -1,4 +1,5 @@
 export type { AlpacaBrokerClient } from './alpaca/alpaca-client.js';
+export { alpacaQuotesFor } from './alpaca/alpaca-quotes.js';
 export { ProtectiveReplaceError } from './alpaca/protective-replace-error.js';
 export { tickFor } from './alpaca/us-equity-price-tick.js';
 export { type BrokerAccess, brokerAccessFor, createBrokerAccess } from './create-executor.js';

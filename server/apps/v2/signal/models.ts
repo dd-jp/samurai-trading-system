@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export type DebaterSeat = 'sonnet' | 'gpt' | 'deepseek';
 
 export interface ModelPin {
@@ -7,12 +9,18 @@ export interface ModelPin {
   readonly canonicalSlug: string | undefined;
 }
 
-export const SONNET_5_PIN: ModelPin = {
+const RETIRED_SONNET_5_PIN: ModelPin = {
   seat: 'sonnet',
   wire: 'anthropic/claude-sonnet-5',
   priced: 'anthropic/claude-sonnet-5',
-  // Nous lists this id under a dated or an undated canonical_slug from one fetch to the next; David accepted the undetected-swap gap (doc 66, #1787)
   canonicalSlug: undefined,
+};
+
+export const SONNET_5_5_PIN: ModelPin = {
+  seat: 'sonnet',
+  wire: 'anthropic/claude-sonnet-5.5',
+  priced: 'anthropic/claude-sonnet-5.5',
+  canonicalSlug: 'anthropic/claude-sonnet-5.5-20260928',
 };
 
 const GPT_5_5_PIN: ModelPin = {
@@ -36,9 +44,25 @@ export const JUDGE_PIN: ModelPin = {
   canonicalSlug: 'anthropic/claude-opus-5.5-20260921',
 };
 
-export const DEBATER_PINS: readonly ModelPin[] = [SONNET_5_PIN, GPT_5_5_PIN, DEEPSEEK_V4_PRO_PIN];
+export const DEBATER_PINS: readonly ModelPin[] = [SONNET_5_5_PIN, GPT_5_5_PIN, DEEPSEEK_V4_PRO_PIN];
 
 export const ALL_PINS: readonly ModelPin[] = [...DEBATER_PINS, JUDGE_PIN];
+
+// Entries journalled before #2110 carry no pin_digest and ran under these pins (David 2026-10-12, #2121)
+export const PRE_DIGEST_ALL_PINS: readonly ModelPin[] = [
+  RETIRED_SONNET_5_PIN,
+  GPT_5_5_PIN,
+  DEEPSEEK_V4_PRO_PIN,
+  JUDGE_PIN,
+];
+
+// David 2026-10-10 (#1747): the configured slug only, never the one observed at the pin check
+export function pinDigest(pins: readonly ModelPin[]): string {
+  const keyed = [...pins]
+    .sort((a, b) => (a.seat < b.seat ? -1 : 1))
+    .map(({ seat, wire, canonicalSlug }) => ({ seat, wire, canonicalSlug: canonicalSlug ?? null }));
+  return createHash('sha256').update(JSON.stringify(keyed)).digest('hex').slice(0, 16);
+}
 
 export const DEBATER_MAX_TOKENS = 1024;
 export const JUDGE_MAX_TOKENS = 2048;

@@ -1,14 +1,27 @@
-import type { BookSpec, SignalWire, SleeveDecision, V2Bar } from '../../../../contracts/index.js';
+import type {
+  BookSpec,
+  EntryQuote,
+  LatestQuoteSource,
+  SignalWire,
+  SleeveDecision,
+  V2Bar,
+} from '../../../../contracts/index.js';
 import { civilDateKey, ET_ZONE, toCivilDate } from '../../../providers/calendar/index.js';
 import { describeThrownSafely, digest } from '../../../shared/index.js';
 import { type CycleDeps, type EntryPassReport, runEntryPass } from '../cycle.js';
 import { isFresh } from '../data/index.js';
 import type { FaultSink, ReconcileVerdict } from '../journal/index.js';
-import type { LlmPanel } from '../signal/index.js';
-import { SIGNALS_SLEEVE_ID } from '../signal/index.js';
-import { entryRange, planSignalEntry, type SignalEntryPlan } from './entry.js';
+import { MOVERS_MIN_DOLLAR_VOLUME_USD, SIGNALS_SLEEVE_ID } from '../signal/index.js';
+import { entryRange, planSignalEntry, quoteFill, type SignalEntryPlan } from './entry.js';
 import type { SignalStore } from './store.js';
-import { SIGNAL_VETO_BARS, type SignalVeto, signalVeto } from './veto.js';
+import {
+  callFailed,
+  INTERRUPTED_VETO,
+  SIGNAL_VETO_BARS,
+  type SignalVeto,
+  type SignalVetoAttempt,
+  type SignalVetoCall,
+} from './veto.js';
 
 const TICKET = '#1941';
 const RULINGS_TICKET = '#2024';
@@ -30,11 +43,23 @@ const OUTCOME_LOG = {
 export interface SignalProcessorDeps {
   readonly cycle: CycleDeps;
   readonly latestReconcile: (tradingDate: string, venue: 'alpaca') => ReconcileVerdict;
-  readonly signals: Pick<SignalStore, 'due' | 'appendEvent' | 'vetoVerdicts'>;
+  readonly signals: Pick<
+    SignalStore,
+    | 'due'
+    | 'appendEvent'
+    | 'vetoVerdicts'
+    | 'recordVeto'
+    | 'vetoFor'
+    | 'claimVeto'
+    | 'vetoClaimed'
+    | 'recordRetryVeto'
+    | 'retryVetoFor'
+  >;
   readonly faults: FaultSink;
-  readonly panel: Pick<LlmPanel, 'judge' | 'spendCap'>;
+  readonly veto: SignalVetoCall;
   readonly constituents: (tradingDate: string) => readonly string[];
   readonly calendar: { isOpen(instant: Date): boolean };
+  readonly quotes: LatestQuoteSource | undefined;
 }
 
 export type SignalOutcomeStatus = 'processed' | 'refused' | 'failed';
@@ -134,6 +159,17 @@ function gateRefusal(
   return undefined;
 }
 
+// David 2026-10-08 (#2024): the debate pool's movers floor, on the last bar's USD dollar volume
+function dollarVolumeRefusal(lastBar: V2Bar): Refusal | undefined {
+  const dollarVolume = lastBar.rawClose * lastBar.volume;
+  if (dollarVolume >= MOVERS_MIN_DOLLAR_VOLUME_USD) return undefined;
+  return {
+    code: 'below_dollar_volume_floor',
+    detail: `last bar ${lastBar.date} dollar volume ${dollarVolume} below ${MOVERS_MIN_DOLLAR_VOLUME_USD}`,
+    ticket: RULINGS_TICKET,
+  };
+}
+
 function admit(
   deps: SignalProcessorDeps,
   signal: SignalWire,
@@ -146,6 +182,8 @@ function admit(
   if (lastBar === undefined || !isFresh(lastBar, tradingDate)) {
     return { code: 'stale_last_close', detail: `last bar ${lastDate} before ${tradingDate}` };
   }
+  const floor = dollarVolumeRefusal(lastBar);
+  if (floor !== undefined) return floor;
   const verdict = planSignalEntry(signal, lastBar.rawClose);
   if (!verdict.ok) return { code: verdict.refusal, detail: verdict.detail };
   const conflicts = conflictingBooks(deps, signal.symbol);
@@ -161,11 +199,30 @@ function entryLabel(plan: SignalEntryPlan): string {
     : `buy-stop ${plan.trigger} limit ${plan.limit}`;
 }
 
+// David 2026-10-08 (#2024): both legs fill at the first quote after the signal is due, so a quote
+// older than process_after (the receipt in session, else the next open) is not that quote
+async function entryQuote(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  plan: SignalEntryPlan,
+): Promise<EntryQuote | undefined> {
+  if (deps.quotes === undefined) return undefined;
+  const quote = await deps.quotes.latestQuote(signal.symbol);
+  if (Date.parse(quote.quoted_at) < Date.parse(signal.process_after)) {
+    throw new Error(
+      `no ${signal.symbol} quote since ${signal.process_after}: latest ${quote.quoted_at}`,
+    );
+  }
+  const { ask, bid, quoted_at } = quote;
+  return { ask, bid, quoted_at, fill: quoteFill(plan, ask) };
+}
+
 function decisionFor(
   signal: SignalWire,
   admitted: Admitted,
   bars: readonly V2Bar[],
   veto: SignalVeto,
+  quote: EntryQuote | undefined,
 ): SleeveDecision {
   const { plan, lastBar } = admitted;
   const { low, high } = entryRange(signal.entry);
@@ -186,6 +243,7 @@ function decisionFor(
     inputs_hash: digest({ signal: signal.signal_id, bars }),
     debate_id: undefined,
     veto: veto.kind === 'pass' ? undefined : `${veto.kind}: ${veto.reason}`,
+    entry_quote: quote,
     payload: {
       signal_id: signal.signal_id,
       entry_low: low,
@@ -199,6 +257,7 @@ function decisionFor(
       r: plan.riskPerShare,
       veto_kind: veto.kind,
       veto_reason: veto.reason,
+      entry_quote: quote,
     },
   };
 }
@@ -244,6 +303,73 @@ function passDetail(
   );
 }
 
+function askVeto(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  admitted: Admitted,
+  bars: readonly V2Bar[],
+  attempt: SignalVetoAttempt,
+): Promise<SignalVeto> {
+  const { low, high } = entryRange(signal.entry);
+  return deps.veto(signal.signal_id, attempt, {
+    symbol: signal.symbol,
+    entryLow: low,
+    entryHigh: high,
+    limit: admitted.plan.limit,
+    stop: admitted.plan.stop,
+    target: admitted.plan.target,
+    targets: signal.targets,
+    lastClose: admitted.lastBar.rawClose,
+    bars,
+  });
+}
+
+function claimedVeto(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  admitted: Admitted,
+  bars: readonly V2Bar[],
+  attempt: SignalVetoAttempt,
+): Promise<SignalVeto> {
+  if (deps.signals.vetoClaimed(signal.signal_id, attempt)) return Promise.resolve(INTERRUPTED_VETO);
+  deps.signals.claimVeto(signal.signal_id, attempt);
+  return askVeto(deps, signal, admitted, bars, attempt);
+}
+
+async function retriedVeto(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  admitted: Admitted,
+  bars: readonly V2Bar[],
+): Promise<SignalVeto> {
+  const journalled = deps.signals.retryVetoFor(signal.signal_id);
+  if (journalled !== undefined) return journalled;
+  const veto = await claimedVeto(deps, signal, admitted, bars, 2);
+  deps.signals.recordRetryVeto(signal.signal_id, veto);
+  return veto;
+}
+
+// David 2026-10-09 (#2024): the veto runs once per signal and a retry reuses its journalled
+// verdict, except that a failed call gets one more attempt on a later pass, which both legs wait
+// for. A claim precedes every call, so a restart counts a claimed call without a verdict as failed
+// and no crash path reaches a third call
+async function onceVeto(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  admitted: Admitted,
+  bars: readonly V2Bar[],
+): Promise<SignalVeto> {
+  const journalled = deps.signals.vetoFor(signal.signal_id);
+  if (journalled !== undefined) {
+    return callFailed(journalled) ? retriedVeto(deps, signal, admitted, bars) : journalled;
+  }
+  const veto = await claimedVeto(deps, signal, admitted, bars, 1);
+  deps.signals.recordVeto(signal.signal_id, veto);
+  if (veto === INTERRUPTED_VETO) return retriedVeto(deps, signal, admitted, bars);
+  if (callFailed(veto)) throw new Error(`veto ${veto.reason}; one retry left on a later pass`);
+  return veto;
+}
+
 async function enter(
   deps: SignalProcessorDeps,
   signal: SignalWire,
@@ -251,24 +377,9 @@ async function enter(
   admitted: Admitted,
 ): Promise<string> {
   const bars = deps.cycle.market.barsBefore(signal.symbol, tradingDate, SIGNAL_VETO_BARS);
-  const { low, high } = entryRange(signal.entry);
-  const veto = await signalVeto(
-    deps.panel.judge,
-    deps.panel.spendCap,
-    {
-      symbol: signal.symbol,
-      entryLow: low,
-      entryHigh: high,
-      limit: admitted.plan.limit,
-      stop: admitted.plan.stop,
-      target: admitted.plan.target,
-      targets: signal.targets,
-      lastClose: admitted.lastBar.rawClose,
-      bars,
-    },
-    `v2-signal-${signal.signal_id}`,
-  );
-  const decision = decisionFor(signal, admitted, bars, veto);
+  const veto = await onceVeto(deps, signal, admitted, bars);
+  const quote = await entryQuote(deps, signal, admitted.plan);
+  const decision = decisionFor(signal, admitted, bars, veto, quote);
   const blocked = reconcileBlocked(deps, tradingDate);
   journalBlocked(deps, signal, tradingDate, blocked);
   const report = await runEntryPass(deps.cycle, {
@@ -361,6 +472,21 @@ export function signalsDue(
   return deps.calendar.isOpen(now) && deps.signals.due(now).length > 0;
 }
 
+export async function processSignal(
+  deps: SignalProcessorDeps,
+  signal: SignalWire,
+  tradingDate: string,
+): Promise<SignalOutcome> {
+  let outcome: SignalOutcome;
+  try {
+    outcome = await processOne(deps, signal, tradingDate);
+  } catch (error) {
+    outcome = settle(deps, signal, 'failed', describeThrownSafely(error));
+  }
+  if (outcome.status === 'processed') checkVetoRate(deps, tradingDate);
+  return outcome;
+}
+
 export async function processDueSignals(
   deps: SignalProcessorDeps,
   now: Date,
@@ -369,14 +495,7 @@ export async function processDueSignals(
   const tradingDate = sessionDate(now);
   const outcomes: SignalOutcome[] = [];
   for (const signal of deps.signals.due(now)) {
-    let outcome: SignalOutcome;
-    try {
-      outcome = await processOne(deps, signal, tradingDate);
-    } catch (error) {
-      outcome = settle(deps, signal, 'failed', describeThrownSafely(error));
-    }
-    outcomes.push(outcome);
-    if (outcome.status === 'processed') checkVetoRate(deps, tradingDate);
+    outcomes.push(await processSignal(deps, signal, tradingDate));
   }
   return outcomes;
 }

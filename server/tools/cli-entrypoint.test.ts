@@ -5,6 +5,7 @@ import {
   errorStack,
   exitCodeOrOne,
   failExitCodeOnRejection,
+  flagPairs,
   type MainProcess,
   onTerminationSignal,
   runWhenInvoked,
@@ -215,5 +216,20 @@ describe('setExitCodeWhenInvoked', () => {
     );
     expect(ran).toBe(false);
     expect(proc.exitCode).toBeUndefined();
+  });
+});
+
+describe('flagPairs', () => {
+  it('reads each allowed flag and its value', () => {
+    expect(flagPairs(['--a', '1', '--b', 'x'], ['--a', '--b'], 'usage')).toEqual(
+      new Map([
+        ['a', '1'],
+        ['b', 'x'],
+      ]),
+    );
+  });
+
+  it.each([[['--c', '1']], [['--a']]])('throws the usage for %j', (argv) => {
+    expect(() => flagPairs(argv, ['--a'], 'usage: x')).toThrow('usage: x');
   });
 });

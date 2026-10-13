@@ -26,6 +26,9 @@ export const MIN_DEFLATED_SHARPE = 0.95;
 export const CAPITAL_CEILING_DRAWDOWN_MULTIPLE = 1.5;
 // David, 2026-10-08 on #1747 (ruling 1): above the 95th percentile of the random-entry runs
 export const RANDOM_BAND_QUANTILE = 0.95;
+// David, 2026-10-09 on #1747: runs over the unserved tolerance leave the band, and the candidate
+// fails once more than this share of the runs is left out
+export const RANDOM_EXCLUDED_RUNS_MAX_SHARE = 0.05;
 
 export interface BookSeries {
   readonly equity: readonly number[];
@@ -46,6 +49,7 @@ export interface VerdictInput {
   readonly embargo?: number | undefined;
   readonly delayed?: readonly BookSeries[] | undefined;
   readonly random?: readonly BookSeries[] | undefined;
+  readonly randomExcluded?: readonly boolean[] | undefined;
 }
 
 interface WalkForward {
@@ -73,8 +77,9 @@ export interface OneBarDelay {
 export interface RandomEntries {
   readonly runs: number;
   readonly edge: number;
-  readonly band: number;
+  readonly band: number | null;
   readonly edges: readonly number[];
+  readonly excludedRuns: number;
   readonly beats: boolean;
 }
 
@@ -131,10 +136,14 @@ function assertCoversDates(series: readonly BookSeries[], length: number): void 
   }
 }
 
-function assertRandomRuns(random: readonly BookSeries[] | undefined, length: number): void {
+function assertRandomRuns(input: VerdictInput): void {
+  const random = input.random;
   if (random === undefined) return;
   if (random.length === 0) throw new Error('backtestVerdict: the random canary has no runs');
-  assertCoversDates(random, length);
+  assertCoversDates(random, input.dates.length);
+  if ((input.randomExcluded ?? random).length !== random.length) {
+    throw new Error('backtestVerdict: the random exclusions must carry every run');
+  }
 }
 
 function assertAligned(input: VerdictInput): void {
@@ -144,7 +153,7 @@ function assertAligned(input: VerdictInput): void {
     throw new Error('backtestVerdict: the delayed run must carry every trial');
   }
   assertCoversDates([...input.trials, ...delayed, input.benchmark], input.dates.length);
-  assertRandomRuns(input.random, input.dates.length);
+  assertRandomRuns(input);
   if (input.trialsCounted < input.trials.length) {
     throw new Error('backtestVerdict: the trial counter is below the trials in this run');
   }
@@ -208,6 +217,10 @@ function quantile(values: readonly number[], q: number): number {
   return lower + (upper - lower) * (position - below);
 }
 
+function withinExcludedShare(excluded: number, runs: number): boolean {
+  return excluded <= RANDOM_EXCLUDED_RUNS_MAX_SHARE * runs;
+}
+
 // David, 2026-10-08 on #1747 (rulings 1 and 2): the edge is walk-forward Sharpe minus the
 // benchmark's over the same days, and the candidate must sit above the random runs' band
 function randomEntries(input: VerdictInput, forward: WalkForward): RandomEntries | null {
@@ -217,9 +230,18 @@ function randomEntries(input: VerdictInput, forward: WalkForward): RandomEntries
       annualisedSharpe(sliceByRanges(series.returns, forward.path.testRanges)) -
       forward.benchmarkSharpe,
   );
-  const band = quantile(edges, RANDOM_BAND_QUANTILE);
+  const kept = edges.filter((_, index) => input.randomExcluded?.[index] !== true);
+  const band = kept.length === 0 ? null : quantile(kept, RANDOM_BAND_QUANTILE);
   const edge = forward.strategySharpe - forward.benchmarkSharpe;
-  return { runs: edges.length, edge, band, edges, beats: edge > band };
+  const excludedRuns = edges.length - kept.length;
+  return {
+    runs: edges.length,
+    edge,
+    band,
+    edges,
+    excludedRuns,
+    beats: band !== null && withinExcludedShare(excludedRuns, edges.length) && edge > band,
+  };
 }
 
 export function walkForwardRanges(
