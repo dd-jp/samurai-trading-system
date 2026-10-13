@@ -1,7 +1,8 @@
 import * as shared from '../../../../shared/index.js';
 import { AlpacaBrokerProviderError, AlpacaBrokerRateLimitError } from './alpaca-broker-errors.js';
 import type { AlpacaBracketOrderRequest, AlpacaMarketOrderRequest } from './alpaca-client.js';
-import { ALPACA_ORDER_HISTORY_LIMIT, AlpacaHttpBrokerClient } from './alpaca-http-client.js';
+import { ALPACA_ORDER_MAX_PAGES, ALPACA_ORDER_PAGE_LIMIT } from './alpaca-client.js';
+import { AlpacaHttpBrokerClient } from './alpaca-http-client.js';
 
 const FAKE_KEY = 'test-fake-alpaca-key';
 const FAKE_SECRET = 'test-fake-alpaca-secret';
@@ -1079,12 +1080,18 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toContain('/v2/orders?');
     expect(url).not.toContain('by_client_order_id');
-    expect(url).toContain('direction=asc');
-    expect(url).toContain('limit=500');
+    expect(Object.fromEntries(new URL(url).searchParams)).toEqual({
+      status: 'open',
+      nested: 'false',
+      direction: 'desc',
+      limit: '500',
+    });
   });
 
-  it('listOrderHistory reads every status of the named symbols, legs nested, newest first, one full page (#2086)', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([ORDER_RESPONSE]));
+  it('listOrderHistory reads every status of the named symbols, legs nested, newest first, a page at a time (#2086)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([{ ...ORDER_RESPONSE, order_class: 'simple' }]));
     vi.stubGlobal('fetch', fetchMock);
 
     const client = new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
@@ -1098,7 +1105,219 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
       nested: 'true',
       symbols: 'CRL,NUE',
       direction: 'desc',
-      limit: String(ALPACA_ORDER_HISTORY_LIMIT),
+      limit: String(ALPACA_ORDER_PAGE_LIMIT),
+    });
+  });
+
+  describe('order listings page past the 500-order limit (#2089)', () => {
+    const submittedAt = (index: number) =>
+      new Date(Date.UTC(2026, 9, 1) - index * 1000).toISOString();
+    const orders = (count: number, from = 0, legs = 0) =>
+      Array.from({ length: count }, (_, index) => ({
+        ...ORDER_RESPONSE,
+        id: `o-${from + index}`,
+        order_class: legs > 0 ? 'bracket' : 'simple',
+        submitted_at: submittedAt(from + index),
+        legs: Array.from({ length: legs }, (_unused, leg) => ({
+          id: `o-${from + index}-leg-${leg}`,
+          type: 'stop',
+          status: 'held',
+          filled_qty: '0',
+          filled_avg_price: null,
+          filled_at: null,
+        })),
+      }));
+
+    function pages(...bodies: unknown[][]) {
+      const fetchMock = vi.fn();
+      for (const body of bodies) fetchMock.mockResolvedValueOnce(jsonResponse(body));
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    const cursors = (fetchMock: ReturnType<typeof vi.fn>) =>
+      fetchMock.mock.calls.map(([url]) =>
+        new URL(url as string).searchParams.get('before_order_id'),
+      );
+
+    const client = () => new AlpacaHttpBrokerClient({ apiKey: FAKE_KEY, apiSecret: FAKE_SECRET });
+
+    it.each([
+      ['listOpenOrders', (c: AlpacaHttpBrokerClient) => c.listOpenOrders()],
+      ['listOrderHistory', (c: AlpacaHttpBrokerClient) => c.listOrderHistory(['AAPL'])],
+    ] as const)('%s', async (_name, list) => {
+      const at499 = pages(orders(499));
+      await expect(list(client())).resolves.toHaveLength(499);
+      expect(cursors(at499)).toEqual([null]);
+
+      const at500 = pages(orders(500), []);
+      await expect(list(client())).resolves.toHaveLength(500);
+      expect(cursors(at500)).toEqual([null, 'o-498']);
+
+      const past500 = pages(orders(500), orders(1, 500));
+      const read = await list(client());
+      expect(read.map((order) => order.id)).toEqual(orders(501).map((order) => order.id));
+      expect(cursors(past500)).toEqual([null, 'o-498']);
+    });
+
+    it('follows the cursor across three pages and keeps every order once, newest first', async () => {
+      const fetchMock = pages(orders(500), orders(500, 500), orders(7, 1000));
+      const read = await client().listOpenOrders();
+      expect(read.map((order) => order.id)).toEqual(orders(1007).map((order) => order.id));
+      expect(cursors(fetchMock)).toEqual([null, 'o-498', 'o-998']);
+      for (const [url] of fetchMock.mock.calls) {
+        expect(new URL(url as string).searchParams.get('direction')).toBe('desc');
+      }
+    });
+
+    it.each([
+      [166, 1],
+      [167, 2],
+    ])(
+      'counts nested legs toward the page: %i brackets of three orders take %i requests',
+      async (brackets, requests) => {
+        const fetchMock = pages(orders(brackets, 0, 2), []);
+        await expect(client().listOrderHistory(['AAPL'])).resolves.toHaveLength(brackets);
+        expect(fetchMock).toHaveBeenCalledTimes(requests);
+      },
+    );
+
+    it('keeps a row the next page re-lists after the cursor once', async () => {
+      pages(orders(500), orders(3, 499));
+      const read = await client().listOpenOrders();
+      expect(read.map((order) => order.id)).toEqual(orders(502).map((order) => order.id));
+    });
+
+    it('keeps the re-listed copy of a tail bracket the page edge cut short of a leg', async () => {
+      const cut = bracketWith('tail-parent', 499, ['tail-stop']);
+      const whole = bracketWith('tail-parent', 499, ['tail-stop', 'tail-tp']);
+      pages([...orders(499), cut], [whole]);
+      const read = await client().listOrderHistory(['AAPL']);
+      expect(read.at(-1)).toEqual(whole);
+    });
+
+    it('fails when a page repeats an order from before the cursor', async () => {
+      pages(orders(500), orders(1, 498));
+      await expect(client().listOpenOrders()).rejects.toThrow(
+        'Alpaca listOpenOrders listed order o-498 on two pages',
+      );
+    });
+
+    const orphanLeg = (id: string, at: number) => ({
+      ...ORDER_RESPONSE,
+      id,
+      order_class: 'bracket',
+      type: 'stop',
+      status: 'held',
+      submitted_at: submittedAt(at),
+    });
+
+    const bracketWith = (id: string, at: number, legIds: readonly string[]) => ({
+      ...ORDER_RESPONSE,
+      id,
+      submitted_at: submittedAt(at),
+      legs: legIds.map((legId) => ({
+        id: legId,
+        type: 'stop',
+        status: 'held',
+        filled_qty: '0',
+        filled_avg_price: null,
+        filled_at: null,
+      })),
+    });
+
+    it('pages from the last parent past a cut-off leg and keeps the leg nested under its parent', async () => {
+      const fetchMock = pages(
+        [...orders(499), orphanLeg('cut-leg', 499)],
+        [orphanLeg('cut-leg', 499), bracketWith('cut-parent', 499, ['cut-leg', 'cut-tp'])],
+      );
+      const read = await client().listOrderHistory(['AAPL']);
+      expect(read.map((order) => order.id)).toEqual([
+        ...orders(499).map((order) => order.id),
+        'cut-parent',
+      ]);
+      expect(cursors(fetchMock)).toEqual([null, 'o-497']);
+    });
+
+    it('fails the listing when a cut-off leg never turns up under a parent it read', async () => {
+      pages([...orders(499), orphanLeg('lost-leg', 499)], orders(3, 500));
+      await expect(client().listOrderHistory(['AAPL'])).rejects.toThrow(
+        'Alpaca listOrderHistory listed leg lost-leg without its parent order',
+      );
+    });
+
+    it('fails a page made only of cut-off legs, with no parent to page from', async () => {
+      pages(Array.from({ length: 500 }, (_, index) => orphanLeg(`leg-${index}`, index)));
+      await expect(client().listOrderHistory(['AAPL'])).rejects.toThrow(
+        'Alpaca listOrderHistory filled a page with orphan legs only',
+      );
+    });
+
+    it('lists a legless bracket row as an order of its own when legs are not nested', async () => {
+      pages([orphanLeg('open-leg', 0)]);
+      await expect(client().listOpenOrders()).resolves.toEqual([orphanLeg('open-leg', 0)]);
+    });
+
+    const sameMillisecond = (count: number, from: number, at: number) =>
+      orders(count, from).map((order) => ({ ...order, submitted_at: submittedAt(at) }));
+
+    function venue(rows: readonly ReturnType<typeof orders>[number][], skipsTies: boolean) {
+      const fetchMock = vi.fn(async (url: string) => {
+        const before = new URL(url).searchParams.get('before_order_id');
+        const cut = rows.findIndex((order) => order.id === before);
+        const cutAt = cut < 0 ? undefined : Date.parse(rows[cut].submitted_at);
+        const after = rows.filter((order, index) =>
+          cut < 0 ? true : skipsTies ? Date.parse(order.submitted_at) < (cutAt ?? 0) : index > cut,
+        );
+        return jsonResponse(after.slice(0, ALPACA_ORDER_PAGE_LIMIT));
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return fetchMock;
+    }
+
+    it.each([
+      ['skips every order tied with the cursor', true],
+      ['skips only the cursor', false],
+    ])(
+      'reads every order once across a page cut inside a run of ties when before_order_id %s',
+      async (_reading, skipsTies) => {
+        const rows = [...orders(497), ...sameMillisecond(6, 497, 497)];
+        const fetchMock = venue(rows, skipsTies);
+        const read = await client().listOpenOrders();
+        expect(read.map((order) => order.id)).toEqual(rows.map((order) => order.id));
+        expect(cursors(fetchMock)).toEqual([null, 'o-496']);
+      },
+    );
+
+    it('fails a full page whose parents share one millisecond, with no cursor to page from', async () => {
+      pages(sameMillisecond(500, 0, 0));
+      await expect(client().listOpenOrders()).rejects.toThrow(
+        'Alpaca listOpenOrders filled a page with orders submitted in one millisecond',
+      );
+    });
+
+    it.each([
+      ['no', undefined],
+      ['an unreadable', 'not-a-time'],
+    ])('fails the listing when a tail row has %s submitted_at', async (_what, submitted_at) => {
+      const first: unknown[] = orders(500);
+      first[499] = { ...orders(1, 499)[0], submitted_at };
+      pages(first, orders(1, 500));
+      await expect(client().listOpenOrders()).rejects.toThrow(
+        'Alpaca listOpenOrders page cut at o-499 has no readable submitted_at',
+      );
+    });
+
+    it('fails rather than return a listing cut at the page cap', async () => {
+      const fetchMock = pages(
+        ...Array.from({ length: ALPACA_ORDER_MAX_PAGES }, (_, page) =>
+          orders(ALPACA_ORDER_PAGE_LIMIT, page * ALPACA_ORDER_PAGE_LIMIT),
+        ),
+      );
+      await expect(client().listOrderHistory(['AAPL'])).rejects.toThrow(
+        `Alpaca listOrderHistory ran past ${ALPACA_ORDER_MAX_PAGES} pages of ${ALPACA_ORDER_PAGE_LIMIT} orders`,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(ALPACA_ORDER_MAX_PAGES);
     });
   });
 
