@@ -249,7 +249,7 @@ const MULTI_LEG_CLASSES: ReadonlySet<string> = new Set(['bracket', 'oco', 'oto']
 // it, and those are the only repeats the walk accepts
 class OrderPageWalk {
   readonly #orders: AlpacaOrder[] = [];
-  readonly #seen = new Set<string>();
+  readonly #seen = new Map<string, number>();
   readonly #orphans = new Set<string>();
   readonly #nestedLegs = new Set<string>();
   #relisted: ReadonlySet<string> = new Set();
@@ -312,11 +312,15 @@ class OrderPageWalk {
       this.#orphans.add(order.id);
       return;
     }
-    if (this.#seen.has(order.id)) {
-      if (this.#relisted.has(order.id)) return;
-      throw new Error(`Alpaca ${this.context} listed order ${order.id} on two pages`);
+    const seenAt = this.#seen.get(order.id);
+    if (seenAt !== undefined) {
+      if (!this.#relisted.has(order.id)) {
+        throw new Error(`Alpaca ${this.context} listed order ${order.id} on two pages`);
+      }
+      this.#orders[seenAt] = order;
+      return;
     }
-    this.#seen.add(order.id);
+    this.#seen.set(order.id, this.#orders.length);
     this.#orders.push(order);
   }
 }

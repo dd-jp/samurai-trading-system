@@ -1188,6 +1188,14 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
       expect(read.map((order) => order.id)).toEqual(orders(502).map((order) => order.id));
     });
 
+    it('keeps the re-listed copy of a tail bracket the page edge cut short of a leg', async () => {
+      const cut = bracketWith('tail-parent', 499, ['tail-stop']);
+      const whole = bracketWith('tail-parent', 499, ['tail-stop', 'tail-tp']);
+      pages([...orders(499), cut], [whole]);
+      const read = await client().listOrderHistory(['AAPL']);
+      expect(read.at(-1)).toEqual(whole);
+    });
+
     it('fails when a page repeats an order from before the cursor', async () => {
       pages(orders(500), orders(1, 498));
       await expect(client().listOpenOrders()).rejects.toThrow(
