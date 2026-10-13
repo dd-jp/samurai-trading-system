@@ -272,13 +272,14 @@ class OrderPageWalk {
     const cursor = page.findLastIndex(
       (order) => !this.#orphanRow(order) && this.#submittedAt(order) > oldestAt,
     );
-    if (cursor < 0) {
+    const cursorOrder = page[cursor];
+    if (cursorOrder === undefined) {
       throw new Error(
         `Alpaca ${this.context} filled a page with orders submitted in one millisecond`,
       );
     }
     this.#relisted = new Set(page.slice(cursor + 1).map((order) => order.id));
-    return page[cursor].id;
+    return cursorOrder.id;
   }
 
   finish(): AlpacaOrder[] {
@@ -298,7 +299,9 @@ class OrderPageWalk {
   #submittedAt(order: AlpacaOrder): number {
     const at = Date.parse(order.submitted_at ?? '');
     if (Number.isNaN(at)) {
-      throw new Error(`Alpaca ${this.context} page cut at ${order.id} has no readable submitted_at`);
+      throw new Error(
+        `Alpaca ${this.context} page cut at ${order.id} has no readable submitted_at`,
+      );
     }
     return at;
   }
