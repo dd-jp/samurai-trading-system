@@ -199,6 +199,79 @@ describe('VenueRouter short refusals', () => {
   });
 });
 
+describe('VenueRouter UK single stocks (#1914)', () => {
+  const RR = instrument({
+    symbol: 'RR_XLON',
+    currency: 'GBP',
+    priceToContractFactor: 0.01,
+    shortTradeDisabled: true,
+    borrowCostPerDay: undefined,
+  });
+  const open = router([RR], { ukStockRefusal: () => undefined });
+  const venues: readonly Venue[] = ['alpaca', 'saxo', 'saxo_cfd_gbp', 'saxo_cfd_usd'];
+
+  it('sends both sides to the GBP CFD whatever home venue it is given', () => {
+    for (const home of venues) {
+      expect(open.route('RR_XLON', home, 'long', TODAY)).toEqual({ venue: 'saxo_cfd_gbp' });
+    }
+    expect(open.route('RR_XLON', 'saxo', 'short', TODAY)).toEqual({
+      refusal: 'ShortTradeDisabled',
+    });
+  });
+
+  it('runs the short-only checks on shorts alone, so a long ignores the short flag and borrow', () => {
+    const shortable = router([{ ...RR, shortTradeDisabled: false, borrowCostPerDay: 0 }], {
+      ukStockRefusal: () => undefined,
+    });
+    expect(shortable.route('RR_XLON', 'saxo', 'short', TODAY)).toEqual({ venue: 'saxo_cfd_gbp' });
+    expect(open.route('RR_XLON', 'saxo', 'long', TODAY)).toEqual({ venue: 'saxo_cfd_gbp' });
+  });
+
+  it('refuses every UK stock route while the switch is shut, and by default', () => {
+    for (const side of ['long', 'short'] as const) {
+      expect(router([RR]).route('RR_XLON', 'saxo', side, TODAY)).toEqual({
+        refusal: 'uk_stock_cfd_disabled',
+      });
+      expect(
+        router([RR], { ukStockRefusal: () => 'closed_here' }).route('RR_XLON', 'saxo', side, TODAY),
+      ).toEqual({ refusal: 'closed_here' });
+    }
+  });
+
+  it('checks the CFD entry gates first, then the switch, before the catalogue', () => {
+    const gated = router([], { entryRefusal: () => 'cfd_cost_model_unset' });
+    expect(gated.route('RR_XLON', 'saxo', 'long', TODAY)).toEqual({
+      refusal: 'cfd_cost_model_unset',
+    });
+    expect(router([]).route('RR_XLON', 'saxo', 'long', TODAY)).toEqual({
+      refusal: 'uk_stock_cfd_disabled',
+    });
+    expect(
+      router([], { ukStockRefusal: () => undefined }).route('RR_XLON', 'saxo', 'long', TODAY),
+    ).toEqual({ refusal: 'not_in_catalogue' });
+  });
+
+  it('never routes a UK stock to a USD venue, and never lets the switch touch other names', () => {
+    const shut = router([RR, instrument({ symbol: 'AAPL' })]);
+    expect(shut.route('AAPL', 'alpaca', 'short', TODAY)).toEqual({ venue: 'saxo_cfd_usd' });
+    expect(
+      router([{ ...RR, currency: 'USD' }], { ukStockRefusal: () => undefined }).route(
+        'RR_XLON',
+        'alpaca',
+        'long',
+        TODAY,
+      ),
+    ).toEqual({ refusal: 'currency_mismatch' });
+  });
+
+  it('refuses an ETF row for a UK stock', () => {
+    const etf = router([{ ...RR, assetType: 'CfdOnEtf' }], { ukStockRefusal: () => undefined });
+    expect(etf.route('RR_XLON', 'saxo', 'long', TODAY)).toEqual({
+      refusal: 'asset_type_mismatch',
+    });
+  });
+});
+
 describe('createDatedVenueRouter (#2105)', () => {
   const FIRST = '2026-10-12';
   const SECOND = '2026-10-15';

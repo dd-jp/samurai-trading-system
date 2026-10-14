@@ -9,7 +9,11 @@ export function ukStockKey(saxoSymbol: string): string {
 }
 
 export function isUkStock(symbol: string): boolean {
-  return symbol.endsWith(UK_STOCK_SUFFIX);
+  return symbol.length > UK_STOCK_SUFFIX.length && symbol.endsWith(UK_STOCK_SUFFIX);
+}
+
+export function ukStockTidm(symbol: string): string {
+  return isUkStock(symbol) ? symbol.slice(0, -UK_STOCK_SUFFIX.length) : symbol;
 }
 
 export interface UkStockScreens {

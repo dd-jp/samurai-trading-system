@@ -19,6 +19,7 @@ import {
   cfdEntryRefusal,
   createArm2Sleeve,
   requireSet,
+  ukStockCfdRefusal,
   VOL_TARGET_TRIAL_SLEEVE_ID,
 } from './signal/index.js';
 
@@ -54,6 +55,7 @@ function datedCfdRouter(archive: CfdCatalogueArchive, gates: readonly CfdEntryGa
   return createDatedVenueRouter(archive, {
     entryRefusal: () => cfdEntryRefusal(gates),
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+    ukStockRefusal: ukStockCfdRefusal,
   });
 }
 

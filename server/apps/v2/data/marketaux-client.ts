@@ -1,4 +1,5 @@
 import { fetchTokenUrl } from './token-url-fetch.js';
+import { ukStockTidm } from './uk-stocks.js';
 
 export const MARKETAUX_NEWS_URL = 'https://api.marketaux.com/v1/news/all';
 export const MARKETAUX_PAGE_LIMIT = 3;
@@ -25,7 +26,7 @@ export class MarketauxRequestError extends Error {
 }
 
 export function marketauxSymbol(tidm: string): string {
-  return `${tidm}.L`;
+  return `${ukStockTidm(tidm)}.L`;
 }
 
 function marketauxTimestamp(date: Date): string {

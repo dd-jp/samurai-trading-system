@@ -8,6 +8,7 @@ import {
   type UkStockScreens,
   ukStockKey,
   ukStockScreenCounts,
+  ukStockTidm,
 } from './uk-stocks.js';
 
 const SCREENS: UkStockScreens = { minAdvGbp: 5_000_000, maxSpreadBps: 25, minPricePence: 100 };
@@ -46,8 +47,17 @@ describe('ukStockKey', () => {
   it('never yields a key a US universe symbol or an LSE line can equal', () => {
     expect(isUkStock(ukStockKey('TSCO:xlon'))).toBe(true);
     expect(isUkStock('TSCO')).toBe(false);
+    expect(isUkStock('_XLON')).toBe(false);
     expect(isUkStock('BRK.B')).toBe(false);
     for (const { tidm } of LSE_LINES) expect(isUkStock(tidm)).toBe(false);
+  });
+});
+
+describe('ukStockTidm', () => {
+  it('takes the exchange key back off a UK stock and leaves any other symbol alone', () => {
+    expect(ukStockTidm('RR_XLON')).toBe('RR');
+    expect(ukStockTidm('CPG_NEW_XLON')).toBe('CPG_NEW');
+    expect(ukStockTidm('VOD')).toBe('VOD');
   });
 });
 

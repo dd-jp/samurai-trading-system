@@ -15,7 +15,7 @@ import type {
   SleeveSpec,
   Venue,
 } from '../../../../contracts/index.js';
-import { isCfdVenue, quotePerGbp, yearStartCoverageRefusal } from '../data/index.js';
+import { isCfdVenue, isUkStock, quotePerGbp, yearStartCoverageRefusal } from '../data/index.js';
 import { sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
@@ -85,25 +85,38 @@ function closingLeg(
   return { size, side: held.qty > 0 ? 'sell' : 'buy' };
 }
 
+// doc 66 2026-09-28 (#1859): a UK single stock trades only as a GBP CFD, and is the only CFD long
 function sideRefusal(decision: SleeveDecision): string | undefined {
+  if (isEntryDecision(decision) && isUkStock(decision.instrument))
+    return ukStockVenueRefusal(decision);
   const cfd = isCfdVenue(decision.venue);
   if (decision.action === 'enter_short' && !cfd) return 'short_requires_cfd';
   return decision.action === 'enter_long' && cfd ? 'long_on_cfd' : undefined;
 }
 
+function ukStockVenueRefusal(decision: SleeveDecision): string | undefined {
+  return decision.venue === 'saxo_cfd_gbp' ? undefined : 'uk_stock_requires_cfd_gbp';
+}
+
 function venueRefusalFor(
   decision: SleeveDecision,
   sleeveId: string,
-  deps: Pick<RiskGateDeps, 'cfdSleeveIds' | 'venueRefusal'>,
+  deps: Pick<RiskGateDeps, 'cfdSleeveIds' | 'venueRefusal' | 'ukStockRefusal'>,
 ): string | undefined {
   const refusal = sideRefusal(decision);
   if (refusal !== undefined || !isCfdVenue(decision.venue)) return refusal;
   if (!deps.cfdSleeveIds.includes(sleeveId)) return 'cfd_sleeve_not_allowed';
-  return (deps.venueRefusal ?? closedCfdVenue)(decision.venue);
+  const venueRefusal = (deps.venueRefusal ?? closedCfdVenue)(decision.venue);
+  if (venueRefusal !== undefined || !isUkStock(decision.instrument)) return venueRefusal;
+  return (deps.ukStockRefusal ?? closedUkStockCfd)();
 }
 
 function closedCfdVenue(): string {
   return 'cfd_not_backtested';
+}
+
+function closedUkStockCfd(): string {
+  return 'uk_stock_cfd_disabled';
 }
 
 function gapBudgetGbp(decision: SleeveDecision, capital: CapitalYear): number | undefined {
@@ -118,6 +131,7 @@ export interface RiskGateDeps {
   readonly market: MarketData;
   readonly spec: (sleeveId: string) => SleeveSpec;
   readonly venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
+  readonly ukStockRefusal?: (() => string | undefined) | undefined;
   readonly volTarget?: VolTargetSizing | undefined;
 }
 

@@ -33,6 +33,7 @@ import {
   journalledCfdEntryRefusal,
   journalledLseRefusal,
   journalledSplitBlocks,
+  journalledUkStockCfdRefusal,
   type ReplayResult,
   redactor,
   replayExitCode,
@@ -45,6 +46,7 @@ import {
   cfdEntryRefusal,
   ReplayLog,
   ScriptedTransport,
+  UK_STOCK_CFD_ENABLED,
   withheldParameters,
 } from './signal/index.js';
 import { SqliteSplitChecks } from './split-checks.js';
@@ -1007,6 +1009,26 @@ describe('journalledCfdEntryRefusal', () => {
     expect(journalledCfdEntryRefusal(db, '2026-09-30')).toBe('cfd_resting_stop_unverified');
     expect(journalledCfdEntryRefusal(db, '2026-10-01')).toBeUndefined();
     expect(journalledCfdEntryRefusal(db, '2026-10-02')).toBeUndefined();
+    db.close();
+  });
+});
+
+describe('journalledUkStockCfdRefusal', () => {
+  it('reads the UK stock CFD switch as the day journalled it, not as it stands now (#1914)', () => {
+    const db = migratedMemoryStore();
+    const insert = db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES (?, ?, ?, '#1914', 'm', 'now')`,
+    );
+    for (const row of withheldParameters([{ ...UK_STOCK_CFD_ENABLED, value: false }])) {
+      insert.run('2026-10-14', 'parameter', row.parameter);
+    }
+    insert.run('2026-10-15', 'entry', 'UK_STOCK_CFD_ENABLED');
+    insert.run('2026-10-15', 'parameter', 'CFD_COST_MODEL');
+    expect(journalledUkStockCfdRefusal(db, '2026-10-14')).toBe('uk_stock_cfd_disabled');
+    expect(journalledUkStockCfdRefusal(db, '2026-10-15')).toBeUndefined();
+    expect(journalledUkStockCfdRefusal(db, '2026-10-16')).toBeUndefined();
+    expect(journalledCfdEntryRefusal(db, '2026-10-14')).toBeUndefined();
     db.close();
   });
 });

@@ -39,6 +39,7 @@ import {
   RECONCILE_CASH_TOLERANCE_GBP,
   SqliteMonthlySpendCap,
   UK_STOCK_SCREENS,
+  ukStockCfdRefusal,
   VOL_TARGET_SIZING,
 } from './signal/index.js';
 
@@ -189,7 +190,25 @@ function staticProbes(): SmokeProbe[] {
       killLineEnforced(),
       'assertArm2RunsBesideDebate([debate]) refused without arm2',
     ),
+    probe(
+      'no UK single-stock CFD route until David opens it (#1914 kill line)',
+      ukStockRoutesClosed(),
+      'RR_XLON long and short refuse uk_stock_cfd_disabled with every CFD entry gate open',
+    ),
   ];
+}
+
+function ukStockRoutesClosed(): boolean {
+  const router = createVenueRouter({
+    catalogue: undefined,
+    entryRefusal: () => undefined,
+    maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+    ukStockRefusal: ukStockCfdRefusal,
+  });
+  return (['long', 'short'] as const).every((side) => {
+    const choice = router.route('RR_XLON', 'saxo', side, SMOKE_TRADING_DATE);
+    return 'refusal' in choice && choice.refusal === 'uk_stock_cfd_disabled';
+  });
 }
 
 function shortRefusal(entryRefusal: () => string | undefined): string | undefined {
