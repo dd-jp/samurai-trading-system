@@ -60,6 +60,10 @@ export function inUkStockBarPool(instrument: CfdInstrument, screens: UkStockScre
   return outcome === 'pass' || outcome === 'spread';
 }
 
+export function inUkStockUniversePool(instrument: CfdInstrument, screens: UkStockScreens): boolean {
+  return isUkStock(instrument.symbol) && screenUkStock(instrument, screens) === 'pass';
+}
+
 export function ukStockScreenCounts(
   instruments: readonly CfdInstrument[],
   screens: UkStockScreens,

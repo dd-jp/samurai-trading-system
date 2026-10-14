@@ -10,7 +10,7 @@ import { UNCAPPED_SPEND } from '../../../shared/debate/index.js';
 import type { BarSeries, DailyBar } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
-import { addDays, NO_NEWS } from '../data/index.js';
+import { addDays, isUkStock, NO_NEWS } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
 import { createArm2Sleeve } from './arm2-sleeve.js';
 import {
@@ -27,7 +27,13 @@ import {
 } from './debate-sleeve.js';
 import { buildLlmPanel, seatModels } from './llm-panel.js';
 import { isLseInstrument } from './lse-lines.js';
-import { DEBATE_SLEEVE_SPEC, LSE_RESERVED_SLOTS, type Parameter, UNSET } from './parameters.js';
+import {
+  DEBATE_SLEEVE_SPEC,
+  LSE_ETF_ONLY_RESERVED_SLOTS,
+  LSE_RESERVED_SLOTS,
+  type Parameter,
+  UNSET,
+} from './parameters.js';
 import { BULLISH_SCRIPT, type Script, ScriptedTransport } from './scripted-transport.js';
 import { UNIVERSE_CAP } from './universe.js';
 
@@ -336,13 +342,60 @@ describe('buildUniverse', () => {
       it('fills the reserved LSE slots when the session is live', () => {
         const universe = buildUniverse(withLse(thinLse), tradingDate, screen(1)).instruments;
         expect(universe).toHaveLength(UNIVERSE_CAP);
-        expect(universe.filter(isLseInstrument)).toHaveLength(LSE_RESERVED_SLOTS);
+        expect(universe.filter(isLseInstrument)).toHaveLength(LSE_ETF_ONLY_RESERVED_SLOTS);
       });
 
       it('hands the slots two LSE lines cannot fill back to the shared ranking', () => {
         const universe = buildUniverse(withLse(thinLse.slice(0, 2)), tradingDate, screen(1));
         expect(universe.instruments).toHaveLength(UNIVERSE_CAP);
         expect(universe.instruments.filter(isLseInstrument)).toHaveLength(2);
+      });
+
+      describe('UK single-stock CFDs pooled (#1914)', () => {
+        const ukTidms = ['RR_XLON', 'BARC_XLON', 'VOD_XLON'];
+        const ukSeries = ukTidms.map((tidm) => trending(tidm, 260, 0.001));
+        const staleUk = trending('LLOY_XLON', 250, 0.001);
+        const withUk = (lseLegRefusal?: string) => ({
+          ...withLse([...thinLse, ...ukSeries, staleUk], lseLegRefusal),
+          venueFor: (symbol: string): 'alpaca' | 'saxo' =>
+            isLseInstrument(symbol) || isUkStock(symbol) ? 'saxo' : 'alpaca',
+          ukStocks: () => [...ukTidms, staleUk.symbol],
+        });
+        const saxoHomed = (symbol: string) => isLseInstrument(symbol) || isUkStock(symbol);
+
+        it('gives LSE 6 of the 20, UK stocks and ETFs ranked together by their own liquidity', () => {
+          const universe = buildUniverse(withUk(), tradingDate, screen(1)).instruments;
+          expect(universe).toHaveLength(UNIVERSE_CAP);
+          expect(universe.filter(saxoHomed)).toHaveLength(LSE_RESERVED_SLOTS);
+          expect(universe.filter(isUkStock).sort()).toEqual([...ukTidms].sort());
+          expect(universe.filter(isLseInstrument)).toHaveLength(
+            LSE_RESERVED_SLOTS - ukTidms.length,
+          );
+        });
+
+        it('leaves out a UK stock whose bars have gone stale', () => {
+          const universe = buildUniverse(withUk(), tradingDate, screen(1)).instruments;
+          expect(universe).not.toContain(staleUk.symbol);
+        });
+
+        it('hands every LSE slot back on a refused Saxo session: 20 US names', () => {
+          const usOnly = buildUniverse(withLse([]), tradingDate, screen(1)).instruments;
+          const refused = buildUniverse(withUk('session lost'), tradingDate, screen(1));
+          expect(refused.instruments).toEqual(usOnly);
+        });
+
+        it('gives the debate sleeve and arm 2 the same universe with UK stocks in it', () => {
+          const shared = withUk();
+          const debate = createDebateSleeve({
+            ...shared,
+            panel: panelWith(bullishScript),
+            news: NO_NEWS,
+            clock,
+          }).universe(context).instruments;
+          const arm2 = createArm2Sleeve({ ...shared, clock }).universe(context).instruments;
+          expect(debate.filter(isUkStock)).toHaveLength(ukTidms.length);
+          expect(arm2).toEqual(debate);
+        });
       });
     });
 

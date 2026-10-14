@@ -12,7 +12,7 @@ import {
 import {
   G18_SMALL_CAP_FLOORS,
   isSet,
-  LSE_RESERVED_SLOTS,
+  LSE_ETF_ONLY_RESERVED_SLOTS,
   MOVERS_MIN_DOLLAR_VOLUME_USD,
   UnsetParameterError,
 } from './parameters.js';
@@ -147,7 +147,7 @@ function moverCandidates(symbols: readonly string[], pool: PoolContext): MoverCa
 export function selectUniverse(
   pooled: readonly string[],
   pool: PoolContext,
-  reservedLseSlots: number = LSE_RESERVED_SLOTS,
+  reservedLseSlots: number = LSE_ETF_ONLY_RESERVED_SLOTS,
 ): UniverseSelection {
   const refusals: UnsetParameterError[] = [];
   if (!isSet(G18_SMALL_CAP_FLOORS)) {

@@ -23,7 +23,12 @@ import {
   type VenueSessionGate,
 } from './data/index.js';
 import { brokerAccessFor } from './execution/index.js';
-import { decisionSleeves, quotedBorrowPerDayFrom, venueRouterFor } from './index.js';
+import {
+  decisionSleeves,
+  quotedBorrowPerDayFrom,
+  ukStockPoolFor,
+  venueRouterFor,
+} from './index.js';
 import { type InputChange, type InputDigest, inputChangesSince } from './input-digest.js';
 import { storeView } from './reconcile.js';
 import {
@@ -228,15 +233,23 @@ export function journalledCfdEntryRefusal(
   return CFD_ENTRY_GATES.find(({ parameter }) => refused.has(parameter.name))?.refusal;
 }
 
-// Pre-#1914 days journal no row and read open, harmlessly: no UK single stock was in any universe
+const UK_STOCK_SWITCH_JOURNALLED_BEFORE_SQL = `
+  SELECT 1 FROM v2_refusals
+   WHERE trading_date < ? AND scope = 'parameter' AND parameter = ? LIMIT 1`;
+
+// The switch journals a row only while shut, and days before #1914 journal none either; a day
+// without a row reads open only once an earlier day shows it shut, so an old day never replays
+// with UK stocks pooled and 6 LSE slots
 export function journalledUkStockCfdRefusal(
   db: StoreHandle,
   tradingDate: string,
 ): string | undefined {
   const rows = db.prepare(PARAMETER_REFUSALS_SQL).all(tradingDate) as { parameter: string }[];
-  return rows.some((row) => row.parameter === UK_STOCK_CFD_ENABLED.name)
-    ? UK_STOCK_CFD_DISABLED
-    : undefined;
+  if (rows.some((row) => row.parameter === UK_STOCK_CFD_ENABLED.name)) return UK_STOCK_CFD_DISABLED;
+  const journalledBefore = db
+    .prepare(UK_STOCK_SWITCH_JOURNALLED_BEFORE_SQL)
+    .get(tradingDate, UK_STOCK_CFD_ENABLED.name);
+  return journalledBefore === undefined ? UK_STOCK_CFD_DISABLED : undefined;
 }
 
 function ukStockGateOf(inputs: ReplayInputs): () => string | undefined {
@@ -383,6 +396,7 @@ function replaySleeves(
     logger,
     router: venueRouterFor(inputs.catalogue, cfdGateOf(inputs), ukStockGateOf(inputs)),
     lseLegRefusal: journalledLseRefusal(inputs.db, inputs.tradingDate),
+    ukStocks: ukStockPoolFor(inputs.catalogue, ukStockGateOf(inputs)()),
   });
 }
 
