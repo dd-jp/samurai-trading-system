@@ -63,6 +63,7 @@ export function summarise(report: CfdCatalogueRefreshReport): Record<string, unk
     unmatched: report.unmatched,
     clashes: report.clashes,
     withoutDetails: report.withoutDetails,
+    otherCurrency: report.otherCurrency,
   };
 }
 

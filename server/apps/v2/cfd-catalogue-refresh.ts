@@ -22,6 +22,8 @@ import {
   parseCfdCatalogue,
   type QuoteCurrency,
   recordCfdCatalogueSnapshot,
+  ukStockKey,
+  ukStockScreenCounts,
 } from './data/index.js';
 import {
   connectUnlessLost,
@@ -29,7 +31,7 @@ import {
   noteSessionLoss,
   type SaxoSessionLedger,
 } from './saxo-session-loss.js';
-import { LSE_LINES } from './signal/index.js';
+import { LSE_LINES, requireSet, UK_STOCK_SCREENS } from './signal/index.js';
 
 export type CfdReferenceApi = Pick<
   SaxoReadOnlyApi,
@@ -44,7 +46,8 @@ export interface CfdScope {
   readonly assetType: SaxoCfdAssetType;
   readonly exchangeIds: readonly string[];
   readonly currency: QuoteCurrency;
-  readonly universe: readonly string[];
+  readonly universe: readonly string[] | 'whole_exchange';
+  readonly keyOf: (saxoSymbol: string) => string;
 }
 
 export function cfdScopes(
@@ -57,8 +60,22 @@ export function cfdScopes(
       exchangeIds: ['NYSE', 'NASDAQ'],
       currency: 'USD',
       universe: usConstituents,
+      keyOf: universeSymbolOf,
     },
-    { assetType: 'CfdOnEtf', exchangeIds: ['LSE_ETF'], currency: 'GBP', universe: lseTidms },
+    {
+      assetType: 'CfdOnEtf',
+      exchangeIds: ['LSE_ETF'],
+      currency: 'GBP',
+      universe: lseTidms,
+      keyOf: universeSymbolOf,
+    },
+    {
+      assetType: 'CfdOnStock',
+      exchangeIds: ['LSE_SETS'],
+      currency: 'GBP',
+      universe: 'whole_exchange',
+      keyOf: ukStockKey,
+    },
   ];
 }
 
@@ -73,11 +90,15 @@ interface Details {
   readonly shortTradeDisabled: boolean | undefined;
   readonly priceToContractFactor: number | undefined;
   readonly currency: string;
+  readonly priceCurrency: string | undefined;
 }
 
 interface PriceDetails {
   readonly shortTradeDisabled: boolean | undefined;
   readonly borrowCostPerDay: number | null;
+  readonly bid: number | undefined;
+  readonly ask: number | undefined;
+  readonly averageVolume30Days: number | undefined;
 }
 
 export interface CfdCatalogueRefreshReport {
@@ -86,6 +107,7 @@ export interface CfdCatalogueRefreshReport {
   readonly unmatched: readonly string[];
   readonly clashes: readonly string[];
   readonly withoutDetails: readonly string[];
+  readonly otherCurrency: readonly string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -106,15 +128,29 @@ export function universeSymbolOf(saxoSymbol: string): string {
   return shareClass === null ? root : `${shareClass[1]}.${shareClass[2]?.toUpperCase()}`;
 }
 
+function wanted(scope: CfdScope): (symbol: string) => boolean {
+  if (scope.universe === 'whole_exchange') return () => true;
+  const names = new Set(scope.universe);
+  return (symbol) => names.has(symbol);
+}
+
+function pricedElsewhere(row: Record<string, unknown>, scope: CfdScope): boolean {
+  return (
+    scope.universe === 'whole_exchange' &&
+    scope.exchangeIds.includes(String(row.ExchangeId)) &&
+    row.CurrencyCode !== scope.currency
+  );
+}
+
 function listingOf(
   row: Record<string, unknown>,
   scope: CfdScope,
-  wanted: ReadonlySet<string>,
+  inUniverse: (symbol: string) => boolean,
 ): Listing | undefined {
   const saxoSymbol = String(row.Symbol ?? '');
-  const symbol = universeSymbolOf(saxoSymbol);
+  const symbol = scope.keyOf(saxoSymbol);
   const inScope =
-    wanted.has(symbol) &&
+    inUniverse(symbol) &&
     scope.exchangeIds.includes(String(row.ExchangeId)) &&
     row.CurrencyCode === scope.currency &&
     isFiniteNumber(row.Identifier);
@@ -143,16 +179,22 @@ async function searchExchange(
   );
 }
 
-async function listScope(api: CfdReferenceApi, scope: CfdScope): Promise<Listing[]> {
-  const wanted = new Set(scope.universe);
-  const listings: Listing[] = [];
+interface ScopeListings {
+  readonly listings: Listing[];
+  readonly otherCurrency: string[];
+}
+
+async function listScope(api: CfdReferenceApi, scope: CfdScope): Promise<ScopeListings> {
+  const inUniverse = wanted(scope);
+  const found: ScopeListings = { listings: [], otherCurrency: [] };
   for (const exchangeId of scope.exchangeIds) {
     for (const row of await searchExchange(api, scope, exchangeId)) {
-      const listing = listingOf(row, scope, wanted);
-      if (listing !== undefined) listings.push(listing);
+      const listing = listingOf(row, scope, inUniverse);
+      if (listing !== undefined) found.listings.push(listing);
+      else if (pricedElsewhere(row, scope)) found.otherCurrency.push(String(row.Symbol ?? ''));
     }
   }
-  return listings;
+  return found;
 }
 
 function optionalBoolean(value: unknown): boolean | undefined {
@@ -169,15 +211,23 @@ function detailsOf(row: Record<string, unknown>): Details {
     shortTradeDisabled: optionalBoolean(row.ShortTradeDisabled),
     priceToContractFactor: positiveOrUndefined(row.PriceToContractFactor),
     currency: String(row.CurrencyCode ?? ''),
+    priceCurrency: typeof row.PriceCurrency === 'string' ? row.PriceCurrency : undefined,
   };
+}
+
+function nonNegativeOrUndefined(value: unknown): number | undefined {
+  return isFiniteNumber(value) && value >= 0 ? value : undefined;
 }
 
 function priceDetailsOf(row: Record<string, unknown>): PriceDetails {
   const details = isRecord(row.InstrumentPriceDetails) ? row.InstrumentPriceDetails : {};
-  const borrow = details.CfdBorrowingCost;
+  const quote = isRecord(row.Quote) ? row.Quote : {};
   return {
     shortTradeDisabled: optionalBoolean(details.ShortTradeDisabled),
-    borrowCostPerDay: isFiniteNumber(borrow) && borrow >= 0 ? borrow : null,
+    borrowCostPerDay: nonNegativeOrUndefined(details.CfdBorrowingCost) ?? null,
+    bid: positiveOrUndefined(quote.Bid),
+    ask: positiveOrUndefined(quote.Ask),
+    averageVolume30Days: nonNegativeOrUndefined(details.AverageVolume30Days),
   };
 }
 
@@ -234,16 +284,29 @@ function instrumentOf(
     tradable: details.tradable,
     shortTradeDisabled: shortTradeDisabled(details, price),
     borrowCostPerDay: price?.borrowCostPerDay ?? undefined,
+    ...definedOnly({
+      priceCurrency: details.priceCurrency,
+      bid: price?.bid,
+      ask: price?.ask,
+      averageVolume30Days: price?.averageVolume30Days,
+    }),
+  };
+}
+
+function definedOnly<T extends object>(fields: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)) as {
+    [K in keyof T]?: Exclude<T[K], undefined>;
   };
 }
 
 interface ScopeRows {
   readonly instruments: CfdInstrument[];
   readonly withoutDetails: string[];
+  readonly otherCurrency: string[];
 }
 
 async function scopeRows(api: CfdReferenceApi, scope: CfdScope): Promise<ScopeRows> {
-  const listings = await listScope(api, scope);
+  const { listings, otherCurrency } = await listScope(api, scope);
   const uics = listings.map((listing) => listing.uic);
   const details = await byUic(
     uics,
@@ -257,7 +320,7 @@ async function scopeRows(api: CfdReferenceApi, scope: CfdScope): Promise<ScopeRo
     'infoprices/list',
     priceDetailsOf,
   );
-  const rows: ScopeRows = { instruments: [], withoutDetails: [] };
+  const rows: ScopeRows = { instruments: [], withoutDetails: [], otherCurrency };
   for (const listing of listings) {
     const row = instrumentOf(listing, scope, details.get(listing.uic), prices.get(listing.uic));
     if (row === undefined) rows.withoutDetails.push(listing.saxoSymbol);
@@ -284,15 +347,19 @@ export async function buildCfdCatalogue(
 ): Promise<CfdCatalogueRefreshReport> {
   const instruments: CfdInstrument[] = [];
   const withoutDetails: string[] = [];
+  const otherCurrency: string[] = [];
   for (const scope of scopes) {
     const rows = await scopeRows(api, scope);
     instruments.push(...rows.instruments);
     withoutDetails.push(...rows.withoutDetails);
+    otherCurrency.push(...rows.otherCurrency);
   }
   const { kept, clashes } = withoutClashes(instruments);
   const listed = new Set(instruments.map(({ symbol }) => symbol));
-  const unmatched = scopes.flatMap(({ universe }) => universe.filter((s) => !listed.has(s)));
-  return { asOf, instruments: kept, unmatched, clashes, withoutDetails };
+  const unmatched = scopes.flatMap(({ universe }) =>
+    universe === 'whole_exchange' ? [] : universe.filter((s) => !listed.has(s)),
+  );
+  return { asOf, instruments: kept, unmatched, clashes, withoutDetails, otherCurrency };
 }
 
 export function catalogueText(report: CfdCatalogueRefreshReport): string {
@@ -326,6 +393,23 @@ function logReport(report: CfdCatalogueRefreshReport, path: string, logger: Logg
       'warn',
       'v2_cfd_catalogue_symbol_clash',
       `dropped ${report.clashes.join(', ')}: more than one CFD row keys to the same symbol`,
+    );
+  }
+  if (report.otherCurrency.length > 0) {
+    logRefresh(
+      logger,
+      'info',
+      'v2_cfd_catalogue_other_currency',
+      `excluded ${report.otherCurrency.join(', ')}: not priced in the scope's currency (#1914)`,
+    );
+  }
+  const ukScreen = ukStockScreenCounts(report.instruments, requireSet(UK_STOCK_SCREENS));
+  if (Object.values(ukScreen).some((count) => count > 0)) {
+    logRefresh(
+      logger,
+      'info',
+      'v2_cfd_catalogue_uk_screen',
+      `UK stock CFDs by screen outcome: ${JSON.stringify(ukScreen)}`,
     );
   }
   logRefresh(

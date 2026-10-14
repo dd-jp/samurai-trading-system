@@ -142,6 +142,7 @@ describe('summarise', () => {
         unmatched: ['X'],
         clashes: [],
         withoutDetails: ['Y'],
+        otherCurrency: ['Z'],
       }),
     ).toEqual({
       asOf: TODAY,
@@ -151,6 +152,7 @@ describe('summarise', () => {
       unmatched: ['X'],
       clashes: [],
       withoutDetails: ['Y'],
+      otherCurrency: ['Z'],
     });
   });
 });

@@ -38,6 +38,7 @@ import {
   type Parameter,
   RECONCILE_CASH_TOLERANCE_GBP,
   SqliteMonthlySpendCap,
+  UK_STOCK_SCREENS,
   VOL_TARGET_SIZING,
 } from './signal/index.js';
 
@@ -50,6 +51,7 @@ const CFD_COST_PARAMETERS: readonly Parameter<unknown>[] = [
 const SET_PARAMETERS: readonly Parameter<unknown>[] = [
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
+  UK_STOCK_SCREENS,
   RECONCILE_CASH_TOLERANCE_GBP,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
 ];

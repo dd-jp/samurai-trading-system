@@ -24,6 +24,10 @@ export interface CfdInstrument {
   readonly tradable: boolean;
   readonly shortTradeDisabled: boolean;
   readonly borrowCostPerDay: number | undefined;
+  readonly priceCurrency?: string;
+  readonly bid?: number;
+  readonly ask?: number;
+  readonly averageVolume30Days?: number;
 }
 
 export interface CfdCatalogueSnapshot {
@@ -64,6 +68,10 @@ interface RawInstrument {
   readonly tradable: boolean;
   readonly shortTradeDisabled: boolean;
   readonly borrowCostPerDay?: number | null;
+  readonly priceCurrency?: string;
+  readonly bid?: number;
+  readonly ask?: number;
+  readonly averageVolume30Days?: number;
 }
 
 const FIELD_CHECKS: readonly (readonly [keyof RawInstrument, (value: unknown) => boolean])[] = [
@@ -76,6 +84,10 @@ const FIELD_CHECKS: readonly (readonly [keyof RawInstrument, (value: unknown) =>
   ['tradable', (value) => typeof value === 'boolean'],
   ['shortTradeDisabled', (value) => typeof value === 'boolean'],
   ['borrowCostPerDay', (value) => value === undefined || value === null || isNonNegative(value)],
+  ['priceCurrency', (value) => value === undefined || typeof value === 'string'],
+  ['bid', (value) => value === undefined || isNonNegative(value)],
+  ['ask', (value) => value === undefined || isNonNegative(value)],
+  ['averageVolume30Days', (value) => value === undefined || isNonNegative(value)],
 ];
 
 function isRawInstrument(raw: unknown): raw is RawInstrument {
@@ -96,7 +108,19 @@ function parseInstrument(raw: unknown): CfdInstrument {
     tradable: raw.tradable,
     shortTradeDisabled: raw.shortTradeDisabled,
     borrowCostPerDay: raw.borrowCostPerDay ?? undefined,
+    ...quoteFieldsOf(raw),
   };
+}
+
+function quoteFieldsOf(raw: RawInstrument): Partial<CfdInstrument> {
+  const fields: Partial<Record<'priceCurrency' | 'bid' | 'ask' | 'averageVolume30Days', unknown>> =
+    {
+      priceCurrency: raw.priceCurrency,
+      bid: raw.bid,
+      ask: raw.ask,
+      averageVolume30Days: raw.averageVolume30Days,
+    };
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }
 
 export class CfdCatalogue {

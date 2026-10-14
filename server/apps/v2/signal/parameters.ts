@@ -11,6 +11,7 @@ import {
   SAXO_CFD_FINANCING,
   SAXO_CFD_SPREAD,
   saxoCfdBorrow,
+  type UkStockScreens,
 } from '../data/index.js';
 import type { VolTargetSizing } from '../risk/index.js';
 import { ALL_PINS, JUDGE_PIN, type ModelPin, PRE_DIGEST_ALL_PINS, pinDigest } from './models.js';
@@ -90,6 +91,14 @@ export const LSE_RESERVED_SLOTS = 4;
 // David's 2026-09-29 chat ruling, #1866 comment 5893163984 item 4 (UK CFD shorts): refuse above
 // 2% a year; extended to US CFD shorts by David 2026-09-29 (#1849)
 export const CFD_SHORT_MAX_BORROW_RATE_PER_YEAR = 0.02;
+
+// David's 2026-09-29 chat ruling, #1866 comment 5893163984 item 2: judgement, not measured
+// optima, so a change is a new counted trial
+export const UK_STOCK_SCREENS = set<UkStockScreens>('UK_STOCK_SCREENS', '#1914', {
+  minAdvGbp: 5_000_000,
+  maxSpreadBps: 25,
+  minPricePence: 100,
+});
 
 // ADR item 19: #1850's figures are sourced, not ruled; the sources sit on each in cfd-tariff.ts
 export const CFD_COST_MODEL = set<CfdCostModel>('CFD_COST_MODEL', '#1850', SAXO_CFD_COMMISSION);
@@ -295,6 +304,7 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
+  UK_STOCK_SCREENS,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
   RECONCILE_CASH_TOLERANCE_GBP,
   VOL_TARGET_SIZING,

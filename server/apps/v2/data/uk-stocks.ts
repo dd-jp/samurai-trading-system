@@ -1,0 +1,72 @@
+import type { CfdInstrument } from './cfd-catalogue.js';
+
+// No S&P 500 ticker carries an underscore (Alpaca writes share classes as BRK.B), so a UK stock
+// key can never clash with a US name in the catalogue, the bar store or the router (#1914)
+const UK_STOCK_SUFFIX = '_XLON';
+
+export function ukStockKey(saxoSymbol: string): string {
+  return `${(saxoSymbol.split(':')[0] ?? '').toUpperCase()}${UK_STOCK_SUFFIX}`;
+}
+
+export function isUkStock(symbol: string): boolean {
+  return symbol.endsWith(UK_STOCK_SUFFIX);
+}
+
+export interface UkStockScreens {
+  readonly minAdvGbp: number;
+  readonly maxSpreadBps: number;
+  readonly minPricePence: number;
+}
+
+export type UkStockScreenOutcome =
+  | 'pass'
+  | 'not_tradable'
+  | 'no_quote'
+  | 'price_unit'
+  | 'price'
+  | 'adv'
+  | 'spread';
+
+const PENCE_PER_UNIT: Readonly<Record<string, number>> = { GBX: 1, GBP: 100 };
+
+function quoteOf(instrument: CfdInstrument) {
+  const { bid, ask, averageVolume30Days } = instrument;
+  if (bid === undefined || ask === undefined || averageVolume30Days === undefined) return undefined;
+  if (!(bid > 0 && ask >= bid)) return undefined;
+  return { bid, ask, mid: (bid + ask) / 2, averageVolume30Days };
+}
+
+export function screenUkStock(
+  instrument: CfdInstrument,
+  screens: UkStockScreens,
+): UkStockScreenOutcome {
+  if (!instrument.tradable) return 'not_tradable';
+  const quote = quoteOf(instrument);
+  if (quote === undefined) return 'no_quote';
+  const penceRate = PENCE_PER_UNIT[instrument.priceCurrency ?? ''];
+  if (penceRate === undefined) return 'price_unit';
+  const midPence = quote.mid * penceRate;
+  if (midPence < screens.minPricePence) return 'price';
+  if ((quote.averageVolume30Days * midPence) / 100 < screens.minAdvGbp) return 'adv';
+  const spreadBps = ((quote.ask - quote.bid) / quote.mid) * 10_000;
+  return spreadBps > screens.maxSpreadBps ? 'spread' : 'pass';
+}
+
+export function ukStockScreenCounts(
+  instruments: readonly CfdInstrument[],
+  screens: UkStockScreens,
+): Readonly<Record<UkStockScreenOutcome, number>> {
+  const counts: Record<UkStockScreenOutcome, number> = {
+    pass: 0,
+    not_tradable: 0,
+    no_quote: 0,
+    price_unit: 0,
+    price: 0,
+    adv: 0,
+    spread: 0,
+  };
+  for (const instrument of instruments) {
+    if (isUkStock(instrument.symbol)) counts[screenUkStock(instrument, screens)] += 1;
+  }
+  return counts;
+}

@@ -69,6 +69,8 @@ export { SqliteNewsLedger } from './news-ledger.js';
 export { realisedVolatility } from './realised-vol.js';
 export type { SplitSourceName } from './split-reads.js';
 export { SqliteSplitReads } from './split-reads.js';
+export type { UkStockScreens } from './uk-stocks.js';
+export { ukStockKey, ukStockScreenCounts } from './uk-stocks.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
 export { CLOSED_VENUE_ROUTER, createDatedVenueRouter, createVenueRouter } from './venue-routes.js';
 export type { SitOutCode, VenueSessionGate } from './venue-sessions.js';
