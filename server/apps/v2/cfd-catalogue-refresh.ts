@@ -184,14 +184,23 @@ interface ScopeListings {
   readonly otherCurrency: string[];
 }
 
+function sortRow(
+  found: ScopeListings,
+  row: Record<string, unknown>,
+  scope: CfdScope,
+  inUniverse: (symbol: string) => boolean,
+): void {
+  const listing = listingOf(row, scope, inUniverse);
+  if (listing !== undefined) found.listings.push(listing);
+  else if (pricedElsewhere(row, scope)) found.otherCurrency.push(String(row.Symbol));
+}
+
 async function listScope(api: CfdReferenceApi, scope: CfdScope): Promise<ScopeListings> {
   const inUniverse = wanted(scope);
   const found: ScopeListings = { listings: [], otherCurrency: [] };
   for (const exchangeId of scope.exchangeIds) {
     for (const row of await searchExchange(api, scope, exchangeId)) {
-      const listing = listingOf(row, scope, inUniverse);
-      if (listing !== undefined) found.listings.push(listing);
-      else if (pricedElsewhere(row, scope)) found.otherCurrency.push(String(row.Symbol ?? ''));
+      sortRow(found, row, scope, inUniverse);
     }
   }
   return found;
