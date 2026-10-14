@@ -51,6 +51,7 @@ import {
   splitFeedFor,
   V2_STORE_PATH,
   type V2RootOptions,
+  venueOf,
   withoutRefusedLse,
 } from './index.js';
 import { CapitalConfigStore } from './risk/index.js';
@@ -263,7 +264,7 @@ describe('withoutRefusedLse', () => {
   const fake = (): Sleeve => ({
     id: 'fake',
     spec: {} as SleeveSpec,
-    universe: () => ({ instruments: ['UP', 'ISF', 'IUSA', 'SPY'], refusals }),
+    universe: () => ({ instruments: ['UP', 'ISF', 'RR_XLON', 'IUSA', 'SPY'], refusals }),
     decide: async () => ({ decisions: [], refusals: [] }),
   });
 
@@ -272,7 +273,7 @@ describe('withoutRefusedLse', () => {
     expect(withoutRefusedLse(sleeve, undefined)).toBe(sleeve);
   });
 
-  it('drops every LSE line from the universe, and only those, when the session is refused', () => {
+  it('drops every LSE line and UK stock from the universe, and only those, when the session is refused', () => {
     const wrapped = withoutRefusedLse(fake(), 'session lost');
     expect(wrapped.universe(context).instruments).toEqual(['UP', 'SPY']);
     expect(wrapped.universe(context).refusals).toEqual(refusals);
@@ -285,6 +286,14 @@ describe('withoutRefusedLse', () => {
       decisions: [],
       refusals: [],
     });
+  });
+});
+
+describe('venueOf', () => {
+  it('homes LSE lines and UK single stocks at Saxo and every other name at Alpaca (#1914)', () => {
+    expect(venueOf('ISF')).toBe('saxo');
+    expect(venueOf('RR_XLON')).toBe('saxo');
+    expect(venueOf('TSCO')).toBe('alpaca');
   });
 });
 
@@ -2069,6 +2078,21 @@ describe('newsWiringFor', () => {
     expect(urls).toHaveLength(1);
     expect(urls[0]).toContain('alpaca.markets');
     expect(rows(db)).toEqual([{ symbol: 'VOD', status: 'no_news', reason: '' }]);
+  });
+
+  it('never sends a UK single stock to Alpaca news by default (#1914)', async () => {
+    const db = migratedMemoryStore();
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string | URL) => {
+        urls.push(String(url));
+        return Promise.resolve(new Response(JSON.stringify({ news: [], next_page_token: null })));
+      }),
+    );
+    const { news } = newsWiringFor({ ...options, isUkStock: undefined }, db, quiet);
+    expect(await news.headlines('RR_XLON', '2026-09-29', NOW)).toEqual([]);
+    expect(urls.filter((url) => url.includes('alpaca.markets'))).toEqual([]);
   });
 
   it('journals US headlines to v2_news without the keys or request headers (#1981)', async () => {

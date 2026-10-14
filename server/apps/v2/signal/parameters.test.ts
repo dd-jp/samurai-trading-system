@@ -42,9 +42,11 @@ import {
   SIGNALS_SLEEVE_SPEC,
   SLEEVE_PINS_BY_ID,
   SLEEVE_SPECS_BY_ID,
+  UK_STOCK_CFD_ENABLED,
   UK_STOCK_SCREENS,
   UNSET,
   UnsetParameterError,
+  ukStockCfdRefusal,
   VOL_TARGET_SIZING,
   withheldParameters,
 } from './parameters.js';
@@ -83,6 +85,7 @@ describe('parameters', () => {
       ARM2_ENTRY_THRESHOLDS,
       LSE_LIQUIDITY_SCREEN,
       UK_STOCK_SCREENS,
+      UK_STOCK_CFD_ENABLED,
       ...CFD_GATE_PARAMETERS,
       RECONCILE_CASH_TOLERANCE_GBP,
       VOL_TARGET_SIZING,
@@ -128,6 +131,16 @@ describe('parameters', () => {
     });
     expect(UK_STOCK_SCREENS.ticket).toBe('#1914');
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(UK_STOCK_SCREENS);
+  });
+
+  it('keeps every UK single-stock CFD route shut until David opens it (#1914 kill line)', () => {
+    expect(UK_STOCK_CFD_ENABLED.value).toBe(UNSET);
+    expect(ukStockCfdRefusal()).toBe('uk_stock_cfd_disabled');
+    expect(ukStockCfdRefusal({ ...UK_STOCK_CFD_ENABLED, value: false })).toBe(
+      'uk_stock_cfd_disabled',
+    );
+    expect(ukStockCfdRefusal({ ...UK_STOCK_CFD_ENABLED, value: true })).toBeUndefined();
+    expect(CYCLE_LEVEL_PARAMETERS).not.toContain(UK_STOCK_CFD_ENABLED);
   });
 
   it('carries the pre-declared Step 3 trial values from the spec', () => {

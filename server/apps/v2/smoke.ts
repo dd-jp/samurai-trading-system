@@ -38,7 +38,9 @@ import {
   type Parameter,
   RECONCILE_CASH_TOLERANCE_GBP,
   SqliteMonthlySpendCap,
+  UK_STOCK_CFD_ENABLED,
   UK_STOCK_SCREENS,
+  ukStockCfdRefusal,
   VOL_TARGET_SIZING,
 } from './signal/index.js';
 
@@ -58,8 +60,12 @@ const SET_PARAMETERS: readonly Parameter<unknown>[] = [
 const STILL_UNSET_PARAMETERS = DECLARED_PARAMETERS.filter(
   (parameter) => !SET_PARAMETERS.includes(parameter),
 );
-// Unset means off, not refused: sizing is unchanged until David declares the trial (#1860)
-const OFF_WHEN_UNSET_PARAMETERS: readonly Parameter<unknown>[] = [VOL_TARGET_SIZING];
+// Unset journals no cycle refusal: sizing is unchanged until David declares the trial (#1860),
+// and only a UK stock's own route refuses until he opens it (#1914, probed below)
+const OFF_WHEN_UNSET_PARAMETERS: readonly Parameter<unknown>[] = [
+  VOL_TARGET_SIZING,
+  UK_STOCK_CFD_ENABLED,
+];
 const REFUSING_UNSET_PARAMETERS = STILL_UNSET_PARAMETERS.filter(
   (parameter) => !OFF_WHEN_UNSET_PARAMETERS.includes(parameter),
 );
@@ -189,7 +195,25 @@ function staticProbes(): SmokeProbe[] {
       killLineEnforced(),
       'assertArm2RunsBesideDebate([debate]) refused without arm2',
     ),
+    probe(
+      'no UK single-stock CFD route until David opens it (#1914 kill line)',
+      ukStockRoutesClosed(),
+      'RR_XLON long and short refuse uk_stock_cfd_disabled with every CFD entry gate open',
+    ),
   ];
+}
+
+function ukStockRoutesClosed(): boolean {
+  const router = createVenueRouter({
+    catalogue: undefined,
+    entryRefusal: () => undefined,
+    maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+    ukStockRefusal: ukStockCfdRefusal,
+  });
+  return (['long', 'short'] as const).every((side) => {
+    const choice = router.route('RR_XLON', 'saxo', side, SMOKE_TRADING_DATE);
+    return 'refusal' in choice && choice.refusal === 'uk_stock_cfd_disabled';
+  });
 }
 
 function shortRefusal(entryRefusal: () => string | undefined): string | undefined {

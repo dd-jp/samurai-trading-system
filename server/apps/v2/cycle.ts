@@ -2285,6 +2285,7 @@ const SIZING_REFUSAL_PARAMETERS: Readonly<Record<string, string>> = {
   fx_year_start_stale: 'FX_YEAR_START_COVERAGE',
   short_requires_cfd: 'CFD_VENUE_ROUTE',
   long_on_cfd: 'CFD_VENUE_ROUTE',
+  uk_stock_requires_cfd_gbp: 'CFD_VENUE_ROUTE',
   cfd_sleeve_not_allowed: 'CFD_VENUE_ROUTE',
 };
 

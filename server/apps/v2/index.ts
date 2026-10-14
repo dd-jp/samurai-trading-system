@@ -37,6 +37,7 @@ import {
   currentConstituents,
   EodhdClient,
   FX_PATH,
+  isUkStock,
   loadCfdCatalogue,
   MarketauxClient,
   MarketauxNewsSource,
@@ -93,6 +94,7 @@ import {
   SqliteMonthlySpendCap,
   secretGuardedSink,
   secretsFromEnv,
+  ukStockCfdRefusal,
   verifyNousPins,
 } from './signal/index.js';
 import { processDueSignals, type SignalOutcome, signalsDue } from './signals/processor.js';
@@ -324,7 +326,7 @@ export function newsWiringFor(options: V2RootOptions, db: StoreHandle, logger: L
   const news = newsForVenue({
     us: options.dryRun ? NO_NEWS : new AlpacaNewsSource(new AlpacaNewsClient(), ledger),
     ukStock: ukNews ?? NO_NEWS,
-    isUkStock: options.isUkStock ?? (() => false),
+    isUkStock: options.isUkStock ?? isUkStock,
     isLseEtf: isLseInstrument,
   });
   return { news, ukNews };
@@ -413,7 +415,7 @@ export function withoutRefusedLse(sleeve: Sleeve, refusal: string | undefined): 
       const universe = sleeve.universe(context);
       return {
         ...universe,
-        instruments: universe.instruments.filter((symbol) => !isLseInstrument(symbol)),
+        instruments: universe.instruments.filter((symbol) => !isSaxoHomed(symbol)),
       };
     },
   };
@@ -488,6 +490,7 @@ export function venueRouterFor(
     catalogue,
     entryRefusal,
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
+    ukStockRefusal: ukStockCfdRefusal,
   });
 }
 
@@ -503,8 +506,12 @@ export interface DecisionSleeveInputs {
   readonly lseLegRefusal: string | undefined;
 }
 
+function isSaxoHomed(symbol: string): boolean {
+  return isLseInstrument(symbol) || isUkStock(symbol);
+}
+
 export function venueOf(symbol: string): Venue {
-  return isLseInstrument(symbol) ? 'saxo' : 'alpaca';
+  return isSaxoHomed(symbol) ? 'saxo' : 'alpaca';
 }
 
 export function decisionSleeves(inputs: DecisionSleeveInputs): Sleeve[] {

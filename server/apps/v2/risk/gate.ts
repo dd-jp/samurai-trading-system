@@ -15,7 +15,7 @@ import type {
   SleeveSpec,
   Venue,
 } from '../../../../contracts/index.js';
-import { isCfdVenue, quotePerGbp, yearStartCoverageRefusal } from '../data/index.js';
+import { isCfdVenue, isUkStock, quotePerGbp, yearStartCoverageRefusal } from '../data/index.js';
 import { sleeveAllocationGbp, sleeveCapitalYear } from './allocation.js';
 import { mintApproval } from './approval.js';
 import type { CapitalConfigStore } from './capital-config.js';
@@ -85,7 +85,11 @@ function closingLeg(
   return { size, side: held.qty > 0 ? 'sell' : 'buy' };
 }
 
+// doc 66 2026-09-28 (#1859): a UK single stock trades only as a GBP CFD, and is the only CFD long
 function sideRefusal(decision: SleeveDecision): string | undefined {
+  if (isEntryDecision(decision) && isUkStock(decision.instrument)) {
+    return decision.venue === 'saxo_cfd_gbp' ? undefined : 'uk_stock_requires_cfd_gbp';
+  }
   const cfd = isCfdVenue(decision.venue);
   if (decision.action === 'enter_short' && !cfd) return 'short_requires_cfd';
   return decision.action === 'enter_long' && cfd ? 'long_on_cfd' : undefined;

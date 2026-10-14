@@ -29,6 +29,7 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
 describe('marketauxSymbol', () => {
   it('appends the London suffix to the bare ticker', () => {
     expect(marketauxSymbol('VOD')).toBe('VOD.L');
+    expect(marketauxSymbol('RR_XLON')).toBe('RR.L');
   });
 });
 

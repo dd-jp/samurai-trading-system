@@ -114,6 +114,8 @@ export const CFD_BORROW_MODEL = set<CfdBorrowModel>(
   saxoCfdBorrow(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR),
 );
 export const CFD_RESTING_STOP_VERIFIED = set<boolean>('CFD_RESTING_STOP_VERIFIED', '#1916', true);
+// #1914 kill line: no UK single-stock CFD order, paper included, until David opens it
+export const UK_STOCK_CFD_ENABLED = unset<boolean>('UK_STOCK_CFD_ENABLED', '#1914');
 // Setting it is a new counted trial (CLAUDE.md), so it stays unset until David pre-declares the
 // target, window and sleeves; unset, every sleeve sizes exactly as before
 export const VOL_TARGET_SIZING = unset<VolTargetSizing>('VOL_TARGET_SIZING', '#1860');
@@ -139,6 +141,12 @@ export const CFD_ENTRY_GATES: readonly CfdEntryGate[] = [
 
 function withholds(parameter: Parameter<unknown>): boolean {
   return parameter.value === UNSET || parameter.value === false;
+}
+
+export function ukStockCfdRefusal(
+  parameter: Parameter<boolean> = UK_STOCK_CFD_ENABLED,
+): string | undefined {
+  return withholds(parameter) ? 'uk_stock_cfd_disabled' : undefined;
 }
 
 export function cfdEntryRefusal(
@@ -305,6 +313,7 @@ export const DECLARED_PARAMETERS: readonly Parameter<unknown>[] = [
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
   UK_STOCK_SCREENS,
+  UK_STOCK_CFD_ENABLED,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
   RECONCILE_CASH_TOLERANCE_GBP,
   VOL_TARGET_SIZING,
