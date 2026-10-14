@@ -131,6 +131,14 @@ describe('ParquetBarStore', () => {
     expect(await store.readSeries('alpaca', 'SPY')).toEqual(SPY);
   });
 
+  it('stores a UK stock key with an underscore, and still refuses a leading one (#1914)', async () => {
+    const { store } = await openStore();
+    const uk = { symbol: 'CPG_NEW_XLON', bars: SPY.bars };
+    await store.write('saxo', [uk]);
+    expect(await store.readSeries('saxo', 'CPG_NEW_XLON')).toEqual(uk);
+    await expect(store.readSeries('saxo', '_XLON')).rejects.toThrow(/invalid symbol/);
+  });
+
   it('treats an empty write as a no-op', async () => {
     const { store, root } = await openStore();
     await store.write('alpaca', []);

@@ -25,9 +25,16 @@ import {
   type SymbolOutcome,
 } from './bar-refresh-core.js';
 import { type CfdCatalogueTarget, cfdCatalogueRefreshFor } from './cfd-catalogue-refresh.js';
-import { CALENDAR_REFERENCE, currentConstituents, FX_PATH, isFresh } from './data/index.js';
+import {
+  CALENDAR_REFERENCE,
+  currentConstituents,
+  FX_PATH,
+  isFresh,
+  loadCfdCatalogue,
+} from './data/index.js';
 import { type FxFetch, fxRefreshFor } from './fx-refresh.js';
 import { saxoBarRefreshFor } from './saxo-bar-refresh.js';
+import { ukStockBarRefreshFor } from './uk-stock-bar-refresh.js';
 
 export type { BarRefresh };
 
@@ -176,6 +183,10 @@ export function barRefreshFor(
     alpaca,
     saxoBarRefreshFor(env, tradingDate, logger),
     cfdCatalogueRefreshFor(env, { ...cfdCatalogue, tradingDate, constituents, logger }),
+    // after the catalogue leg, so the UK pool comes from the catalogue written this morning
+    ukStockBarRefreshFor(env, tradingDate, logger, {
+      catalogue: () => loadCfdCatalogue(cfdCatalogue.path),
+    }),
     fxRefreshFor({ ...fx, logger }),
   ]);
 }

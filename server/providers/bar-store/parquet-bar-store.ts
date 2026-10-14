@@ -8,7 +8,7 @@ import { violatesBarShape } from './bar-hygiene.js';
 export const DEFAULT_BAR_STORE_ROOT = 'data/bars/parquet';
 
 const VENUE = /^[a-z]+$/;
-const SYMBOL = /^[A-Z0-9][A-Z0-9.]*$/;
+const SYMBOL = /^[A-Z0-9][A-Z0-9._]*$/;
 const HIVE_TYPES = "{'venue': VARCHAR, 'symbol': VARCHAR, 'year': INTEGER}";
 const COLUMNS = 'symbol, CAST(date AS VARCHAR) AS date, open, high, low, close, volume, raw_close';
 

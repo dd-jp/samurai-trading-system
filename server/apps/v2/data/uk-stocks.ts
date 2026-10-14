@@ -52,6 +52,14 @@ export function screenUkStock(
   return spreadBps > screens.maxSpreadBps ? 'spread' : 'pass';
 }
 
+// The spread is read on the pre-open delayed quote and moves day to day; a pool that followed it
+// would drop a name, let its bars go stale, then take it back
+export function inUkStockBarPool(instrument: CfdInstrument, screens: UkStockScreens): boolean {
+  if (!isUkStock(instrument.symbol)) return false;
+  const outcome = screenUkStock(instrument, screens);
+  return outcome === 'pass' || outcome === 'spread';
+}
+
 export function ukStockScreenCounts(
   instruments: readonly CfdInstrument[],
   screens: UkStockScreens,
