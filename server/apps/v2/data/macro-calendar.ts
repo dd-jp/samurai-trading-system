@@ -10,8 +10,8 @@ export interface MacroSourceCalendar {
 // Verified 2026-09-25 against federalreserve.gov (FOMC, decision = second meeting day),
 // bankofengland.co.uk (MPC), bls.gov (2026 CPI, Employment Situation) and ons.gov.uk (UK CPI, read
 // from 2026-10-21 on; Jul–Sep 2026 releases were not retrievable, so replay there under-gates)
-// 2027 FOMC verified 2026-09-29 (tentative until confirmed at the preceding meeting). bls.gov
-// published no 2027 schedule on 2026-09-29, so BLS coverageThrough stays 2026-12-31; never
+// 2027 FOMC verified 2026-09-29 (tentative until confirmed at the preceding meeting); 2027 BLS CPI
+// and Employment Situation verified 2026-10-14 against bls.gov/schedule/news_release. Never
 // extrapolate BLS dates. coverageThrough is where each published schedule ends
 export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
   {
@@ -63,7 +63,7 @@ export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
   {
     source: 'bls_cpi',
     coverageFrom: '2026-01-01',
-    coverageThrough: '2026-12-31',
+    coverageThrough: '2027-12-31',
     dates: [
       '2026-01-13',
       '2026-02-13',
@@ -77,12 +77,24 @@ export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
       '2026-10-14',
       '2026-11-10',
       '2026-12-10',
+      '2027-01-13',
+      '2027-02-11',
+      '2027-03-10',
+      '2027-04-13',
+      '2027-05-12',
+      '2027-06-10',
+      '2027-07-14',
+      '2027-08-11',
+      '2027-09-14',
+      '2027-10-14',
+      '2027-11-10',
+      '2027-12-10',
     ],
   },
   {
     source: 'bls_employment',
     coverageFrom: '2026-01-01',
-    coverageThrough: '2026-12-31',
+    coverageThrough: '2027-12-31',
     dates: [
       '2026-01-09',
       '2026-02-11',
@@ -96,6 +108,18 @@ export const MACRO_CALENDARS: readonly MacroSourceCalendar[] = [
       '2026-10-02',
       '2026-11-06',
       '2026-12-04',
+      '2027-01-08',
+      '2027-02-05',
+      '2027-03-05',
+      '2027-04-02',
+      '2027-05-07',
+      '2027-06-04',
+      '2027-07-02',
+      '2027-08-06',
+      '2027-09-03',
+      '2027-10-08',
+      '2027-11-05',
+      '2027-12-03',
     ],
   },
   {

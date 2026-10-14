@@ -41,6 +41,47 @@ describe('macro calendar', () => {
     }
   });
 
+  it('holds the published 2027 BLS CPI and Employment Situation release days', () => {
+    const releases2027 = (source: string) =>
+      MACRO_CALENDARS.find((calendar) => calendar.source === source)?.dates.filter((date) =>
+        date.startsWith('2027-'),
+      );
+    expect(releases2027('bls_cpi')).toEqual([
+      '2027-01-13',
+      '2027-02-11',
+      '2027-03-10',
+      '2027-04-13',
+      '2027-05-12',
+      '2027-06-10',
+      '2027-07-14',
+      '2027-08-11',
+      '2027-09-14',
+      '2027-10-14',
+      '2027-11-10',
+      '2027-12-10',
+    ]);
+    const employment = releases2027('bls_employment');
+    expect(employment).toEqual([
+      '2027-01-08',
+      '2027-02-05',
+      '2027-03-05',
+      '2027-04-02',
+      '2027-05-07',
+      '2027-06-04',
+      '2027-07-02',
+      '2027-08-06',
+      '2027-09-03',
+      '2027-10-08',
+      '2027-11-05',
+      '2027-12-03',
+    ]);
+    for (const date of employment ?? []) {
+      expect(new Date(`${date}T00:00:00.000Z`).getUTCDay()).toBe(5);
+    }
+    expect(macroGate('2026-12-02').covered).toBe(true);
+    expect(macroGate('2027-01-08')).toMatchObject({ macroDay: true, sources: ['bls_employment'] });
+  });
+
   it('never claims coverage past the last date its source published', () => {
     const throughBySource = Object.fromEntries(
       MACRO_CALENDARS.map((calendar) => [calendar.source, calendar.coverageThrough]),
@@ -48,8 +89,8 @@ describe('macro calendar', () => {
     expect(throughBySource).toEqual({
       fomc: '2027-12-31',
       boe_mpc: '2027-12-31',
-      bls_cpi: '2026-12-31',
-      bls_employment: '2026-12-31',
+      bls_cpi: '2027-12-31',
+      bls_employment: '2027-12-31',
       ons_cpi: '2027-12-31',
     });
   });
@@ -66,7 +107,7 @@ describe('macro calendar', () => {
   });
 
   it('coverage is the earliest source horizon regardless of order', () => {
-    expect(macroCoverageThrough()).toBe('2026-12-31');
+    expect(macroCoverageThrough()).toBe('2027-12-31');
     expect(
       macroCoverageThrough([
         { source: 'boe_mpc', coverageFrom: '2026-01-01', coverageThrough: '2027-12-31', dates: [] },
@@ -114,10 +155,10 @@ describe('macro calendar', () => {
       sources: ['fomc', 'bls_cpi'],
       reason: 'macro day: fomc, bls_cpi',
     });
-    const verdict = macroGate('2026-12-02');
+    const verdict = macroGate('2027-12-02');
     expect(verdict).toMatchObject({ macroDay: true, covered: false, sources: [] });
     expect(verdict.reason).toContain('fail-closed');
-    expect(macroGate('2026-12-01').covered).toBe(true);
+    expect(macroGate('2027-12-01').covered).toBe(true);
   });
 
   it('fails closed before the latest source starts', () => {

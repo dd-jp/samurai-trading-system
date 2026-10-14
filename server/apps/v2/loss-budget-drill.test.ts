@@ -301,7 +301,7 @@ describe('loss-budget rehearsal through the cycle (doc 67 Step 4b, G6)', () => {
     expect(state(target).halted).toBe(true);
 
     const january = await enterOn(target, '2027-01-04', 'AAA');
-    expect(january).toBe(12);
+    expect(january).toBe(24);
     expect(january).toBeGreaterThan(0);
     expect(state(target)).toMatchObject({
       referenceEquityGbp: START_CAPITAL_GBP - 1_600,
