@@ -139,6 +139,10 @@ export class CfdCatalogue {
     return this.snapshot.asOf;
   }
 
+  get instruments(): readonly CfdInstrument[] {
+    return this.snapshot.instruments;
+  }
+
   lookup(symbol: string): CfdInstrument | undefined {
     return this.#bySymbol.get(symbol);
   }

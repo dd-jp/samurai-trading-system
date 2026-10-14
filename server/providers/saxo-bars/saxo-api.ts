@@ -18,6 +18,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
 
 export type SaxoAssetType = 'Etf' | 'Etc';
 export type SaxoCfdAssetType = 'CfdOnStock' | 'CfdOnEtf';
+export type SaxoChartAssetType = SaxoAssetType | 'CfdOnStock';
 
 export interface ChartSample {
   readonly Time: string;
@@ -216,9 +217,13 @@ export class SaxoReadOnlyApi {
     };
   }
 
+  dailyPage(uic: number, assetType: SaxoChartAssetType): Promise<ChartPage> {
+    return this.chartPage(uic, assetType, undefined);
+  }
+
   private async chartPage(
     uic: number,
-    assetType: SaxoAssetType,
+    assetType: SaxoChartAssetType,
     upTo: string | undefined,
   ): Promise<ChartPage> {
     const params: Record<string, string> = {

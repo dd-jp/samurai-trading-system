@@ -183,6 +183,27 @@ describe('saxo read-only api', () => {
     expect(calls[1]).toContain('Mode=UpTo');
   });
 
+  it('reads one latest page for a stock CFD and never pages back (#1914)', async () => {
+    const dates = calendar.slice(0, SAXO_CHART_PAGE);
+    const calls: string[] = [];
+    const fetcher = async (url: string): Promise<FetchResult> => {
+      calls.push(url);
+      return { status: 200, body: { Data: dates.map((date, i) => sample(date, i + 1)) } };
+    };
+    const api = new SaxoReadOnlyApi(tokens, 'https://gw.example', fetcher, async () => {});
+    const page = await api.dailyPage(77, 'CfdOnStock');
+    expect(page.samples.length).toBe(SAXO_CHART_PAGE);
+    expect(calls).toHaveLength(1);
+    const params = new URL(calls[0] as string).searchParams;
+    expect(Object.fromEntries(params)).toEqual({
+      Uic: '77',
+      AssetType: 'CfdOnStock',
+      Horizon: '1440',
+      Count: String(SAXO_CHART_PAGE),
+      FieldGroups: 'ChartInfo,Data',
+    });
+  });
+
   it('stops paging when the older page brings nothing new', async () => {
     const dates = calendar.slice(0, SAXO_CHART_PAGE);
     let calls = 0;

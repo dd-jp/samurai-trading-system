@@ -10,6 +10,7 @@ export type {
   ChartSample,
   InstrumentDetails,
   SaxoCfdAssetType,
+  SaxoChartAssetType,
 } from './saxo-api.js';
 export {
   openSaxoLiveSession,

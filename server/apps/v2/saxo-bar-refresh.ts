@@ -16,7 +16,7 @@ import {
   type SaxoReadOnlyApi,
   samplesToBars,
 } from '../../providers/saxo-bars/index.js';
-import type { BarSeries, DailyBar, Logger } from '../../shared/index.js';
+import type { BarSeries, DailyBar, LogEventCode, Logger } from '../../shared/index.js';
 import {
   assertNoShrink,
   type BarRefresh,
@@ -55,13 +55,22 @@ const SAXO_VENUE = 'saxo';
 
 export type SaxoBarsApi = Pick<SaxoReadOnlyApi, 'instrumentDetails' | 'dailyHistory'>;
 
-export interface SaxoBarRefreshOptions {
-  readonly api: SaxoBarsApi;
+export interface BarLineContext {
   readonly store: ParquetBarStore;
   readonly tradingDate: string;
-  readonly lines: readonly SaxoLine[];
   readonly logger: Logger;
   readonly limit?: TimeLimit;
+}
+
+export interface SaxoBarRefreshOptions extends BarLineContext {
+  readonly api: SaxoBarsApi;
+  readonly lines: readonly SaxoLine[];
+}
+
+export interface BarLine {
+  readonly tidm: string;
+  readonly windowed: boolean;
+  readonly pull: () => Promise<DailyBar[]>;
 }
 
 function median(values: readonly number[]): number | undefined {
@@ -159,9 +168,50 @@ export function saxoRefreshLines(
 }
 
 async function pullBars(line: SaxoLine, api: SaxoBarsApi): Promise<DailyBar[]> {
+  if (isSpliced(line)) {
+    throw new Error(
+      `${line.tidm}: spliced from a USD sibling (${line.spliceFrom.tidm}); a refresh cannot reproduce the splice`,
+    );
+  }
   assertUnitMatchesSaxo(line, await api.instrumentDetails(line.uic, line.assetType));
   const page = await api.dailyHistory(line.uic, line.assetType);
   return samplesToBars(page.samples, gbpPerQuotedUnit(line.unit));
+}
+
+function lseBarLine(line: SaxoLine, api: SaxoBarsApi): BarLine {
+  return { tidm: line.tidm, windowed: false, pull: () => pullBars(line, api) };
+}
+
+// A truncated page (an outage, a paused response) must not replace a full window; the slack
+// covers the few bars hygiene drops differently from one day's pull to the next
+const WINDOW_SHRINK_SLACK_BARS = 5;
+
+// A windowed line re-pulls one fixed-length page, so its oldest stored bars age out by design and
+// the history guards compare only the overlap
+function storedWithinWindow(
+  tidm: string,
+  existing: BarSeries,
+  pulled: readonly DailyBar[],
+): BarSeries | undefined {
+  if (pulled.length + WINDOW_SHRINK_SLACK_BARS < existing.bars.length) {
+    throw new Error(
+      `${tidm}: refresh would shrink the window (had ${existing.bars.length} bars, got ${pulled.length}) — refusing to overwrite`,
+    );
+  }
+  const first = pulled[0]?.date ?? '';
+  const bars = existing.bars.filter((bar) => bar.date >= first);
+  return bars.length === 0 ? undefined : { ...existing, bars };
+}
+
+function guardedStored(
+  line: BarLine,
+  existing: BarSeries | undefined,
+  pulled: readonly DailyBar[],
+): BarSeries | undefined {
+  if (existing === undefined) return undefined;
+  if (line.windowed) return storedWithinWindow(line.tidm, existing, pulled);
+  assertNoShrink(line.tidm, existing, pulled);
+  return existing;
 }
 
 function assertFresh(tidm: string, bars: readonly DailyBar[], tradingDate: string): void {
@@ -322,16 +372,11 @@ function warnIfShapeRepaired(tidm: string, report: ShapeRepairReport, logger: Lo
 }
 
 async function refreshLine(
-  line: SaxoLine,
+  line: BarLine,
   existing: BarSeries | undefined,
-  options: SaxoBarRefreshOptions,
+  options: BarLineContext,
 ): Promise<BarRefreshSymbolResult> {
-  if (isSpliced(line)) {
-    throw new Error(
-      `${line.tidm}: spliced from a USD sibling (${line.spliceFrom.tidm}); a refresh cannot reproduce the splice`,
-    );
-  }
-  const hygiene = applyBarHygiene(line.tidm, await pullBars(line, options.api), {
+  const hygiene = applyBarHygiene(line.tidm, await line.pull(), {
     fetchDate: options.tradingDate,
   });
   if (hygiene.bars.length === 0) throw new Error(`${line.tidm}: Saxo returned no bars`);
@@ -339,11 +384,9 @@ async function refreshLine(
   if (repaired.bars.length === 0) throw new Error(`${line.tidm}: no bars left after shape repair`);
   assertNoRecentRepair(line.tidm, hygiene.bars, repaired.report);
   const pulled = roundPrices(repaired.bars);
-  if (existing !== undefined) {
-    assertNoShrink(line.tidm, existing, pulled);
-    assertHistoryConsistent(line.tidm, existing, pulled);
-  }
-  const rounded = withSplitStep(existing, pulled, hygiene.report, options.logger);
+  const stored = guardedStored(line, existing, pulled);
+  if (stored !== undefined) assertHistoryConsistent(line.tidm, stored, pulled);
+  const rounded = withSplitStep(stored, pulled, hygiene.report, options.logger);
   await (options.limit ?? UNLIMITED).atomic(() =>
     options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]),
   );
@@ -357,9 +400,9 @@ async function refreshLine(
 }
 
 async function refreshLineSafely(
-  line: SaxoLine,
+  line: BarLine,
   existing: BarSeries | undefined,
-  options: SaxoBarRefreshOptions,
+  options: BarLineContext,
 ): Promise<SymbolOutcome> {
   try {
     return { kind: 'updated', result: await refreshLine(line, existing, options) };
@@ -385,55 +428,121 @@ function warnIfUnguarded(
   );
 }
 
-export async function refreshSaxoBars(options: SaxoBarRefreshOptions): Promise<BarRefreshReport> {
+export interface BarLineLabels {
+  readonly noun: string;
+  readonly summaryEvent: LogEventCode;
+  readonly stopAfterFailuresInARow?: number;
+}
+
+const LSE_LABELS: BarLineLabels = {
+  noun: 'Saxo lines',
+  summaryEvent: 'v2_saxo_bar_refresh_summary',
+};
+
+function stopsHere(failuresInARow: number, labels: BarLineLabels, logger: Logger): boolean {
+  if (failuresInARow !== labels.stopAfterFailuresInARow) return false;
+  logRefresh(
+    logger,
+    'warn',
+    'v2_bar_refresh_stopped',
+    `stopped refreshing ${labels.noun} after ${failuresInARow} failures in a row; the rest keep their stored bars`,
+  );
+  return true;
+}
+
+function failureRun(outcome: SymbolOutcome, failuresInARow: number): number {
+  return outcome.kind === 'failed' ? failuresInARow + 1 : 0;
+}
+
+function aborted(options: BarLineContext): boolean {
+  return options.limit?.signal.aborted === true;
+}
+
+async function refreshStep(
+  line: BarLine,
+  existing: ReadonlyMap<string, BarSeries>,
+  options: BarLineContext,
+  buckets: Buckets,
+): Promise<SymbolOutcome | undefined> {
+  if (aborted(options)) return undefined;
+  if (!line.windowed) warnIfUnguarded(line.tidm, existing, options.logger);
+  const outcome = await refreshLineSafely(line, existing.get(line.tidm), options);
+  if (aborted(options)) return undefined;
+  recordOutcome(outcome, buckets, options.logger);
+  return outcome;
+}
+
+async function refreshBarLines(
+  lines: readonly BarLine[],
+  options: BarLineContext,
+  labels: BarLineLabels,
+): Promise<BarRefreshReport> {
   const existing = await options.store.readVenue(SAXO_VENUE);
   const buckets: Buckets = { updated: [], noNewBars: [], failed: [] };
-  const report = { attempted: options.lines.length, ...buckets };
-  for (const line of options.lines) {
-    if (options.limit?.signal.aborted) return report;
-    warnIfUnguarded(line.tidm, existing, options.logger);
-    const outcome = await refreshLineSafely(line, existing.get(line.tidm), options);
-    if (options.limit?.signal.aborted) return report;
-    recordOutcome(outcome, buckets, options.logger);
+  const report = { attempted: lines.length, ...buckets };
+  let failuresInARow = 0;
+  for (const line of lines) {
+    const outcome = await refreshStep(line, existing, options, buckets);
+    if (outcome === undefined) return report;
+    failuresInARow = failureRun(outcome, failuresInARow);
+    if (stopsHere(failuresInARow, labels, options.logger)) break;
   }
   logRefresh(
     options.logger,
     'info',
-    'v2_saxo_bar_refresh_summary',
-    `refreshed ${buckets.updated.length}/${options.lines.length} Saxo lines, ${buckets.failed.length} failed`,
+    labels.summaryEvent,
+    `refreshed ${buckets.updated.length}/${lines.length} ${labels.noun}, ${buckets.failed.length} failed`,
   );
   return report;
 }
 
-export interface SaxoSession {
-  readonly api: SaxoBarsApi;
+export function refreshSaxoBars(options: SaxoBarRefreshOptions): Promise<BarRefreshReport> {
+  const lines = options.lines.map((line) => lseBarLine(line, options.api));
+  return refreshBarLines(lines, options, LSE_LABELS);
+}
+
+interface SaxoSession<Api = SaxoBarsApi> {
+  readonly api: Api;
   readonly stop: () => Promise<void>;
   readonly lostReason?: () => string | undefined;
 }
 
-type SaxoConnect = (env: NodeJS.ProcessEnv, logger: Logger, signal: AbortSignal) => SaxoSession;
+type SaxoConnect<Api> = (
+  env: NodeJS.ProcessEnv,
+  logger: Logger,
+  signal: AbortSignal,
+) => SaxoSession<Api>;
 
 // Each 429 costs a 65 s backoff and each request may wait 60 s, so an all-429 day runs past 1.5
 // hours; ten minutes covers a clean pull of the 22 lines with room for several backoffs
 const SAXO_REFRESH_TIME_LIMIT_MS = 10 * 60_000;
 
-export interface SaxoBarRefreshDeps {
+export interface SaxoBarRefreshDeps<Api = SaxoBarsApi> {
   readonly storeRoot?: string;
-  readonly connect?: (env: NodeJS.ProcessEnv, logger: Logger, signal: AbortSignal) => SaxoSession;
+  readonly connect?: SaxoConnect<Api>;
   readonly tokenPath?: string;
   readonly now?: () => Date;
   readonly timeLimitMs?: number;
 }
 
-interface SaxoLeg {
+export interface SaxoBarLegPlan<Api> {
+  readonly linesFor: (api: Api, logger: Logger) => readonly BarLine[];
+  readonly labels: BarLineLabels;
+  readonly unavailableEvent: LogEventCode;
+  readonly whenUnavailable: string;
+  readonly timeLimitMs: number;
+}
+
+interface SaxoLeg<Api> {
   readonly env: NodeJS.ProcessEnv;
   readonly tradingDate: string;
   readonly storeRoot: string;
-  readonly connect: SaxoConnect;
+  readonly connect: SaxoConnect<Api>;
   readonly ledger: SaxoSessionLedger;
+  readonly plan: SaxoBarLegPlan<Api>;
 }
 
-async function stopQuietly(session: SaxoSession, logger: Logger): Promise<void> {
+async function stopQuietly(session: SaxoSession<unknown>, logger: Logger): Promise<void> {
   try {
     await session.stop();
   } catch (error) {
@@ -446,18 +555,18 @@ async function stopQuietly(session: SaxoSession, logger: Logger): Promise<void> 
   }
 }
 
-async function refreshInSession(
-  session: SaxoSession,
-  leg: SaxoLeg,
+async function refreshInSession<Api>(
+  session: SaxoSession<Api>,
+  leg: SaxoLeg<Api>,
   limit: TimeLimit,
 ): Promise<BarRefreshReport> {
   const logger = leg.ledger.logger;
   try {
     const store = await ParquetBarStore.open(leg.storeRoot);
     try {
-      const lines = saxoRefreshLines();
-      const { tradingDate } = leg;
-      return await refreshSaxoBars({ api: session.api, store, tradingDate, lines, logger, limit });
+      const lines = leg.plan.linesFor(session.api, logger);
+      const context = { store, tradingDate: leg.tradingDate, logger, limit };
+      return await refreshBarLines(lines, context, leg.plan.labels);
     } finally {
       store.close();
     }
@@ -467,7 +576,10 @@ async function refreshInSession(
   }
 }
 
-async function connectAndRefresh(leg: SaxoLeg, limit: TimeLimit): Promise<BarRefreshReport> {
+async function connectAndRefresh<Api>(
+  leg: SaxoLeg<Api>,
+  limit: TimeLimit,
+): Promise<BarRefreshReport> {
   try {
     const session = connectUnlessLost(
       () => leg.connect(leg.env, leg.ledger.logger, limit.signal),
@@ -475,19 +587,57 @@ async function connectAndRefresh(leg: SaxoLeg, limit: TimeLimit): Promise<BarRef
     );
     return await refreshInSession(stoppedAtCap(session, limit), leg, limit);
   } catch (error) {
-    return unavailable(messageOf(error), leg.ledger.logger);
+    return unavailable(messageOf(error), leg);
   }
 }
 
-function unavailable(reason: string, logger: Logger): BarRefreshReport {
+function unavailable<Api>(reason: string, leg: SaxoLeg<Api>): BarRefreshReport {
   logRefresh(
-    logger,
+    leg.ledger.logger,
     'warn',
-    'v2_saxo_bar_refresh_unavailable',
-    `Saxo bars not refreshed (${reason}); LSE reads keep the last stored bars and fail closed once they go stale`,
+    leg.plan.unavailableEvent,
+    `${leg.plan.labels.noun} not refreshed (${reason}); ${leg.plan.whenUnavailable}`,
   );
   return { attempted: 1, updated: [], noNewBars: [], failed: [{ symbol: SAXO_VENUE, reason }] };
 }
+
+export function saxoBarLegFor<Api>(
+  env: NodeJS.ProcessEnv,
+  tradingDate: string,
+  logger: Logger,
+  plan: SaxoBarLegPlan<Api>,
+  deps: SaxoBarRefreshDeps<Api> & { readonly connect: SaxoConnect<Api> },
+): BarRefresh {
+  const leg: SaxoLeg<Api> = {
+    env,
+    tradingDate,
+    storeRoot: deps.storeRoot ?? DEFAULT_BAR_STORE_ROOT,
+    connect: deps.connect,
+    ledger: ledgerFor(deps, logger),
+    plan,
+  };
+  const limitMs = deps.timeLimitMs ?? plan.timeLimitMs;
+  const expired = () =>
+    unavailable(
+      `cut at the ${limitMs / 1000} s cap; lines not yet written keep their stored bars`,
+      leg,
+    );
+  return {
+    run: () => withinTimeLimit(limitMs, (limit) => connectAndRefresh(leg, limit), expired),
+  };
+}
+
+export function liveSaxoConnect(tokenPath: string | undefined): SaxoConnect<SaxoReadOnlyApi> {
+  return (env, logger, signal) => openSaxoLiveSession(env, tokenPath, logger, signal);
+}
+
+const LSE_PLAN: SaxoBarLegPlan<SaxoBarsApi> = {
+  linesFor: (api) => saxoRefreshLines().map((line) => lseBarLine(line, api)),
+  labels: LSE_LABELS,
+  unavailableEvent: 'v2_saxo_bar_refresh_unavailable',
+  whenUnavailable: 'LSE reads keep the last stored bars and fail closed once they go stale',
+  timeLimitMs: SAXO_REFRESH_TIME_LIMIT_MS,
+};
 
 // A Saxo failure never aborts the run: the US leg does not depend on it, and every LSE read
 // already fails closed on a stale ISF or a stale line
@@ -497,22 +647,6 @@ export function saxoBarRefreshFor(
   logger: Logger,
   deps: SaxoBarRefreshDeps = {},
 ): BarRefresh {
-  const leg: SaxoLeg = {
-    env,
-    tradingDate,
-    storeRoot: deps.storeRoot ?? DEFAULT_BAR_STORE_ROOT,
-    connect:
-      deps.connect ??
-      ((liveEnv, log, signal) => openSaxoLiveSession(liveEnv, deps.tokenPath, log, signal)),
-    ledger: ledgerFor(deps, logger),
-  };
-  const limitMs = deps.timeLimitMs ?? SAXO_REFRESH_TIME_LIMIT_MS;
-  const expired = () =>
-    unavailable(
-      `cut at the ${limitMs / 1000} s cap; lines not yet written keep their stored bars`,
-      logger,
-    );
-  return {
-    run: () => withinTimeLimit(limitMs, (limit) => connectAndRefresh(leg, limit), expired),
-  };
+  const connect = deps.connect ?? liveSaxoConnect(deps.tokenPath);
+  return saxoBarLegFor(env, tradingDate, logger, LSE_PLAN, { ...deps, connect });
 }

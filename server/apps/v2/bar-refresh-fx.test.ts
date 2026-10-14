@@ -21,6 +21,11 @@ vi.mock('../../providers/bar-store/index.js', async (importOriginal) => {
 vi.mock('./saxo-bar-refresh.js', () => ({
   saxoBarRefreshFor: () => ({ run: () => Promise.reject(new Error('no Saxo in this test')) }),
 }));
+vi.mock('./uk-stock-bar-refresh.js', () => ({
+  ukStockBarRefreshFor: () => ({
+    run: () => Promise.reject(new Error('no UK stocks in this test')),
+  }),
+}));
 vi.mock('./cfd-catalogue-refresh.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./cfd-catalogue-refresh.js')>();
   return {
