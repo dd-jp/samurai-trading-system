@@ -46,7 +46,9 @@ import {
   DEBATE_SLEEVE_ID,
   DEBATE_SLEEVE_SPEC,
   DEBATE_STOP_ATR_MULTIPLE,
+  LSE_ETF_ONLY_RESERVED_SLOTS,
   LSE_LIQUIDITY_SCREEN,
+  LSE_RESERVED_SLOTS,
   type Parameter,
 } from './parameters.js';
 import { selectUniverse } from './universe.js';
@@ -384,9 +386,13 @@ export function buildUniverse(
   lseScreen: Parameter<number> = LSE_LIQUIDITY_SCREEN,
 ): SleeveUniverse {
   const lse = selectLseUniverse(deps.bars, tradingDate, lseScreen);
-  const lseLines = deps.lseLegRefusal === undefined ? lse.instruments : [];
-  const pooled = [...deps.constituents(tradingDate), ...lseLines];
-  const selection = selectUniverse(pooled, { ...deps, tradingDate });
+  const saxoLines =
+    deps.lseLegRefusal === undefined
+      ? [...lse.instruments, ...(deps.ukStocks?.(tradingDate) ?? [])]
+      : [];
+  const pooled = [...deps.constituents(tradingDate), ...saxoLines];
+  const slots = deps.ukStocks === undefined ? LSE_ETF_ONLY_RESERVED_SLOTS : LSE_RESERVED_SLOTS;
+  const selection = selectUniverse(pooled, { ...deps, tradingDate }, slots);
   return {
     instruments: [...selection.liquidity, ...selection.movers],
     refusals: [...selection.refusals, ...lse.refusals].map((refusal) => ({
@@ -517,6 +523,7 @@ export interface TechnicalSleeveDeps {
   readonly router?: VenueRouter | undefined;
   readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
   readonly lseLegRefusal?: string | undefined;
+  readonly ukStocks?: ((tradingDate: string) => readonly string[]) | undefined;
 }
 
 export function createTechnicalSleeve<Deps extends TechnicalSleeveDeps>(

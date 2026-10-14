@@ -37,6 +37,7 @@ import {
   currentConstituents,
   EodhdClient,
   FX_PATH,
+  inUkStockUniversePool,
   isUkStock,
   loadCfdCatalogue,
   MarketauxClient,
@@ -88,12 +89,14 @@ import {
   type LlmPanel,
   type ModelPin,
   NousPinnedTransport,
+  requireSet,
   ScriptedTransport,
   type SecretSource,
   type SleeveRegistry,
   SqliteMonthlySpendCap,
   secretGuardedSink,
   secretsFromEnv,
+  UK_STOCK_SCREENS,
   ukStockCfdRefusal,
   verifyNousPins,
 } from './signal/index.js';
@@ -505,6 +508,21 @@ export interface DecisionSleeveInputs {
   readonly logger: Logger;
   readonly router: VenueRouter;
   readonly lseLegRefusal: string | undefined;
+  readonly ukStocks: ((tradingDate: string) => readonly string[]) | undefined;
+}
+
+export function ukStockPoolFor(
+  catalogue: CfdCatalogue | undefined,
+  refusal: string | undefined,
+): ((tradingDate: string) => readonly string[]) | undefined {
+  if (refusal !== undefined) return undefined;
+  const screens = requireSet(UK_STOCK_SCREENS);
+  return (tradingDate) =>
+    catalogue?.freshOn(tradingDate) === true
+      ? catalogue.instruments
+          .filter((instrument) => inUkStockUniversePool(instrument, screens))
+          .map((instrument) => instrument.symbol)
+      : [];
 }
 
 function isSaxoHomed(symbol: string): boolean {
@@ -623,6 +641,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     logger,
     router: venueRouterFor(catalogue, cfdGate),
     lseLegRefusal: options.lseLegRefusal,
+    ukStocks: ukStockPoolFor(catalogue, ukStockCfdRefusal()),
   });
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);

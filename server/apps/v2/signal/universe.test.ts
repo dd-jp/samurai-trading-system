@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { isLseInstrument } from './lse-lines.js';
-import { LSE_RESERVED_SLOTS, MOVERS_MIN_DOLLAR_VOLUME_USD } from './parameters.js';
+import { LSE_ETF_ONLY_RESERVED_SLOTS, MOVERS_MIN_DOLLAR_VOLUME_USD } from './parameters.js';
 import {
   averageDollarVolume,
   liquidityCore,
@@ -325,7 +325,7 @@ describe('selectUniverse', () => {
       const selection = selectUniverse(pooled, pool);
       const picked = [...selection.liquidity, ...selection.movers];
       expect(picked).toHaveLength(UNIVERSE_CAP);
-      expect(LSE_RESERVED_SLOTS).toBe(4);
+      expect(LSE_ETF_ONLY_RESERVED_SLOTS).toBe(4);
       expect(picked.filter(isLseInstrument)).toEqual(['IJPN', 'IEUX', 'CUKS', 'VMID']);
       expect(selection.liquidity).toHaveLength(10);
     });

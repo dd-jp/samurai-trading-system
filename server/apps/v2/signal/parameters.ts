@@ -85,8 +85,10 @@ export const RECONCILE_CASH_TOLERANCE_GBP = set<number>('RECONCILE_CASH_TOLERANC
 
 // #1774, David 2026-09-29 (option 1): on one USD ranking no LSE name reaches the 20
 // (ISF ~53M GBP/day against billions), so LSE holds a reserved share of the liquidity half;
-// David set 6 on 2026-10-14 (#1914); 4 holds until the UK single-stock CFDs join the pool
-export const LSE_RESERVED_SLOTS = 4;
+// David set 6 on 2026-10-14 (#1914), taken only once UK_STOCK_CFD_ENABLED puts the UK
+// single-stock CFDs in the pool; until then the ETF-only 4 keeps the counted universe unchanged
+export const LSE_RESERVED_SLOTS = 6;
+export const LSE_ETF_ONLY_RESERVED_SLOTS = 4;
 
 // David's 2026-09-29 chat ruling, #1866 comment 5893163984 item 4 (UK CFD shorts): refuse above
 // 2% a year; extended to US CFD shorts by David 2026-09-29 (#1849)

@@ -1031,6 +1031,18 @@ describe('journalledUkStockCfdRefusal', () => {
     expect(journalledCfdEntryRefusal(db, '2026-10-14')).toBeUndefined();
     db.close();
   });
+
+  it('reads a day before any switch row shut, so an old day never pools UK stocks', () => {
+    const db = migratedMemoryStore();
+    expect(journalledUkStockCfdRefusal(db, '2026-10-13')).toBe('uk_stock_cfd_disabled');
+    db.prepare(
+      `INSERT INTO v2_refusals (trading_date, scope, parameter, ticket, message, recorded_at)
+       VALUES ('2026-10-14', 'parameter', 'UK_STOCK_CFD_ENABLED', '#1914', 'm', 'now')`,
+    ).run();
+    expect(journalledUkStockCfdRefusal(db, '2026-10-13')).toBe('uk_stock_cfd_disabled');
+    expect(journalledUkStockCfdRefusal(db, '2026-10-15')).toBeUndefined();
+    db.close();
+  });
 });
 
 describe('a CFD entry gate set to false', () => {
