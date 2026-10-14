@@ -143,10 +143,12 @@ function withholds(parameter: Parameter<unknown>): boolean {
   return parameter.value === UNSET || parameter.value === false;
 }
 
+export const UK_STOCK_CFD_DISABLED = 'uk_stock_cfd_disabled';
+
 export function ukStockCfdRefusal(
   parameter: Parameter<boolean> = UK_STOCK_CFD_ENABLED,
 ): string | undefined {
-  return withholds(parameter) ? 'uk_stock_cfd_disabled' : undefined;
+  return withholds(parameter) ? UK_STOCK_CFD_DISABLED : undefined;
 }
 
 export function cfdEntryRefusal(
@@ -326,6 +328,7 @@ export const CYCLE_LEVEL_PARAMETERS: readonly Parameter<unknown>[] = [
   G18_SENTIMENT_DEDUP_RULE,
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ...CFD_ENTRY_GATES.map(({ parameter }) => parameter),
+  UK_STOCK_CFD_ENABLED,
 ];
 
 export interface WithheldParameter {

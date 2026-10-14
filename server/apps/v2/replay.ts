@@ -69,6 +69,8 @@ import {
   type SecretSource,
   SIGNALS_SLEEVE_ID,
   secretWireForms,
+  UK_STOCK_CFD_DISABLED,
+  UK_STOCK_CFD_ENABLED,
 } from './signal/index.js';
 import { type SplitCheckLedger, SqliteSplitChecks } from './split-checks.js';
 import { journalledSplitFeed } from './split-feed.js';
@@ -226,6 +228,22 @@ export function journalledCfdEntryRefusal(
   return CFD_ENTRY_GATES.find(({ parameter }) => refused.has(parameter.name))?.refusal;
 }
 
+// Pre-#1914 days journal no row and read open, harmlessly: no UK single stock was in any universe
+export function journalledUkStockCfdRefusal(
+  db: StoreHandle,
+  tradingDate: string,
+): string | undefined {
+  const rows = db.prepare(PARAMETER_REFUSALS_SQL).all(tradingDate) as { parameter: string }[];
+  return rows.some((row) => row.parameter === UK_STOCK_CFD_ENABLED.name)
+    ? UK_STOCK_CFD_DISABLED
+    : undefined;
+}
+
+function ukStockGateOf(inputs: ReplayInputs): () => string | undefined {
+  const refusal = journalledUkStockCfdRefusal(inputs.db, inputs.tradingDate);
+  return () => refusal;
+}
+
 function cfdGateOf(inputs: ReplayInputs): () => string | undefined {
   const refusal = journalledCfdEntryRefusal(inputs.db, inputs.tradingDate);
   return () => refusal;
@@ -363,7 +381,7 @@ function replaySleeves(
     news: journalledNewsSource(new SqliteNewsLedger(inputs.db), loggedNewsSource(calls)),
     clock: { now: () => new Date(`${inputs.tradingDate}T00:00:00.000Z`) },
     logger,
-    router: venueRouterFor(inputs.catalogue, cfdGateOf(inputs)),
+    router: venueRouterFor(inputs.catalogue, cfdGateOf(inputs), ukStockGateOf(inputs)),
     lseLegRefusal: journalledLseRefusal(inputs.db, inputs.tradingDate),
   });
 }
@@ -403,6 +421,7 @@ function replayComposition(replay: ReplayCycle): CycleComposition {
     cfdCosts: inputs.cfdCosts ?? declaredCfdCosts(),
     quotedCfdBorrowPerDay: quotedBorrowPerDayFrom(inputs.catalogue),
     cfdEntryRefusal: cfdGateOf(inputs),
+    ukStockCfdRefusal: ukStockGateOf(inputs),
     brokerMode: day.brokerMode,
     venueSessions: journalledSessions(
       db,

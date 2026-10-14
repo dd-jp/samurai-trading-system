@@ -31,8 +31,6 @@ const CFD_ASSET_TYPES: Readonly<Record<AssetKind, CfdAssetType>> = {
   uk_stock: 'CfdOnStock',
 };
 
-// A UK single stock is told apart by its key, never its home venue: both it and a UK ETF are
-// Saxo-homed, and only the ETF has a cash long (#1914)
 function assetKindFor(symbol: string, home: Venue): AssetKind {
   if (isUkStock(symbol)) return 'uk_stock';
   return home === 'alpaca' ? 'us_stock' : 'uk_etf';

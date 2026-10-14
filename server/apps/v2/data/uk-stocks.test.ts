@@ -47,6 +47,7 @@ describe('ukStockKey', () => {
   it('never yields a key a US universe symbol or an LSE line can equal', () => {
     expect(isUkStock(ukStockKey('TSCO:xlon'))).toBe(true);
     expect(isUkStock('TSCO')).toBe(false);
+    expect(isUkStock('_XLON')).toBe(false);
     expect(isUkStock('BRK.B')).toBe(false);
     for (const { tidm } of LSE_LINES) expect(isUkStock(tidm)).toBe(false);
   });

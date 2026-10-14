@@ -37,6 +37,7 @@ import {
   isSet,
   RECONCILE_CASH_TOLERANCE_GBP,
   SleeveRegistry,
+  ukStockCfdRefusal,
 } from './signal/index.js';
 import type { SplitFeed } from './split-feed.js';
 
@@ -57,6 +58,7 @@ export interface CycleCompositionOptions {
   readonly cfdCosts?: CfdCosts | undefined;
   readonly quotedCfdBorrowPerDay?: ((instrument: string) => number | undefined) | undefined;
   readonly cfdEntryRefusal?: (() => string | undefined) | undefined;
+  readonly ukStockCfdRefusal?: (() => string | undefined) | undefined;
   readonly brokerMode: BrokerMode;
   readonly reconcileCashToleranceGbp?: number | undefined;
   readonly venueSessions?: VenueSessionGate | undefined;
@@ -143,6 +145,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     market,
     spec: (sleeveId) => registry.spec(sleeveId),
     venueRefusal: (venue) => (isCfdVenue(venue) ? cfdGate() : undefined),
+    ukStockRefusal: options.ukStockCfdRefusal ?? ukStockCfdRefusal,
     volTarget: volTargetFor(options),
   });
   const pricing = fillPricingFor(options);

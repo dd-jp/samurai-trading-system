@@ -485,12 +485,13 @@ function lastMarkedDate(books: Pick<PaperBooks, 'ids' | 'lastDay'>): string | un
 export function venueRouterFor(
   catalogue: CfdCatalogue | undefined,
   entryRefusal: () => string | undefined,
+  ukStockRefusal: () => string | undefined = ukStockCfdRefusal,
 ): VenueRouter {
   return createVenueRouter({
     catalogue,
     entryRefusal,
     maxBorrowRatePerYear: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
-    ukStockRefusal: ukStockCfdRefusal,
+    ukStockRefusal,
   });
 }
 

@@ -95,6 +95,7 @@ describe('parameters', () => {
       G18_SENTIMENT_DEDUP_RULE,
       ALPACA_SHORT_EQUITY_FLOOR_USD,
       ...CFD_GATE_PARAMETERS,
+      UK_STOCK_CFD_ENABLED,
     ]);
     for (const parameter of DECLARED_PARAMETERS) {
       expect(parameter.ticket.length).toBeGreaterThan(0);
@@ -140,7 +141,9 @@ describe('parameters', () => {
       'uk_stock_cfd_disabled',
     );
     expect(ukStockCfdRefusal({ ...UK_STOCK_CFD_ENABLED, value: true })).toBeUndefined();
-    expect(CYCLE_LEVEL_PARAMETERS).not.toContain(UK_STOCK_CFD_ENABLED);
+    expect(withheldParameters()).toContainEqual(
+      expect.objectContaining({ parameter: 'UK_STOCK_CFD_ENABLED', ticket: '#1914' }),
+    );
   });
 
   it('carries the pre-declared Step 3 trial values from the spec', () => {

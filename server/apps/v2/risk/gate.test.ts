@@ -91,6 +91,7 @@ function gate(
     bars?: readonly V2Bar[];
     spec?: SleeveSpec;
     venueRefusal?: ((venue: Venue) => string | undefined) | undefined;
+    ukStockRefusal?: (() => string | undefined) | undefined;
     cfdSleeveIds?: readonly string[];
     fixDate?: string;
     volTarget?: VolTargetSizing;
@@ -129,6 +130,7 @@ function gate(
     },
     spec: () => options.spec ?? SPEC,
     venueRefusal: 'venueRefusal' in options ? options.venueRefusal : () => undefined,
+    ukStockRefusal: 'ukStockRefusal' in options ? options.ukStockRefusal : () => undefined,
     volTarget: options.volTarget,
   });
 }
@@ -287,6 +289,32 @@ describe('V2RiskGate', () => {
         });
       }
     }
+  });
+
+  it('refuses a UK single stock CFD entry while the switch is shut, and by default (#1914 kill line)', () => {
+    const ukLong = { ...decision, instrument: 'RR_XLON', venue: 'saxo_cfd_gbp' as const };
+    const ukShort = { ...cfdShort, instrument: 'RR_XLON', venue: 'saxo_cfd_gbp' as const };
+    for (const entry of [ukLong, ukShort]) {
+      expect(
+        gate({ ukStockRefusal: () => 'uk_stock_cfd_disabled' }).approveEntry(
+          request({ decision: entry }),
+        ),
+      ).toEqual({ size: 0, order: undefined, refusal: 'uk_stock_cfd_disabled' });
+      expect(
+        gate({ ukStockRefusal: undefined }).approveEntry(request({ decision: entry })),
+      ).toMatchObject({ refusal: 'uk_stock_cfd_disabled' });
+    }
+    expect(
+      gate({ ukStockRefusal: () => 'uk_stock_cfd_disabled' }).approveEntry(
+        request({ decision: { ...cfdShort, venue: 'saxo_cfd_usd' } }),
+      ).order,
+    ).toBeDefined();
+    expect(
+      gate({
+        venueRefusal: () => 'cfd_cost_model_unset',
+        ukStockRefusal: () => 'uk_stock_cfd_disabled',
+      }).approveEntry(request({ decision: ukLong })),
+    ).toMatchObject({ refusal: 'cfd_cost_model_unset' });
   });
 
   it('keeps refusing a CFD long for a US stock or a UK ETF (#1914)', () => {

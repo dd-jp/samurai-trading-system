@@ -633,7 +633,7 @@ describe('composeV2Root', () => {
       });
       expect(exitCodeFor(report)).toBe(0);
       const needsDavid = report.refusals.filter((refusal) => refusal.includes('needs David'));
-      expect(needsDavid).toHaveLength(5);
+      expect(needsDavid).toHaveLength(6);
       for (const parameter of [
         'CFD_COST_MODEL',
         'CFD_SPREAD_MODEL',
