@@ -42,6 +42,7 @@ import {
   SIGNALS_SLEEVE_SPEC,
   SLEEVE_PINS_BY_ID,
   SLEEVE_SPECS_BY_ID,
+  UK_STOCK_SCREENS,
   UNSET,
   UnsetParameterError,
   VOL_TARGET_SIZING,
@@ -67,6 +68,7 @@ const CFD_COST_PARAMETERS: readonly Parameter<unknown>[] = [
 const SET_PARAMETERS: readonly Parameter<unknown>[] = [
   ARM2_ENTRY_THRESHOLDS,
   LSE_LIQUIDITY_SCREEN,
+  UK_STOCK_SCREENS,
   RECONCILE_CASH_TOLERANCE_GBP,
   ...CFD_GATE_PARAMETERS,
 ];
@@ -80,6 +82,7 @@ describe('parameters', () => {
       ALPACA_SHORT_EQUITY_FLOOR_USD,
       ARM2_ENTRY_THRESHOLDS,
       LSE_LIQUIDITY_SCREEN,
+      UK_STOCK_SCREENS,
       ...CFD_GATE_PARAMETERS,
       RECONCILE_CASH_TOLERANCE_GBP,
       VOL_TARGET_SIZING,
@@ -115,6 +118,16 @@ describe('parameters', () => {
   it("the LSE liquidity floor is David's $750k answer, measured in GBP (#1774)", () => {
     expect(requireSet(LSE_LIQUIDITY_SCREEN)).toBe(750_000);
     expect(CYCLE_LEVEL_PARAMETERS).not.toContain(LSE_LIQUIDITY_SCREEN);
+  });
+
+  it("the UK stock screens are David's 2026-09-29 floors, owned by #1914", () => {
+    expect(requireSet(UK_STOCK_SCREENS)).toEqual({
+      minAdvGbp: 5_000_000,
+      maxSpreadBps: 25,
+      minPricePence: 100,
+    });
+    expect(UK_STOCK_SCREENS.ticket).toBe('#1914');
+    expect(CYCLE_LEVEL_PARAMETERS).not.toContain(UK_STOCK_SCREENS);
   });
 
   it('carries the pre-declared Step 3 trial values from the spec', () => {

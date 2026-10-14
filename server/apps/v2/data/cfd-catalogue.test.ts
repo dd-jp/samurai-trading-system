@@ -78,6 +78,27 @@ describe('parseCfdCatalogue', () => {
     expect(catalogue.lookup('VOD')?.borrowCostPerDay).toBe(0);
   });
 
+  it('reads the optional quote fields and leaves absent ones out (#1914)', () => {
+    const quoted = { ...VOD, priceCurrency: 'GBX', bid: 0.75, ask: 0.751, averageVolume30Days: 0 };
+    const catalogue = parseCfdCatalogue(
+      file({ asOf: '2026-09-29', instruments: [quoted, { ...VOD, symbol: 'BP' }] }),
+    );
+    expect(catalogue.lookup('VOD')).toEqual(quoted);
+    expect(catalogue.lookup('BP')).toEqual({ ...VOD, symbol: 'BP' });
+  });
+
+  it.each([
+    ['a non-string price currency', { priceCurrency: 3 }],
+    ['a zero bid', { bid: 0 }],
+    ['a zero ask', { ask: 0 }],
+    ['a string bid', { bid: '1' }],
+    ['a negative 30-day volume', { averageVolume30Days: -1 }],
+  ])('throws on %s', (_name, quote) => {
+    expect(() =>
+      parseCfdCatalogue(file({ asOf: '2026-09-29', instruments: [{ ...VOD, ...quote }] })),
+    ).toThrow(/CFD catalogue/);
+  });
+
   it.each([
     ['a non-object body', '[]'],
     ['no asOf', file({ instruments: [] })],

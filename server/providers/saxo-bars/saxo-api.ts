@@ -268,7 +268,8 @@ export class SaxoReadOnlyApi {
     return this.get('/trade/v1/infoprices/list', {
       Uics: uics.join(','),
       AssetType: assetType,
-      FieldGroups: 'InstrumentPriceDetails',
+      Amount: '1',
+      FieldGroups: 'Quote,InstrumentPriceDetails',
     });
   }
 

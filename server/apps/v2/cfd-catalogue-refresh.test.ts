@@ -25,7 +25,12 @@ import {
   universeSymbolOf,
   writeAtomically,
 } from './cfd-catalogue-refresh.js';
-import { createVenueRouter, loadCfdCatalogue, loadCfdCatalogueArchive } from './data/index.js';
+import {
+  createVenueRouter,
+  loadCfdCatalogue,
+  loadCfdCatalogueArchive,
+  ukStockKey,
+} from './data/index.js';
 import { readKeepAliveState } from './execution/saxo/saxo-keepalive-state.js';
 import { writeTokenFile } from './execution/saxo/saxo-token-file.js';
 import { SaxoTokenRefresher, StaticSaxoTokenSource } from './execution/saxo/saxo-token-source.js';
@@ -152,12 +157,20 @@ describe('universeSymbolOf', () => {
 
 describe('cfdScopes', () => {
   it('lists US stock CFDs on NYSE and NASDAQ in USD and LSE ETF CFDs in GBP', () => {
-    const [us, uk] = cfdScopes(['AAPL']);
+    const [us, uk, ukStocks] = cfdScopes(['AAPL']);
     expect(us).toEqual({
       assetType: 'CfdOnStock',
       exchangeIds: ['NYSE', 'NASDAQ'],
       currency: 'USD',
       universe: ['AAPL'],
+      keyOf: universeSymbolOf,
+    });
+    expect(ukStocks).toEqual({
+      assetType: 'CfdOnStock',
+      exchangeIds: ['LSE_SETS'],
+      currency: 'GBP',
+      universe: 'whole_exchange',
+      keyOf: ukStockKey,
     });
     expect(uk?.assetType).toBe('CfdOnEtf');
     expect(uk?.exchangeIds).toEqual(['LSE_ETF']);
@@ -378,8 +391,157 @@ describe('buildCfdCatalogue', () => {
       );
     }
     const prices = urls.find((url) => url.includes('/infoprices/list?')) as string;
-    expect(new URL(prices).searchParams.get('FieldGroups')).toBe('InstrumentPriceDetails');
+    expect(new URL(prices).searchParams.get('FieldGroups')).toBe('Quote,InstrumentPriceDetails');
+    expect(new URL(prices).searchParams.get('Amount')).toBe('1');
     expect(new URL(prices).searchParams.get('AssetType')).toBe('CfdOnStock');
+  });
+});
+
+const UK_FIXTURE: SaxoFixture = {
+  listings: {
+    'CfdOnStock:NASDAQ': [listing('TSCO:xnas', 44430, 'NASDAQ', 'USD')],
+    'CfdOnStock:LSE_SETS': [
+      listing('TSCO:xlon', 895, 'LSE_SETS', 'GBP'),
+      listing('RR:xlon', 900, 'LSE_SETS', 'GBP'),
+      listing('XYZ:xlon', 901, 'LSE_SETS', 'USD'),
+      listing('ABC:xnys', 902, 'NYSE', 'GBP'),
+    ],
+  },
+  details: {
+    44430: details(44430),
+    895: details(895, { CurrencyCode: 'GBP', PriceCurrency: 'GBX', PriceToContractFactor: 0.01 }),
+    900: details(900, { CurrencyCode: 'GBP', PriceCurrency: 'GBX', PriceToContractFactor: 0.01 }),
+  },
+  prices: {
+    44430: price(44430, US_BORROW),
+    895: {
+      Uic: 895,
+      Quote: { Bid: 412.1, Ask: 412.3, Mid: 412.2 },
+      InstrumentPriceDetails: { CfdBorrowingCost: UK_BORROW, AverageVolume30Days: 20_000_000 },
+    },
+    900: {
+      Uic: 900,
+      Quote: { Bid: 0, Ask: 0 },
+      InstrumentPriceDetails: { AverageVolume30Days: -1 },
+    },
+  },
+};
+
+describe('buildCfdCatalogue UK stocks (#1914)', () => {
+  it('keys every GBP LSE_SETS stock CFD apart from the US name it shares a ticker with', async () => {
+    const report = await buildCfdCatalogue(
+      fakeSaxo(UK_FIXTURE).api,
+      cfdScopes(['TSCO'], []),
+      AS_OF,
+    );
+    expect(report.instruments.map((row) => row.symbol)).toEqual(['TSCO', 'TSCO_XLON', 'RR_XLON']);
+    expect(report.clashes).toEqual([]);
+    expect(report.unmatched).toEqual([]);
+    expect(report.otherCurrency).toEqual(['XYZ:xlon']);
+  });
+
+  it('stores the price unit, the quote and the 30-day volume only where Saxo gave usable ones', async () => {
+    const report = await buildCfdCatalogue(
+      fakeSaxo(UK_FIXTURE).api,
+      cfdScopes(['TSCO'], []),
+      AS_OF,
+    );
+    const bySymbol = new Map(report.instruments.map((row) => [row.symbol, row]));
+    expect(bySymbol.get('TSCO_XLON')).toEqual({
+      symbol: 'TSCO_XLON',
+      saxoSymbol: 'TSCO:xlon',
+      uic: 895,
+      assetType: 'CfdOnStock',
+      currency: 'GBP',
+      priceToContractFactor: 0.01,
+      tradable: true,
+      shortTradeDisabled: false,
+      borrowCostPerDay: UK_BORROW,
+      priceCurrency: 'GBX',
+      bid: 4.121,
+      ask: 4.123,
+      averageVolume30Days: 20_000_000,
+    });
+    const rr = bySymbol.get('RR_XLON');
+    expect(rr?.priceCurrency).toBe('GBX');
+    expect(rr && 'bid' in rr).toBe(false);
+    expect(rr && 'ask' in rr).toBe(false);
+    expect(rr && 'averageVolume30Days' in rr).toBe(false);
+  });
+
+  it('round-trips the quote fields through the snapshot text', async () => {
+    const report = await buildCfdCatalogue(
+      fakeSaxo(UK_FIXTURE).api,
+      cfdScopes(['TSCO'], []),
+      AS_OF,
+    );
+    const path = tempPath();
+    writeAtomically(path, catalogueText(report));
+    expect(loadCfdCatalogue(path)?.lookup('TSCO_XLON')).toMatchObject({
+      priceCurrency: 'GBX',
+      bid: 4.121,
+      ask: 4.123,
+      averageVolume30Days: 20_000_000,
+    });
+  });
+});
+
+function failingOn(exchangeId: string): CfdReferenceApi {
+  const { api } = fakeSaxo();
+  return {
+    cfdInstrumentPage: (assetType, exchange, skip, top) =>
+      exchange === exchangeId
+        ? Promise.reject(new Error('search 503'))
+        : api.cfdInstrumentPage(assetType, exchange, skip, top),
+    cfdInstrumentDetails: (assetType, uics) => api.cfdInstrumentDetails(assetType, uics),
+    cfdInfoPrices: (assetType, uics) => api.cfdInfoPrices(assetType, uics),
+  };
+}
+
+describe('buildCfdCatalogue quote units and scope failures (#1914)', () => {
+  it.each([
+    ['a quote in the row currency', 211, { PriceCurrency: 'USD' }, ['AAPL'], [], 187.5],
+    [
+      'a pence quote on a GBP row',
+      4361,
+      { PriceCurrency: 'GBX', PriceToContractFactor: 0.01, CurrencyCode: 'GBP' },
+      [],
+      ['ISF'],
+      1.875,
+    ],
+    ['a pence quote on a USD row', 211, { PriceCurrency: 'GBX' }, ['AAPL'], [], undefined],
+    ['no quote unit', 211, {}, ['AAPL'], [], undefined],
+  ])('stores %s in the row currency', async (_, uic, overrides, us, lse, bid) => {
+    const fixture: SaxoFixture = {
+      ...FIXTURE,
+      details: { [uic]: details(uic, overrides) },
+      prices: { [uic]: { Uic: uic, Quote: { Bid: 187.5, Ask: 188 } } },
+    };
+    const report = await buildCfdCatalogue(fakeSaxo(fixture).api, cfdScopes(us, lse), AS_OF);
+    expect(report.instruments).toHaveLength(1);
+    expect(report.instruments[0]?.bid).toBe(bid);
+  });
+
+  it('writes the US and ETF rows when the whole-exchange scope fails, and names the failure', async () => {
+    const { entries, logger } = recorder();
+    const report = await refreshCfdCatalogue(
+      failingOn('LSE_SETS'),
+      SCOPES,
+      AS_OF,
+      targetAt(tempPath()),
+      logger,
+    );
+    expect(report.instruments.map((row) => row.symbol)).toEqual(['BRK.B', 'AAPL', 'TSCO', 'ISF']);
+    expect(report.failedScopes).toEqual(['CfdOnStock LSE_SETS: search 503']);
+    expect(entries[0]).toMatchObject({
+      event: 'v2_cfd_catalogue_scope_failed',
+      level: 'warn',
+      message: 'written without CfdOnStock LSE_SETS: search 503',
+    });
+  });
+
+  it('still fails the whole refresh when a routed scope fails', async () => {
+    await expect(buildCfdCatalogue(failingOn('NYSE'), SCOPES, AS_OF)).rejects.toThrow('search 503');
   });
 });
 
@@ -400,6 +562,8 @@ describe('catalogueText', () => {
         unmatched: [],
         clashes: [],
         withoutDetails: [],
+        otherCurrency: [],
+        failedScopes: [],
       }),
     ).toThrow(/no instruments, refusing to write/);
     const row = {
@@ -420,6 +584,8 @@ describe('catalogueText', () => {
         unmatched: [],
         clashes: [],
         withoutDetails: [],
+        otherCurrency: [],
+        failedScopes: [],
       }),
     ).toThrow(/duplicate symbol/);
     expect(() =>
@@ -429,6 +595,8 @@ describe('catalogueText', () => {
         unmatched: [],
         clashes: [],
         withoutDetails: [],
+        otherCurrency: [],
+        failedScopes: [],
       }),
     ).toThrow(/expected \{ asOf, instruments/);
   });
@@ -491,6 +659,33 @@ describe('refreshCfdCatalogue', () => {
       ['v2_cfd_catalogue_written', 'info'],
     ]);
     expect(entries[0]?.message).toContain('dropped ISF');
+  });
+
+  it('logs the UK stock screen outcomes and the listings priced in another currency', async () => {
+    const { entries, logger } = recorder();
+    await refreshCfdCatalogue(
+      fakeSaxo(UK_FIXTURE).api,
+      cfdScopes(['TSCO'], []),
+      AS_OF,
+      targetAt(tempPath()),
+      logger,
+    );
+    expect(entries.map((entry) => entry.event)).toEqual([
+      'v2_cfd_catalogue_other_currency',
+      'v2_cfd_catalogue_uk_screen',
+      'v2_cfd_catalogue_written',
+    ]);
+    expect(entries[0]?.message).toBe(
+      "excluded 1 listings not priced in the scope's currency (#1914): XYZ:xlon",
+    );
+    expect(JSON.parse(entries[1]?.message.split(': ')[1] ?? '')).toEqual({
+      pass: 1,
+      not_tradable: 0,
+      no_quote: 1,
+      price: 0,
+      adv: 0,
+      spread: 0,
+    });
   });
 
   it('keeps the previous file when the new snapshot is refused, and records nothing', async () => {
