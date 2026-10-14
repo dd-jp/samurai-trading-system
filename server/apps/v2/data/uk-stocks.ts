@@ -22,12 +22,11 @@ export type UkStockScreenOutcome =
   | 'pass'
   | 'not_tradable'
   | 'no_quote'
-  | 'price_unit'
   | 'price'
   | 'adv'
   | 'spread';
 
-const PENCE_PER_UNIT: Readonly<Record<string, number>> = { GBX: 1, GBP: 100 };
+const PENCE_PER_POUND = 100;
 
 function quoteOf(instrument: CfdInstrument) {
   const { bid, ask, averageVolume30Days } = instrument;
@@ -43,11 +42,8 @@ export function screenUkStock(
   if (!instrument.tradable) return 'not_tradable';
   const quote = quoteOf(instrument);
   if (quote === undefined) return 'no_quote';
-  const penceRate = PENCE_PER_UNIT[instrument.priceCurrency ?? ''];
-  if (penceRate === undefined) return 'price_unit';
-  const midPence = quote.mid * penceRate;
-  if (midPence < screens.minPricePence) return 'price';
-  if ((quote.averageVolume30Days * midPence) / 100 < screens.minAdvGbp) return 'adv';
+  if (quote.mid * PENCE_PER_POUND < screens.minPricePence) return 'price';
+  if (quote.averageVolume30Days * quote.mid < screens.minAdvGbp) return 'adv';
   const spreadBps = ((quote.ask - quote.bid) / quote.mid) * 10_000;
   return spreadBps > screens.maxSpreadBps ? 'spread' : 'pass';
 }
@@ -60,7 +56,6 @@ export function ukStockScreenCounts(
     pass: 0,
     not_tradable: 0,
     no_quote: 0,
-    price_unit: 0,
     price: 0,
     adv: 0,
     spread: 0,

@@ -458,8 +458,8 @@ describe('buildCfdCatalogue UK stocks (#1914)', () => {
       shortTradeDisabled: false,
       borrowCostPerDay: UK_BORROW,
       priceCurrency: 'GBX',
-      bid: 412.1,
-      ask: 412.3,
+      bid: 4.121,
+      ask: 4.123,
       averageVolume30Days: 20_000_000,
     });
     const rr = bySymbol.get('RR_XLON');
@@ -479,10 +479,69 @@ describe('buildCfdCatalogue UK stocks (#1914)', () => {
     writeAtomically(path, catalogueText(report));
     expect(loadCfdCatalogue(path)?.lookup('TSCO_XLON')).toMatchObject({
       priceCurrency: 'GBX',
-      bid: 412.1,
-      ask: 412.3,
+      bid: 4.121,
+      ask: 4.123,
       averageVolume30Days: 20_000_000,
     });
+  });
+});
+
+function failingOn(exchangeId: string): CfdReferenceApi {
+  const { api } = fakeSaxo();
+  return {
+    cfdInstrumentPage: (assetType, exchange, skip, top) =>
+      exchange === exchangeId
+        ? Promise.reject(new Error('search 503'))
+        : api.cfdInstrumentPage(assetType, exchange, skip, top),
+    cfdInstrumentDetails: (assetType, uics) => api.cfdInstrumentDetails(assetType, uics),
+    cfdInfoPrices: (assetType, uics) => api.cfdInfoPrices(assetType, uics),
+  };
+}
+
+describe('buildCfdCatalogue quote units and scope failures (#1914)', () => {
+  it.each([
+    ['a quote in the row currency', 211, { PriceCurrency: 'USD' }, ['AAPL'], [], 187.5],
+    [
+      'a pence quote on a GBP row',
+      4361,
+      { PriceCurrency: 'GBX', PriceToContractFactor: 0.01, CurrencyCode: 'GBP' },
+      [],
+      ['ISF'],
+      1.875,
+    ],
+    ['a pence quote on a USD row', 211, { PriceCurrency: 'GBX' }, ['AAPL'], [], undefined],
+    ['no quote unit', 211, {}, ['AAPL'], [], undefined],
+  ])('stores %s in the row currency', async (_, uic, overrides, us, lse, bid) => {
+    const fixture: SaxoFixture = {
+      ...FIXTURE,
+      details: { [uic]: details(uic, overrides) },
+      prices: { [uic]: { Uic: uic, Quote: { Bid: 187.5, Ask: 188 } } },
+    };
+    const report = await buildCfdCatalogue(fakeSaxo(fixture).api, cfdScopes(us, lse), AS_OF);
+    expect(report.instruments).toHaveLength(1);
+    expect(report.instruments[0]?.bid).toBe(bid);
+  });
+
+  it('writes the US and ETF rows when the whole-exchange scope fails, and names the failure', async () => {
+    const { entries, logger } = recorder();
+    const report = await refreshCfdCatalogue(
+      failingOn('LSE_SETS'),
+      SCOPES,
+      AS_OF,
+      targetAt(tempPath()),
+      logger,
+    );
+    expect(report.instruments.map((row) => row.symbol)).toEqual(['BRK.B', 'AAPL', 'TSCO', 'ISF']);
+    expect(report.failedScopes).toEqual(['CfdOnStock LSE_SETS: search 503']);
+    expect(entries[0]).toMatchObject({
+      event: 'v2_cfd_catalogue_scope_failed',
+      level: 'warn',
+      message: 'written without CfdOnStock LSE_SETS: search 503',
+    });
+  });
+
+  it('still fails the whole refresh when a routed scope fails', async () => {
+    await expect(buildCfdCatalogue(failingOn('NYSE'), SCOPES, AS_OF)).rejects.toThrow('search 503');
   });
 });
 
@@ -504,6 +563,7 @@ describe('catalogueText', () => {
         clashes: [],
         withoutDetails: [],
         otherCurrency: [],
+        failedScopes: [],
       }),
     ).toThrow(/no instruments, refusing to write/);
     const row = {
@@ -525,6 +585,7 @@ describe('catalogueText', () => {
         clashes: [],
         withoutDetails: [],
         otherCurrency: [],
+        failedScopes: [],
       }),
     ).toThrow(/duplicate symbol/);
     expect(() =>
@@ -535,6 +596,7 @@ describe('catalogueText', () => {
         clashes: [],
         withoutDetails: [],
         otherCurrency: [],
+        failedScopes: [],
       }),
     ).toThrow(/expected \{ asOf, instruments/);
   });
@@ -613,12 +675,13 @@ describe('refreshCfdCatalogue', () => {
       'v2_cfd_catalogue_uk_screen',
       'v2_cfd_catalogue_written',
     ]);
-    expect(entries[0]?.message).toContain('excluded XYZ:xlon');
+    expect(entries[0]?.message).toBe(
+      "excluded 1 listings not priced in the scope's currency (#1914): XYZ:xlon",
+    );
     expect(JSON.parse(entries[1]?.message.split(': ')[1] ?? '')).toEqual({
       pass: 1,
       not_tradable: 0,
       no_quote: 1,
-      price_unit: 0,
       price: 0,
       adv: 0,
       spread: 0,

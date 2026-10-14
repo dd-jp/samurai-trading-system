@@ -85,8 +85,8 @@ const FIELD_CHECKS: readonly (readonly [keyof RawInstrument, (value: unknown) =>
   ['shortTradeDisabled', (value) => typeof value === 'boolean'],
   ['borrowCostPerDay', (value) => value === undefined || value === null || isNonNegative(value)],
   ['priceCurrency', (value) => value === undefined || typeof value === 'string'],
-  ['bid', (value) => value === undefined || isNonNegative(value)],
-  ['ask', (value) => value === undefined || isNonNegative(value)],
+  ['bid', (value) => value === undefined || isPositive(value)],
+  ['ask', (value) => value === undefined || isPositive(value)],
   ['averageVolume30Days', (value) => value === undefined || isNonNegative(value)],
 ];
 

@@ -8,7 +8,7 @@ import {
   cfdScopes,
   refreshCfdCatalogue,
 } from './cfd-catalogue-refresh.js';
-import { CFD_CATALOGUE_PATH, currentConstituents } from './data/index.js';
+import { CFD_CATALOGUE_PATH, currentConstituents, isUkStock } from './data/index.js';
 import { CONSTITUENTS_PATH, V2_STORE_PATH } from './index.js';
 
 export const CFD_CATALOGUE_USAGE =
@@ -59,6 +59,7 @@ export function summarise(report: CfdCatalogueRefreshReport): Record<string, unk
     asOf: report.asOf,
     rows: report.instruments.length,
     cfdOnStock: count('CfdOnStock'),
+    ukStocks: report.instruments.filter(({ symbol }) => isUkStock(symbol)).length,
     cfdOnEtf: count('CfdOnEtf'),
     unmatched: report.unmatched,
     clashes: report.clashes,

@@ -108,6 +108,7 @@ export interface CfdCatalogueRefreshReport {
   readonly clashes: readonly string[];
   readonly withoutDetails: readonly string[];
   readonly otherCurrency: readonly string[];
+  readonly failedScopes: readonly string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -295,11 +296,33 @@ function instrumentOf(
     borrowCostPerDay: price?.borrowCostPerDay ?? undefined,
     ...definedOnly({
       priceCurrency: details.priceCurrency,
-      bid: price?.bid,
-      ask: price?.ask,
+      ...quoteIn(scope.currency, details.priceCurrency, price),
       averageVolume30Days: price?.averageVolume30Days,
     }),
   };
+}
+
+// Saxo quotes UK stocks in pence (GBX) on a GBP row; the row's bid and ask are stored in its
+// currency, so nothing downstream converts pence again
+const PENCE_PER_POUND = 100;
+
+function quoteUnitsPerRowUnit(currency: QuoteCurrency, priceCurrency: string | undefined) {
+  if (priceCurrency === currency) return 1;
+  return currency === 'GBP' && priceCurrency === 'GBX' ? PENCE_PER_POUND : undefined;
+}
+
+function quoteIn(
+  currency: QuoteCurrency,
+  priceCurrency: string | undefined,
+  price: PriceDetails | undefined,
+): { readonly bid?: number; readonly ask?: number } {
+  const units = quoteUnitsPerRowUnit(currency, priceCurrency);
+  if (units === undefined || price === undefined) return {};
+  return definedOnly({ bid: rowUnits(price.bid, units), ask: rowUnits(price.ask, units) });
+}
+
+function rowUnits(quote: number | undefined, units: number): number | undefined {
+  return quote === undefined ? undefined : quote / units;
 }
 
 function definedOnly<T extends object>(fields: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
@@ -349,6 +372,22 @@ function withoutClashes(instruments: readonly CfdInstrument[]): {
   return { kept: instruments.filter(({ symbol }) => !clashing.has(symbol)), clashes };
 }
 
+// A whole-exchange scope only widens the pool (#1914): its failure must not cost the routed US
+// and ETF rows their fresh file, which would refuse every CFD short as no_catalogue in 3 days
+async function scopeRowsOrSkipped(
+  api: CfdReferenceApi,
+  scope: CfdScope,
+  failedScopes: string[],
+): Promise<ScopeRows> {
+  if (scope.universe !== 'whole_exchange') return scopeRows(api, scope);
+  try {
+    return await scopeRows(api, scope);
+  } catch (error) {
+    failedScopes.push(`${scope.assetType} ${scope.exchangeIds.join(',')}: ${messageOf(error)}`);
+    return { instruments: [], withoutDetails: [], otherCurrency: [] };
+  }
+}
+
 export async function buildCfdCatalogue(
   api: CfdReferenceApi,
   scopes: readonly CfdScope[],
@@ -357,8 +396,9 @@ export async function buildCfdCatalogue(
   const instruments: CfdInstrument[] = [];
   const withoutDetails: string[] = [];
   const otherCurrency: string[] = [];
+  const failedScopes: string[] = [];
   for (const scope of scopes) {
-    const rows = await scopeRows(api, scope);
+    const rows = await scopeRowsOrSkipped(api, scope, failedScopes);
     instruments.push(...rows.instruments);
     withoutDetails.push(...rows.withoutDetails);
     otherCurrency.push(...rows.otherCurrency);
@@ -368,7 +408,15 @@ export async function buildCfdCatalogue(
   const unmatched = scopes.flatMap(({ universe }) =>
     universe === 'whole_exchange' ? [] : universe.filter((s) => !listed.has(s)),
   );
-  return { asOf, instruments: kept, unmatched, clashes, withoutDetails, otherCurrency };
+  return {
+    asOf,
+    instruments: kept,
+    unmatched,
+    clashes,
+    withoutDetails,
+    otherCurrency,
+    failedScopes,
+  };
 }
 
 export function catalogueText(report: CfdCatalogueRefreshReport): string {
@@ -395,6 +443,8 @@ export function writeAtomically(path: string, text: string): void {
   renameSync(staging, path);
 }
 
+const OTHER_CURRENCY_LOGGED = 10;
+
 function logReport(report: CfdCatalogueRefreshReport, path: string, logger: Logger): void {
   if (report.clashes.length > 0) {
     logRefresh(
@@ -404,12 +454,20 @@ function logReport(report: CfdCatalogueRefreshReport, path: string, logger: Logg
       `dropped ${report.clashes.join(', ')}: more than one CFD row keys to the same symbol`,
     );
   }
+  if (report.failedScopes.length > 0) {
+    logRefresh(
+      logger,
+      'warn',
+      'v2_cfd_catalogue_scope_failed',
+      `written without ${report.failedScopes.join('; ')}`,
+    );
+  }
   if (report.otherCurrency.length > 0) {
     logRefresh(
       logger,
       'info',
       'v2_cfd_catalogue_other_currency',
-      `excluded ${report.otherCurrency.join(', ')}: not priced in the scope's currency (#1914)`,
+      `excluded ${report.otherCurrency.length} listings not priced in the scope's currency (#1914): ${report.otherCurrency.slice(0, OTHER_CURRENCY_LOGGED).join(', ')}`,
     );
   }
   const ukScreen = ukStockScreenCounts(report.instruments, requireSet(UK_STOCK_SCREENS));

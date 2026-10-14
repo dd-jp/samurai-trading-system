@@ -143,11 +143,13 @@ describe('summarise', () => {
         clashes: [],
         withoutDetails: ['Y'],
         otherCurrency: ['Z'],
+        failedScopes: [],
       }),
     ).toEqual({
       asOf: TODAY,
       rows: 1,
       cfdOnStock: 0,
+      ukStocks: 0,
       cfdOnEtf: 1,
       unmatched: ['X'],
       clashes: [],
