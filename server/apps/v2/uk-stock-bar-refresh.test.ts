@@ -206,6 +206,14 @@ describe('ukStockBarRefreshFor', () => {
     expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual(DATES);
   });
 
+  it('accepts a window whose first bar is one the stored copy lacks', async () => {
+    const rows = [ukRow('RR_XLON', 11)];
+    const { root } = await runLeg(rows, async () => pencePage(DATES.slice(1), 450));
+    const { report } = await runLeg(rows, async () => pencePage(DATES, 450), { root });
+    expect(report.failed).toEqual([]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual(DATES);
+  });
+
   it('still refuses a window that drops a stored bar inside it', async () => {
     const rows = [ukRow('RR_XLON', 11)];
     const { root } = await runLeg(rows, async () => pencePage(DATES, 450));

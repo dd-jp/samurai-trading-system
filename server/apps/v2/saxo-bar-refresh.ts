@@ -143,13 +143,18 @@ function revisedCloses(existing: BarSeries, next: readonly DailyBar[]): string |
   return `revises stored close(s) by more than ${MAX_CLOSE_REVISION * 100}%: ${listed(shown)}`;
 }
 
+// A windowed line's page start moves every day, so its first pulled bar can be one hygiene
+// dropped from the stored copy; only a fixed-start line treats an earlier start as a conflict
 function assertHistoryConsistent(
-  symbol: string,
+  line: BarLine,
   existing: BarSeries,
   next: readonly DailyBar[],
 ): void {
+  const symbol = line.tidm;
   const conflict =
-    earlierStart(existing, next) ?? interiorGap(existing, next) ?? revisedCloses(existing, next);
+    (line.windowed ? undefined : earlierStart(existing, next)) ??
+    interiorGap(existing, next) ??
+    revisedCloses(existing, next);
   if (conflict === undefined) return;
   throw new Error(
     `${symbol}: the Saxo re-pull ${conflict}; refusing to write, the stored bars stand until ` +
@@ -186,8 +191,6 @@ function lseBarLine(line: SaxoLine, api: SaxoBarsApi): BarLine {
 // covers the few bars hygiene drops differently from one day's pull to the next
 const WINDOW_SHRINK_SLACK_BARS = 5;
 
-// A windowed line re-pulls one fixed-length page, so its oldest stored bars age out by design and
-// the history guards compare only the overlap
 function storedWithinWindow(
   tidm: string,
   existing: BarSeries,
@@ -385,7 +388,7 @@ async function refreshLine(
   assertNoRecentRepair(line.tidm, hygiene.bars, repaired.report);
   const pulled = roundPrices(repaired.bars);
   const stored = guardedStored(line, existing, pulled);
-  if (stored !== undefined) assertHistoryConsistent(line.tidm, stored, pulled);
+  if (stored !== undefined) assertHistoryConsistent(line, stored, pulled);
   const rounded = withSplitStep(stored, pulled, hygiene.report, options.logger);
   await (options.limit ?? UNLIMITED).atomic(() =>
     options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]),

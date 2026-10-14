@@ -27,8 +27,6 @@ export interface UkStockBarsApi {
   dailyPage(uic: number, assetType: SaxoChartAssetType): Promise<ChartPage>;
 }
 
-// One 1,200-bar page (about 4.7 years) per name, against a 200-bar longest lookback: one chart
-// call a name keeps the pool inside the cap where a full-history pull would not
 const UK_STOCK_BAR_REFRESH_TIME_LIMIT_MS = 5 * 60_000;
 const UK_STOCK_STOP_AFTER_FAILURES_IN_A_ROW = 5;
 
@@ -76,8 +74,7 @@ export interface UkStockBarRefreshDeps extends SaxoBarRefreshDeps<UkStockBarsApi
   readonly catalogue?: () => CfdCatalogue | undefined;
 }
 
-// Runs after the catalogue leg, so it reads the catalogue written this morning, and in its own
-// session and cap, so a slow or failing UK pull never cuts the LSE lines' refresh
+// Its own session and cap, so a slow or failing UK pull never cuts the LSE lines' refresh
 export function ukStockBarRefreshFor(
   env: NodeJS.ProcessEnv,
   tradingDate: string,

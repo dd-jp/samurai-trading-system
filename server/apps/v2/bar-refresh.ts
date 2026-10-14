@@ -183,6 +183,7 @@ export function barRefreshFor(
     alpaca,
     saxoBarRefreshFor(env, tradingDate, logger),
     cfdCatalogueRefreshFor(env, { ...cfdCatalogue, tradingDate, constituents, logger }),
+    // after the catalogue leg, so the UK pool comes from the catalogue written this morning
     ukStockBarRefreshFor(env, tradingDate, logger, {
       catalogue: () => loadCfdCatalogue(cfdCatalogue.path),
     }),
