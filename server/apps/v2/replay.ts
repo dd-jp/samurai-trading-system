@@ -237,9 +237,9 @@ const UK_STOCK_SWITCH_JOURNALLED_BEFORE_SQL = `
   SELECT 1 FROM v2_refusals
    WHERE trading_date < ? AND scope = 'parameter' AND parameter = ? LIMIT 1`;
 
-// The switch journals a row only while shut, and days before #1914 journal none either; a day
-// without a row reads open only once an earlier day shows it shut, so an old day never replays
-// with UK stocks pooled and 6 LSE slots
+// Days before #1914 journal no switch row, the same as an open day, so an old day must not read
+// open and replay with UK stocks pooled and 6 LSE slots; a store whose first cycle already ran
+// open would replay shut, which this store, journalling the switch since #2134, never was
 export function journalledUkStockCfdRefusal(
   db: StoreHandle,
   tradingDate: string,

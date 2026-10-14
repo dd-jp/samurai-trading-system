@@ -373,6 +373,27 @@ describe('buildUniverse', () => {
           );
         });
 
+        it('returns the slots one UK stock and two ETFs cannot fill to the shared ranking', () => {
+          const sparse = {
+            ...withLse([...thinLse.slice(0, 2), ...ukSeries]),
+            venueFor: withUk().venueFor,
+            ukStocks: () => [ukTidms[0] as string],
+          };
+          const universe = buildUniverse(sparse, tradingDate, screen(1)).instruments;
+          expect(universe).toHaveLength(UNIVERSE_CAP);
+          expect(universe.filter(saxoHomed)).toHaveLength(3);
+        });
+
+        it('keeps the 6 slots, all ETF, while the switch is open but no UK stock is pooled', () => {
+          const universe = buildUniverse(
+            { ...withUk(), ukStocks: () => [] },
+            tradingDate,
+            screen(1),
+          );
+          expect(universe.instruments.filter(isUkStock)).toEqual([]);
+          expect(universe.instruments.filter(isLseInstrument)).toHaveLength(LSE_RESERVED_SLOTS);
+        });
+
         it('leaves out a UK stock whose bars have gone stale', () => {
           const universe = buildUniverse(withUk(), tradingDate, screen(1)).instruments;
           expect(universe).not.toContain(staleUk.symbol);
