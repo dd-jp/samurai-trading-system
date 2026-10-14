@@ -60,9 +60,22 @@ describe('macro calendar', () => {
       '2027-11-10',
       '2027-12-10',
     ]);
-    const employment = releases2027('bls_employment') ?? [];
-    expect(employment).toHaveLength(12);
-    for (const date of employment) {
+    const employment = releases2027('bls_employment');
+    expect(employment).toEqual([
+      '2027-01-08',
+      '2027-02-05',
+      '2027-03-05',
+      '2027-04-02',
+      '2027-05-07',
+      '2027-06-04',
+      '2027-07-02',
+      '2027-08-06',
+      '2027-09-03',
+      '2027-10-08',
+      '2027-11-05',
+      '2027-12-03',
+    ]);
+    for (const date of employment ?? []) {
       expect(new Date(`${date}T00:00:00.000Z`).getUTCDay()).toBe(5);
     }
     expect(macroGate('2026-12-02').covered).toBe(true);

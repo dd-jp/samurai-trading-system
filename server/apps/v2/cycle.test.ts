@@ -1356,7 +1356,7 @@ describe('runCycle', () => {
   it('journals an uncovered macro calendar, logs the report, and warns on unmatched fills and sweep failures', async () => {
     const alpaca = new FakeAlpaca();
     alpaca.fill('unknown-order', 'entry', 1, 1);
-    const deps = harness([], false, alpaca);
+    const deps = harness([], false, alpaca, [2026, 2027]);
     const log = vi.fn();
     const report = await runCycle({ ...deps, logger: { log } }, '2027-12-02');
     expect(report.macro).toMatchObject({ macroDay: true, covered: false });
@@ -1384,9 +1384,9 @@ describe('runCycle', () => {
         scope: 'parameter',
         parameter: parameter.name,
       })),
-      { scope: 'capital', parameter: 'CAPITAL_CONFIG' },
       { scope: 'data', parameter: 'FX_YEAR_START_COVERAGE' },
       { scope: 'macro', parameter: 'MACRO_CALENDARS' },
+      { scope: 'universe', parameter: 'P' },
     ]);
     vi.spyOn(alpaca, 'fetchNewFills').mockRejectedValue(new Error('alpaca down'));
     await runCycle({ ...deps, logger: { log } }, '2027-12-03');
