@@ -1358,15 +1358,15 @@ describe('runCycle', () => {
     alpaca.fill('unknown-order', 'entry', 1, 1);
     const deps = harness([], false, alpaca);
     const log = vi.fn();
-    const report = await runCycle({ ...deps, logger: { log } }, '2026-12-02');
+    const report = await runCycle({ ...deps, logger: { log } }, '2027-12-02');
     expect(report.macro).toMatchObject({ macroDay: true, covered: false });
     expect(report.refusals.some((refusal) => refusal.includes('fail-closed'))).toBe(true);
     expect(log).toHaveBeenCalledWith({
-      trace_id: 'v2-2026-12-02',
+      trace_id: 'v2-2027-12-02',
       stage: 'v2',
       level: 'info',
       event: 'v2_cycle_complete',
-      message: 'v2 cycle 2026-12-02: 0 decisions, 0 submitted',
+      message: 'v2 cycle 2027-12-02: 0 decisions, 0 submitted',
       payload: report,
     });
     expect(log).toHaveBeenCalledWith(
@@ -1384,11 +1384,12 @@ describe('runCycle', () => {
         scope: 'parameter',
         parameter: parameter.name,
       })),
+      { scope: 'capital', parameter: 'CAPITAL_CONFIG' },
+      { scope: 'data', parameter: 'FX_YEAR_START_COVERAGE' },
       { scope: 'macro', parameter: 'MACRO_CALENDARS' },
-      { scope: 'universe', parameter: 'P' },
     ]);
     vi.spyOn(alpaca, 'fetchNewFills').mockRejectedValue(new Error('alpaca down'));
-    await runCycle({ ...deps, logger: { log } }, '2026-12-03');
+    await runCycle({ ...deps, logger: { log } }, '2027-12-03');
     expect(log).toHaveBeenCalledWith(expect.objectContaining({ event: 'v2_fill_sweep_failed' }));
   });
 
@@ -1521,7 +1522,7 @@ describe('runCycle', () => {
     expect(timeStop).toMatchObject({ entries: 0, exits: 2 });
     expect(deps.journal.orderFor('v2-debate-primary-2027-01-05-AAPL-exit')).toMatchObject({
       outcome: 'refused_dry_run',
-      payload: { approval: 'exit:v2-debate-primary-2027-01-05-AAPL-exit:3' },
+      payload: { approval: 'exit:v2-debate-primary-2027-01-05-AAPL-exit:6' },
     });
     await runCycle(deps, '2027-01-06');
     expect(deps.books.position('debate/no-macro-gate', 'AAPL')).toBeUndefined();
