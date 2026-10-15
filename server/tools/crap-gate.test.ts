@@ -165,10 +165,12 @@ describe('functionCoverage', () => {
 });
 
 describe('crapScore', () => {
-  it('is complexity × (1 − coverage)² + complexity', () => {
-    expect(crapScore(10, 0)).toBe(20);
+  it('is complexity² × (1 − coverage)³ + complexity', () => {
+    expect(crapScore(10, 0)).toBe(110);
     expect(crapScore(10, 1)).toBe(10);
-    expect(crapScore(12, 0.5)).toBe(15);
+    expect(crapScore(12, 0.5)).toBe(30);
+    expect(crapScore(5, 0.5)).toBe(8.125);
+    expect(crapScore(4, 0.75)).toBe(4.25);
   });
 });
 
@@ -185,7 +187,7 @@ describe('evaluateCrap', () => {
       coverage,
     );
     expect(result.rows.map((row) => [row.name, row.crap])).toEqual([
-      ['inner', 12],
+      ['inner', 42],
       ['method', 4],
     ]);
     expect(result.unmatched).toEqual([]);
@@ -373,9 +375,9 @@ describe('main', () => {
     const report = { diagnostics: [diagnostic('server/a.ts', 5, 22, 8)] };
     const failing = run(['--coverage', 'coverage.json', '--threshold', '15'], report, root);
     expect(failing.code).toBe(1);
-    expect(failing.out).toContain('CRAP 16.0 > 15  server/a.ts:5  inner');
+    expect(failing.out).toContain('CRAP 72.0 > 15  server/a.ts:5  inner');
     expect(failing.out).toContain('1 function(s) above 15 of 1 gated');
-    expect(run(['--coverage', 'coverage.json', '--threshold', '16'], report, root).code).toBe(0);
+    expect(run(['--coverage', 'coverage.json', '--threshold', '72'], report, root).code).toBe(0);
   });
 
   it('fails closed on a finding it cannot attribute to a covered function', () => {
@@ -429,7 +431,7 @@ describe('main', () => {
     expect(scopedOut.code).toBe(1);
     expect(scopedOut.out).toContain('no complexity findings scored');
     expect(
-      run(['--coverage', 'coverage.json', '--threshold', '16', '--scope', 'server'], report, root)
+      run(['--coverage', 'coverage.json', '--threshold', '72', '--scope', 'server'], report, root)
         .code,
     ).toBe(0);
   });

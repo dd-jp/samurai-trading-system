@@ -184,7 +184,7 @@ export function functionCoverage(file: FileCoverage, key: string): number {
 }
 
 export function crapScore(complexity: number, coverage: number): number {
-  return complexity * (1 - coverage) ** 2 + complexity;
+  return complexity ** 2 * (1 - coverage) ** 3 + complexity;
 }
 
 type UnscoredKind = 'unmatched' | 'ambiguous' | 'uncovered';

@@ -132,9 +132,11 @@ export function createFixtureStore(scenario: FixtureScenario = 'default'): {
   return { storePath, dir };
 }
 
-async function main(env: NodeJS.ProcessEnv): Promise<void> {
+export async function startFixtureDashboard(
+  env: NodeJS.ProcessEnv,
+): Promise<ReturnType<typeof composeV2Dashboard> & { dir: string }> {
   const { storePath, dir } = createFixtureStore(fixtureScenarioOf(env.V2_FIXTURE_SCENARIO));
-  const { server } = composeV2Dashboard(
+  const dashboard = composeV2Dashboard(
     {
       storePath,
       barStoreRoot: join(dir, 'bars'),
@@ -148,8 +150,11 @@ async function main(env: NodeJS.ProcessEnv): Promise<void> {
     env,
     new FixtureClock(),
   );
-  await server.start();
-  process.stdout.write(`v2 dashboard fixture on ${server.url}\n`);
+  await dashboard.server.start();
+  return { ...dashboard, dir };
 }
 
-void runWhenInvoked(import.meta.url, () => main(process.env));
+void runWhenInvoked(import.meta.url, async () => {
+  const { server } = await startFixtureDashboard(process.env);
+  process.stdout.write(`v2 dashboard fixture on ${server.url}\n`);
+});

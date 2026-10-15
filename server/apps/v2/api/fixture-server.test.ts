@@ -8,6 +8,7 @@ import {
   FixtureClock,
   type FixtureScenario,
   fixtureScenarioOf,
+  startFixtureDashboard,
 } from './fixture-server.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
@@ -84,5 +85,44 @@ describe('FixtureClock', () => {
     const drift = new FixtureClock().now().getTime() - FIXTURE_START.getTime();
     expect(drift).toBeGreaterThanOrEqual(0);
     expect(drift).toBeLessThan(5_000);
+  });
+});
+
+describe('startFixtureDashboard', () => {
+  const token = 'fixture-test-token';
+
+  async function overviewServed(env: NodeJS.ProcessEnv) {
+    const { server, db, dir } = await startFixtureDashboard({
+      ...env,
+      SAMURAI_DASHBOARD_TOKEN: token,
+    });
+    dirs.push(dir);
+    try {
+      const response = await fetch(new URL('/api/v2/overview', server.url), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return { url: server.url, status: response.status, body: await response.json() };
+    } finally {
+      await server.stop();
+      db.close();
+    }
+  }
+
+  it('serves the named scenario on the host and port the env gives', async () => {
+    const served = await overviewServed({
+      HOST: '127.0.0.1',
+      PORT: '0',
+      V2_FIXTURE_SCENARIO: 'loss-budget-halted',
+      V2_BUNDLE_ROOT: '/nonexistent',
+    });
+    expect(served.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+/);
+    expect(served.status).toBe(200);
+    expect(served.body).toMatchObject({ control: { state: 'halted-loss-budget' } });
+  });
+
+  it('defaults to loopback, an ephemeral port and the default scenario', async () => {
+    const served = await overviewServed({});
+    expect(served.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+/);
+    expect(served.body).toMatchObject({ control: { state: 'running' } });
   });
 });
