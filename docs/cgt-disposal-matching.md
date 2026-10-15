@@ -74,6 +74,19 @@ v1-final keeps them.
   pairing a buy with a sell, or for a name with no fills holds its instrument
   out. Saxo's corporate-action
   booking is not read yet, so a Saxo disposal keeps the estimate.
+- **What clears, and what is never read.** The cash-in-lieu journal is
+  append-only, so nothing clears a held-out instrument by itself. A correction
+  clears only when the broker later reports the correction's own activity
+  canceled; Alpaca does not link it to the activity it corrects. A later cancel
+  clears the other payment hold-outs in the same way. Otherwise the instrument
+  stays held out, and the accountant works the disposal from the broker
+  statement. The broker is read only while the venue has an estimate at most
+  90 days old (`CASH_IN_LIEU_LOOKBACK_DAYS`), from 30 days before the earliest
+  such estimate. A posting dated before that window is never journalled, so
+  the disposal keeps what was read before. A late posting that falls inside a
+  newer estimate's window is journalled, and usually holds its instrument out
+  for want of an estimate within 30 days. Either way the accountant checks it
+  against the statement.
 - **Held out, never guessed.** An instrument is held out, with the reason and
   its fill count, when any of its fills predates migration 0085, has no day
   rate, or is in a second currency. It is also held out when the section 104
