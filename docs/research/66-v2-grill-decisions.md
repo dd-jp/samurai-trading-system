@@ -685,7 +685,7 @@ Build choices David ruled on the same day (2026-10-08, #2024):
 4. **Changed: a paper-week fidelity check compares the real leg's fill prices with the shadow's.** That Alpaca paper fills the real leg from the same feed the quote is read from stays unverified until that check runs. It is recorded in the spec's known limits and not built yet.
 5. **Accepted: a dry run reads no feed and keeps the daily-bar simulation.**
 
-*Built 2026-10-08 (#2024):* ruling 2's floor in `server/apps/v2/signals/processor.ts`, after the stale-close check. The check of ruling 4 is not built.
+*Built 2026-10-08 (#2024):* ruling 2's floor in `server/apps/v2/signals/processor.ts`, after the stale-close check. *Built 2026-10-15 (#2024):* ruling 4's check as a read-only report, `npm run v2:signal-fill-fidelity <from> <to> [store]` (`server/apps/v2/signal-fill-fidelity.ts`): per signal, the real leg's Alpaca entry fill against the no-veto shadow's in bps, with the mean, median and mean absolute delta and the unpaired signals counted by reason. No pass line was ruled, so it gates and alerts on nothing.
 
 ## Rulings of 2026-10-08 — vol-target trial defaults and 2× cost, data sanity defaults, data spend (#1860, #2074, #2025)
 
