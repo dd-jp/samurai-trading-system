@@ -52,21 +52,22 @@ interface Legs {
   shadow?: number | null;
 }
 
-// Only a primary order Alpaca accepted outside a dry run has a broker fill to compare; the no-veto
-// book is the shadow. Prices are native USD, so FX never enters the delta
+// Prices are native USD, so FX never enters the delta. One fill without a native price voids the
+// leg's average rather than understating it
 const SIGNAL_ENTRIES_SQL = `
   SELECT json_extract(d.payload, '$.signal_id') AS signal_id, o.instrument, b.variant,
          (b.variant = 'primary' AND o.venue = 'alpaca' AND o.dry_run = 0
            AND o.outcome IN ('submitted', 'cancelled')) AS at_broker,
          (SELECT SUM(f.qty) FROM v2_fills f
            WHERE f.client_order_id = o.client_order_id AND f.leg = 'entry') AS filled_qty,
-         (SELECT SUM(f.qty * f.price_native) FROM v2_fills f
+         (SELECT CASE WHEN COUNT(*) = COUNT(f.price_native) THEN SUM(f.qty * f.price_native) END
+            FROM v2_fills f
            WHERE f.client_order_id = o.client_order_id AND f.leg = 'entry') AS filled_value_native
     FROM v2_orders o
     JOIN v2_books b ON b.book_id = o.book_id
     JOIN v2_decisions d ON d.decision_id = o.decision_id
    WHERE b.sleeve_id = '${SIGNALS_SLEEVE_ID}' AND b.variant IN ('primary', 'no-veto')
-     AND o.leg = 'entry' AND o.trading_date BETWEEN ? AND ?
+     AND o.leg = 'entry' AND o.side = 'buy' AND o.trading_date BETWEEN ? AND ?
      AND json_extract(d.payload, '$.signal_id') IS NOT NULL
    ORDER BY o.trading_date, o.rowid`;
 
@@ -162,7 +163,7 @@ export function formatSignalFillFidelity(pairs: readonly SignalFillPair[]): stri
   const { counts } = summary;
   return [
     `${counts.paired} paired: mean ${bps(summary.meanBps)}, median ${bps(summary.medianBps)}, mean absolute ${bps(summary.meanAbsBps)} (positive: the real leg paid more than the shadow)`,
-    `unpaired: no broker primary ${counts.no_broker_primary}, no shadow ${counts.no_shadow}, primary unfilled ${counts.primary_unfilled}, shadow unfilled ${counts.shadow_unfilled}, both unfilled ${counts.both_unfilled}`,
+    `unpaired: no broker primary ${counts.no_broker_primary}, no shadow ${counts.no_shadow}, primary unfilled ${counts.primary_unfilled}, shadow unfilled ${counts.shadow_unfilled}, both unfilled ${counts.both_unfilled} (unfilled includes a leg not booked yet)`,
     'per signal:',
     ...pairs.map(pairLine),
   ].join('\n');

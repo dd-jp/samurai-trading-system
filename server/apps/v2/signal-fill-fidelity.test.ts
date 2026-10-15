@@ -27,9 +27,10 @@ interface OrderSeed {
   readonly leg?: string;
   readonly dryRun?: number;
   readonly outcome?: string;
+  readonly side?: string;
   readonly fills?: readonly {
     readonly qty: number;
-    readonly price: number;
+    readonly price: number | null;
     readonly leg?: string;
   }[];
 }
@@ -40,6 +41,7 @@ const SEED_DEFAULTS = {
   venue: 'alpaca',
   leg: 'entry',
   dryRun: 0,
+  side: 'buy',
   fills: [] as NonNullable<OrderSeed['fills']>,
 };
 
@@ -64,7 +66,7 @@ function seededStore(orders: readonly OrderSeed[]): StoreHandle {
   const order = db.prepare(
     `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
        leg, side, dry_run, outcome, payload, recorded_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'buy', ?, ?, '{}', 't')`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', 't')`,
   );
   const fill = db.prepare(
     `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
@@ -84,6 +86,7 @@ function seededStore(orders: readonly OrderSeed[]): StoreHandle {
       row.instrument,
       row.venue,
       row.leg,
+      row.side,
       row.dryRun,
       row.outcome,
     );
@@ -125,6 +128,7 @@ describe('readSignalEntries', () => {
       { book: PRIMARY, signal: 's5', leg: 'exit' },
       { book: 'debate/primary', signal: 's6' },
       { book: PRIMARY, signal: undefined },
+      { book: PRIMARY, signal: 's7', side: 'sell', fills: [{ qty: 10, price: 100 }] },
     ]);
     const rows = readSignalEntries(db, { from: '2026-10-01', to: '2026-10-19' });
     db.close();
@@ -134,6 +138,22 @@ describe('readSignalEntries', () => {
       row({ signal_id: 's2', at_broker: 0, filled_qty: null, filled_value_native: null }),
       row({ signal_id: 's3', filled_qty: null, filled_value_native: null }),
     ]);
+  });
+
+  it('voids a leg whose fills are only partly priced in native USD', () => {
+    const db = seededStore([
+      {
+        book: PRIMARY,
+        signal: 's1',
+        fills: [
+          { qty: 4, price: 100 },
+          { qty: 6, price: null },
+        ],
+      },
+    ]);
+    const rows = readSignalEntries(db, OPEN);
+    db.close();
+    expect(rows).toEqual([row({ filled_value_native: null })]);
   });
 
   it('counts only a submitted or cancelled Alpaca primary as at the broker', () => {
@@ -269,7 +289,7 @@ describe('formatSignalFillFidelity', () => {
     expect(formatSignalFillFidelity([paired('a', 12.34), unfilled])).toBe(
       [
         '1 paired: mean 12.3 bps, median 12.3 bps, mean absolute 12.3 bps (positive: the real leg paid more than the shadow)',
-        'unpaired: no broker primary 0, no shadow 0, primary unfilled 0, shadow unfilled 1, both unfilled 0',
+        'unpaired: no broker primary 0, no shadow 0, primary unfilled 0, shadow unfilled 1, both unfilled 0 (unfilled includes a leg not booked yet)',
         'per signal:',
         'a AAPL paired: real 100.1234, shadow 100.0000, delta 12.3 bps',
         'b MSFT shadow_unfilled: real 50.1235, shadow -, delta n/a',
