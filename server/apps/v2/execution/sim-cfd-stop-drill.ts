@@ -29,13 +29,15 @@ export interface DrillTarget {
   readonly side?: DrillSide;
 }
 
-// The UK single-stock long leg exists because a Sell stop resting below a GBP CfdOnStock long had
-// never been observed when UK CFD longs were built (#1914 comment 6179140977)
-export const DEFAULT_DRILL_TARGETS: readonly DrillTarget[] = [
-  { symbol: 'AAPL:xnas', assetType: 'CfdOnStock' },
-  { symbol: 'ISF:xlon', assetType: 'CfdOnEtf' },
-  { symbol: 'RR:xlon', assetType: 'CfdOnStock', side: 'long' },
-];
+export const DEFAULT_STOCK_SHORT: DrillTarget = { symbol: 'AAPL:xnas', assetType: 'CfdOnStock' };
+export const DEFAULT_ETF_SHORT: DrillTarget = { symbol: 'ISF:xlon', assetType: 'CfdOnEtf' };
+// The only drill of a Sell stop resting under a CFD long; without it `CFD_RESTING_STOP_VERIFIED`
+// rests on short-only evidence for UK single-stock longs (#1914 comment 6179140977)
+export const DEFAULT_UK_LONG: DrillTarget = {
+  symbol: 'RR:xlon',
+  assetType: 'CfdOnStock',
+  side: 'long',
+};
 
 function isLong(record: { readonly side?: DrillSide }): boolean {
   return record.side === 'long';
@@ -324,20 +326,25 @@ function amendPayload(
   };
 }
 
+// A crossing amend was refused as OnWrongSideOfMarket on SIM (2026-10-09 record), so one tick
+// outside the fresh quote is the candidate that rests and triggers on the next tick against the position
 function triggerCandidates(
   options: DrillOptions,
   record: InstrumentEvidence,
   fill: number,
   rules: InstrumentRules,
+  quote: SimQuote,
 ): number[] {
   const tick = rules.tickSize(fill);
   const fallback = rules.defaultStopLossFraction;
   const long = isLong(record);
   const away = long ? -1 : 1;
   const towardStop = long ? 'down' : 'up';
+  const touch = long ? quote.bid : quote.ask;
   return [
     toTick(fill * (1 - away * options.crossDistance), tick, long ? 'up' : 'down'),
     toTick(fill * (1 + away * options.nearDistance), tick, towardStop),
+    toTick(touch + away * rules.tickSize(touch), rules.tickSize(touch), towardStop),
     ...(fallback === undefined ? [] : [toTick(fill * (1 + away * fallback), tick, towardStop)]),
   ];
 }
@@ -345,12 +352,14 @@ function triggerCandidates(
 async function amendToTrigger(
   drill: Drill,
   record: InstrumentEvidence,
-  rules: InstrumentRules,
+  prepared: { instrument: DrillInstrument; rules: InstrumentRules },
 ): Promise<void> {
+  const { rules } = prepared;
   const fill = record.entry?.fillPrice;
   const stop = record.stop;
   if (fill === undefined || stop?.orderId === undefined) fail(record, 'drill_fill_price_unknown');
-  const candidates = triggerCandidates(drill.options, record, fill, rules);
+  const quote = await quoteOf(drill.gateway, prepared.instrument);
+  const candidates = triggerCandidates(drill.options, record, fill, rules, quote);
   stop.amendAttempts = [];
   for (const price of candidates) {
     const reply = await drill.gateway.send(
@@ -404,7 +413,7 @@ async function drillInstrument(drill: Drill, target: DrillTarget): Promise<void>
   await placeEntry(drill, record, prepared);
   await awaitFill(drill, record, prepared.instrument);
   await verifyRest(drill, record, prepared);
-  await amendToTrigger(drill, record, prepared.rules);
+  await amendToTrigger(drill, record, prepared);
   await awaitTrigger(drill, record, prepared.instrument);
   record.outcome = 'passed';
   note(drill, 'drill_instrument_passed', { symbol: record.symbol });
@@ -489,7 +498,7 @@ async function cleanUp(drill: Drill): Promise<void> {
 export function newEvidence(clock: DrillClock): DrillEvidence {
   return {
     drill: 'sim-cfd-stop-drill',
-    refs: ['#1400', '#1916'],
+    refs: ['#1400', '#1916', '#1914'],
     gateway: SAXO_SIM_GATEWAY,
     startedAt: clock.now().toISOString(),
     instruments: [],

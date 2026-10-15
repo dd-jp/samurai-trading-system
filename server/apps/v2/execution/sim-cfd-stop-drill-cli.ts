@@ -19,7 +19,9 @@ import {
 import { type DrillEvidence, redact, renderSummary } from './sim-cfd-drill-evidence.js';
 import {
   DEFAULT_DRILL_OPTIONS,
-  DEFAULT_DRILL_TARGETS,
+  DEFAULT_ETF_SHORT,
+  DEFAULT_STOCK_SHORT,
+  DEFAULT_UK_LONG,
   type DrillClock,
   type DrillTarget,
   runSimCfdStopDrill,
@@ -37,9 +39,14 @@ export interface DrillArgs {
 
 export function parseDrillArgs(argv: readonly string[]): DrillArgs {
   const values = flagPairs(argv, ['--stock', '--etf', '--uk-long', '--out-dir'], DRILL_USAGE);
-  const flags = ['stock', 'etf', 'uk-long'];
-  const chosen = DEFAULT_DRILL_TARGETS.flatMap((target, index): DrillTarget[] => {
-    const symbol = values.get(flags[index] ?? '') ?? target.symbol;
+  const chosen = (
+    [
+      ['stock', DEFAULT_STOCK_SHORT],
+      ['etf', DEFAULT_ETF_SHORT],
+      ['uk-long', DEFAULT_UK_LONG],
+    ] as const
+  ).flatMap(([flag, target]): DrillTarget[] => {
+    const symbol = values.get(flag) ?? target.symbol;
     return symbol === 'none' ? [] : [{ ...target, symbol }];
   });
   if (chosen.length === 0) throw new Error(`nothing to drill\n${DRILL_USAGE}`);

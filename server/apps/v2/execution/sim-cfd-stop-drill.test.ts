@@ -538,18 +538,34 @@ describe('the UK single-stock long leg (#1914)', () => {
     expect(fake.trades()[0]?.body).toMatchObject({ BuySell: 'Buy', Uic: 411 });
   });
 
-  it('falls back below the fill, then to the default stop-loss distance below it', async () => {
+  it('falls back below the fill, a tick under the fresh bid, then the default distance below', async () => {
     const fake = new FakeSaxoSim();
     fake.ukListed = true;
-    fake.amendStatuses = [400, 400];
+    fake.amendStatuses = [400, 400, 400];
     const { evidence } = await drill(fake, LONG_OPTIONS);
     expect(evidence.instruments[0]?.stop?.amendAttempts?.map((a) => [a.price, a.status])).toEqual([
       [201, 400],
       [199.9, 400],
+      [199.89, 400],
       [199, 200],
     ]);
     expect(evidence.passed).toBe(true);
   });
+
+  it.each([
+    ['long', LONG_OPTIONS, [201.01, 199.9, 199.89, 199]],
+    ['short', { ...OPTIONS, targets: OPTIONS.targets.slice(0, 1) }, [199, 200.11, 200.11, 201.01]],
+  ] as const)(
+    'rounds each %s amend off a fill that sits between ticks',
+    async (_side, options, prices) => {
+      const fake = new FakeSaxoSim();
+      fake.ukListed = true;
+      fake.fillPrice = 200.003;
+      fake.amendStatuses = [400, 400, 400];
+      const { evidence } = await drill(fake, options);
+      expect(evidence.instruments[0]?.stop?.amendAttempts?.map((a) => a.price)).toEqual(prices);
+    },
+  );
 
   it('waits for a long of the amount sent', async () => {
     const fake = new FakeSaxoSim();
@@ -714,13 +730,14 @@ describe('cleanup on failure', () => {
     expect(evidence.passed).toBe(false);
   });
 
-  it('falls back to the instrument default stop-loss distance when both amends are rejected', async () => {
+  it('falls back to a tick outside the fresh ask, then the default stop-loss distance', async () => {
     const fake = new FakeSaxoSim();
-    fake.amendStatuses = [400, 400];
+    fake.amendStatuses = [400, 400, 400];
     const { evidence } = await drill(fake);
     expect(evidence.instruments[0]?.stop?.amendAttempts?.map((a) => [a.price, a.status])).toEqual([
       [199, 400],
       [200.1, 400],
+      [200.11, 400],
       [201, 200],
     ]);
     expect(evidence.passed).toBe(true);
@@ -728,7 +745,7 @@ describe('cleanup on failure', () => {
 
   it('fails when Saxo rejects every amend and still cleans up', async () => {
     const fake = new FakeSaxoSim();
-    fake.amendStatuses = [400, 400, 400];
+    fake.amendStatuses = [400, 400, 400, 400];
     const { evidence } = await drill(fake);
     expect(evidence.failure).toBe('drill_stop_amend_rejected: AAPL:xnas');
     expect(evidence.cleanup.cancelled.sort()).toEqual(['s-211', 't-211']);
@@ -773,9 +790,9 @@ describe('cleanup on failure', () => {
   ])('tries no default-distance amend when OrderDistances is %j', async (distances) => {
     const fake = new FakeSaxoSim();
     fake.orderDistances = distances;
-    fake.amendStatuses = [400, 400];
+    fake.amendStatuses = [400, 400, 400];
     const { evidence } = await drill(fake);
-    expect(evidence.instruments[0]?.stop?.amendAttempts).toHaveLength(2);
+    expect(evidence.instruments[0]?.stop?.amendAttempts).toHaveLength(3);
     expect(evidence.failure).toBe('drill_stop_amend_rejected: AAPL:xnas');
   });
 
@@ -1323,7 +1340,7 @@ describe('what the drill matches on', () => {
   it('records the trial account and every step of a passing run', async () => {
     const { evidence } = await drill(new FakeSaxoSim(), stockOnly);
     expect(evidence.account).toEqual({ isTrialAccount: true, currency: 'EUR' });
-    expect(evidence.refs).toEqual(['#1400', '#1916']);
+    expect(evidence.refs).toEqual(['#1400', '#1916', '#1914']);
     expect(evidence.steps.map((step) => step.code)).toEqual([
       'drill_trial_account_confirmed',
       'drill_instrument_started',
@@ -1433,7 +1450,7 @@ describe('the rendered summary', () => {
     expect(renderSummary(evidence, 'r.json').split('\n')).toEqual([
       '# Saxo SIM CFD resting-stop drill, 2026-10-01',
       '',
-      'Refs #1400 #1916. Verdict: **PASSED**.',
+      'Refs #1400 #1916 #1914. Verdict: **PASSED**.',
       '',
       `Gateway ${SAXO_SIM_GATEWAY}, Saxo trial account (EUR). Run ${evidence.startedAt} to ${evidence.finishedAt}. Full record: r.json.`,
       '',
