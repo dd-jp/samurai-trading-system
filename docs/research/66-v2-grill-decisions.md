@@ -967,6 +967,13 @@ David ruled in chat on 2026-10-12, recorded on [#2024](https://github.com/dd-jp/
 - The calendar is the static exchange table the venue-session gate reads, not the injected gate, so production and replay read the same answer. A weekday past the table counts as a session, so an unlisted holiday there defers the entry rather than books it on the wrong bar. A replay of a day journalled before this build, with a fill-day gap, shows the old booking as a `fills` divergence (fail safe).
 - Build note (review of #2129, not a ruling): the refusal maps to the `stale_bar` fault kind (`REFUSAL_FAULTS`, `server/apps/v2/journal/faults.ts`), as `MARK_FRESHNESS` and `CALENDAR_REFERENCE` do, since a fill-day bar missing behind a later one is a data-coverage fault. Each deferring or cancelling cycle records one, so it counts against the fault-free weeks (#1878's rule that every kind counts). Counting it can only delay promotion, never loosen the gate; David can rule it out.
 
+## Ruling of 2026-10-15 — standard CRAP formula (#2120)
+
+The CRAP gate (`server/tools/crap-gate.ts`) scored `c × (1 − cov)² + c` from #1776 on, with no recorded reason. Standard CRAP (Savoia & Evans), which CI's `fallow health` step already uses, is `c² × (1 − cov)³ + c`. The gate now scores standard CRAP. Asked whether the thresholds move with it, David chose **"Keep 7 and 15 (Recommended)"**, recorded on [#2120](https://github.com/dd-jp/samurai-trading-system/issues/2120#issuecomment-6202529958): the 7 ratchet and the repo-wide 15 floor stay.
+
+- Measured over 1,311 scored functions: above 7 went from 10 to 12, and above 15 stayed at 0. Both new functions are complexity 3 at 0% coverage, which scores 6 under the old formula and 12 under standard CRAP. The one in the strict v2 scope (the dashboard fixture server's entry point) was split out and tested, which leaves 11 above 7. The other, `formatReport` in `server/tools/check-path-citations.ts`, sits outside the ratchet and under 15.
+- The change only tightens the gate at any integer threshold, which 7 and 15 are (Biome's complexity is an integer too). With u = 1 − cov, new − old = c·u²·(c·u − 1). Below the threshold T, the old formula exceeds T only when u > 1/√c ≥ 1/c, and there the new score is at least the old one. At or above T, both formulas already fail the function. So no function can newly pass at 7 or 15.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

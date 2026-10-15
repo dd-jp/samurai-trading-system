@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs';
+import { type AddressInfo, createServer } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { BarsMarketData } from '../data/index.js';
@@ -8,6 +9,7 @@ import {
   FixtureClock,
   type FixtureScenario,
   fixtureScenarioOf,
+  startFixtureDashboard,
 } from './fixture-server.js';
 import { OverviewReader } from './overview.js';
 import { PositionsPanel } from './positions.js';
@@ -84,5 +86,53 @@ describe('FixtureClock', () => {
     const drift = new FixtureClock().now().getTime() - FIXTURE_START.getTime();
     expect(drift).toBeGreaterThanOrEqual(0);
     expect(drift).toBeLessThan(5_000);
+  });
+});
+
+describe('startFixtureDashboard', () => {
+  const token = 'fixture-test-token';
+
+  async function overviewServed(env: NodeJS.ProcessEnv) {
+    const { server, db, dir } = await startFixtureDashboard({
+      ...env,
+      SAMURAI_DASHBOARD_TOKEN: token,
+    });
+    dirs.push(dir);
+    try {
+      const response = await fetch(new URL('/api/v2/overview', server.url), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return { url: server.url, status: response.status, body: await response.json() };
+    } finally {
+      await server.stop();
+      db.close();
+    }
+  }
+
+  async function freePort(): Promise<number> {
+    const probe = createServer();
+    await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise((done) => probe.close(done));
+    return port;
+  }
+
+  it('serves the named scenario on the host and port the env gives', async () => {
+    const port = await freePort();
+    const served = await overviewServed({
+      HOST: 'localhost',
+      PORT: String(port),
+      V2_FIXTURE_SCENARIO: 'loss-budget-halted',
+      V2_BUNDLE_ROOT: '/nonexistent',
+    });
+    expect(served.url).toBe(`http://localhost:${port}`);
+    expect(served.status).toBe(200);
+    expect(served.body).toMatchObject({ control: { state: 'halted-loss-budget' } });
+  });
+
+  it('defaults to loopback, an ephemeral port and the default scenario', async () => {
+    const served = await overviewServed({});
+    expect(served.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+/);
+    expect(served.body).toMatchObject({ control: { state: 'running' } });
   });
 });
