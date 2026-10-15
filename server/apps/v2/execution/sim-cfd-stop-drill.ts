@@ -2,6 +2,7 @@ import { SAXO_SIM_GATEWAY, type SaxoSimGateway } from './saxo-sim-gateway.js';
 import {
   type AccountFlatness,
   type DrillEvidence,
+  type DrillSide,
   drillPassed,
   type InstrumentEvidence,
   isFlat,
@@ -25,12 +26,22 @@ import {
 export interface DrillTarget {
   readonly symbol: string;
   readonly assetType: DrillAssetType;
+  readonly side?: DrillSide;
 }
 
-export const DEFAULT_DRILL_TARGETS: readonly DrillTarget[] = [
-  { symbol: 'AAPL:xnas', assetType: 'CfdOnStock' },
-  { symbol: 'ISF:xlon', assetType: 'CfdOnEtf' },
-];
+export const DEFAULT_STOCK_SHORT: DrillTarget = { symbol: 'AAPL:xnas', assetType: 'CfdOnStock' };
+export const DEFAULT_ETF_SHORT: DrillTarget = { symbol: 'ISF:xlon', assetType: 'CfdOnEtf' };
+// The only drill of a Sell stop resting under a CFD long; without it `CFD_RESTING_STOP_VERIFIED`
+// rests on short-only evidence for UK single-stock longs (#1914 comment 6179140977)
+export const DEFAULT_UK_LONG: DrillTarget = {
+  symbol: 'RR:xlon',
+  assetType: 'CfdOnStock',
+  side: 'long',
+};
+
+function isLong(record: { readonly side?: DrillSide }): boolean {
+  return record.side === 'long';
+}
 
 export interface DrillOptions {
   readonly targets: readonly DrillTarget[];
@@ -155,7 +166,7 @@ async function openQuote(
   const quote = await quoteOf(drill.gateway, instrument);
   record.quote = quote;
   if (!quote.isMarketOpen) return skip(record, 'market_closed');
-  if (quote.shortTradeDisabled) return skip(record, 'short_disabled');
+  if (!isLong(record) && quote.shortTradeDisabled) return skip(record, 'short_disabled');
   if (!(quote.bid > 0 && quote.ask >= quote.bid)) fail(record, 'quote_unusable');
   return quote;
 }
@@ -172,17 +183,19 @@ async function prepare(
   return rules === undefined || quote === undefined ? undefined : { instrument, rules, quote };
 }
 
-export function shortWithStop(
+export function entryWithStop(
+  side: DrillSide,
   account: SimAccount,
   instrument: DrillInstrument,
   amount: number,
   prices: { stop: number; target: number },
   reference: string,
 ): Record<string, unknown> {
+  const exitSide = side === 'long' ? 'Sell' : 'Buy';
   const leg = (OrderType: 'StopIfTraded' | 'Limit', OrderPrice: number, suffix: string) => ({
     Uic: instrument.uic,
     AssetType: instrument.assetType,
-    BuySell: 'Buy',
+    BuySell: exitSide,
     Amount: amount,
     OrderType,
     OrderPrice,
@@ -194,7 +207,7 @@ export function shortWithStop(
     AccountKey: account.accountKey,
     Uic: instrument.uic,
     AssetType: instrument.assetType,
-    BuySell: 'Sell',
+    BuySell: side === 'long' ? 'Buy' : 'Sell',
     Amount: amount,
     OrderType: 'Market',
     OrderDuration: { DurationType: 'DayOrder' },
@@ -220,21 +233,29 @@ async function placeEntry(
 ): Promise<void> {
   const { instrument, rules, quote } = prepared;
   const amount = rules.minimumAmount;
-  const stop = toTick(
+  const above = toTick(
     quote.ask * (1 + drill.options.restDistance),
     rules.tickSize(quote.ask),
     'up',
   );
-  const target = toTick(
+  const below = toTick(
     quote.bid * (1 - drill.options.restDistance),
     rules.tickSize(quote.bid),
     'down',
   );
+  const [stop, target] = isLong(record) ? [below, above] : [above, below];
   const reference = `drill-${drill.options.runId}-${instrument.uic}`;
   record.amount = amount;
   record.stop = { placedPrice: stop };
   record.targetPrice = target;
-  const payload = shortWithStop(drill.account, instrument, amount, { stop, target }, reference);
+  const payload = entryWithStop(
+    record.side ?? 'short',
+    drill.account,
+    instrument,
+    amount,
+    { stop, target },
+    reference,
+  );
   const reply = await drill.gateway.send('POST', '/trade/v2/orders', payload);
   note(drill, 'drill_entry_placed', {
     symbol: record.symbol,
@@ -252,11 +273,9 @@ async function placeEntry(
 }
 
 async function awaitFill(drill: Drill, record: InstrumentEvidence, instrument: DrillInstrument) {
-  const amount = record.amount ?? 0;
+  const held = (record.amount ?? 0) * (isLong(record) ? 1 : -1);
   const position = await poll(drill, drill.options.fillTimeoutMs, async () =>
-    (await netPositions(drill.gateway)).find(
-      (row) => isOn(instrument)(row) && row.amount === -amount,
-    ),
+    (await netPositions(drill.gateway)).find((row) => isOn(instrument)(row) && row.amount === held),
   );
   if (position === undefined || record.entry === undefined) fail(record, 'drill_entry_not_filled');
   record.entry.fillPrice = position.averageOpenPrice;
@@ -284,7 +303,7 @@ async function verifyRest(
   note(drill, 'drill_stop_resting', { symbol: record.symbol, order: row });
   const halfTick = prepared.rules.tickSize(stop.placedPrice) / 2;
   const matches =
-    row.buySell === 'Buy' &&
+    row.buySell === (isLong(record) ? 'Sell' : 'Buy') &&
     row.amount === record.amount &&
     Math.abs((row.price ?? Number.NaN) - stop.placedPrice) <= halfTick;
   if (!matches) fail(record, 'drill_stop_mismatch');
@@ -307,21 +326,40 @@ function amendPayload(
   };
 }
 
+// A crossing amend was refused as OnWrongSideOfMarket on SIM (2026-10-09 record), so one tick
+// outside the fresh quote is the candidate that rests and triggers on the next tick against the position
+function triggerCandidates(
+  options: DrillOptions,
+  record: InstrumentEvidence,
+  fill: number,
+  rules: InstrumentRules,
+  quote: SimQuote,
+): number[] {
+  const tick = rules.tickSize(fill);
+  const fallback = rules.defaultStopLossFraction;
+  const long = isLong(record);
+  const away = long ? -1 : 1;
+  const towardStop = long ? 'down' : 'up';
+  const touch = long ? quote.bid : quote.ask;
+  return [
+    toTick(fill * (1 - away * options.crossDistance), tick, long ? 'up' : 'down'),
+    toTick(fill * (1 + away * options.nearDistance), tick, towardStop),
+    toTick(touch + away * rules.tickSize(touch), rules.tickSize(touch), towardStop),
+    ...(fallback === undefined ? [] : [toTick(fill * (1 + away * fallback), tick, towardStop)]),
+  ];
+}
+
 async function amendToTrigger(
   drill: Drill,
   record: InstrumentEvidence,
-  rules: InstrumentRules,
+  prepared: { instrument: DrillInstrument; rules: InstrumentRules },
 ): Promise<void> {
+  const { rules } = prepared;
   const fill = record.entry?.fillPrice;
   const stop = record.stop;
   if (fill === undefined || stop?.orderId === undefined) fail(record, 'drill_fill_price_unknown');
-  const tick = rules.tickSize(fill);
-  const fallback = rules.defaultStopLossFraction;
-  const candidates = [
-    toTick(fill * (1 - drill.options.crossDistance), tick, 'down'),
-    toTick(fill * (1 + drill.options.nearDistance), tick, 'up'),
-    ...(fallback === undefined ? [] : [toTick(fill * (1 + fallback), tick, 'up')]),
-  ];
+  const quote = await quoteOf(drill.gateway, prepared.instrument);
+  const candidates = triggerCandidates(drill.options, record, fill, rules, quote);
   stop.amendAttempts = [];
   for (const price of candidates) {
     const reply = await drill.gateway.send(
@@ -375,7 +413,7 @@ async function drillInstrument(drill: Drill, target: DrillTarget): Promise<void>
   await placeEntry(drill, record, prepared);
   await awaitFill(drill, record, prepared.instrument);
   await verifyRest(drill, record, prepared);
-  await amendToTrigger(drill, record, prepared.rules);
+  await amendToTrigger(drill, record, prepared);
   await awaitTrigger(drill, record, prepared.instrument);
   record.outcome = 'passed';
   note(drill, 'drill_instrument_passed', { symbol: record.symbol });
@@ -460,7 +498,7 @@ async function cleanUp(drill: Drill): Promise<void> {
 export function newEvidence(clock: DrillClock): DrillEvidence {
   return {
     drill: 'sim-cfd-stop-drill',
-    refs: ['#1400', '#1916'],
+    refs: ['#1400', '#1916', '#1914'],
     gateway: SAXO_SIM_GATEWAY,
     startedAt: clock.now().toISOString(),
     instruments: [],

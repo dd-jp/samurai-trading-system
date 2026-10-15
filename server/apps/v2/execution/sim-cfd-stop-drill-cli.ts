@@ -19,14 +19,16 @@ import {
 import { type DrillEvidence, redact, renderSummary } from './sim-cfd-drill-evidence.js';
 import {
   DEFAULT_DRILL_OPTIONS,
-  DEFAULT_DRILL_TARGETS,
+  DEFAULT_ETF_SHORT,
+  DEFAULT_STOCK_SHORT,
+  DEFAULT_UK_LONG,
   type DrillClock,
   type DrillTarget,
   runSimCfdStopDrill,
 } from './sim-cfd-stop-drill.js';
 
 export const DRILL_USAGE =
-  'usage: v2:sim-cfd-stop-drill [--stock SYMBOL|none] [--etf SYMBOL|none] [--out-dir DIR]';
+  'usage: v2:sim-cfd-stop-drill [--stock SYMBOL|none] [--etf SYMBOL|none] [--uk-long SYMBOL|none] [--out-dir DIR]';
 
 const DEFAULT_OUT_DIR = fileURLToPath(new URL('../../../../docs/reviews/', import.meta.url));
 
@@ -36,14 +38,17 @@ export interface DrillArgs {
 }
 
 export function parseDrillArgs(argv: readonly string[]): DrillArgs {
-  const values = flagPairs(argv, ['--stock', '--etf', '--out-dir'], DRILL_USAGE);
-  const [stock, etf] = DEFAULT_DRILL_TARGETS;
-  const chosen = [
-    { symbol: values.get('stock') ?? stock?.symbol, assetType: 'CfdOnStock' as const },
-    { symbol: values.get('etf') ?? etf?.symbol, assetType: 'CfdOnEtf' as const },
-  ].filter(
-    (target): target is DrillTarget => target.symbol !== undefined && target.symbol !== 'none',
-  );
+  const values = flagPairs(argv, ['--stock', '--etf', '--uk-long', '--out-dir'], DRILL_USAGE);
+  const chosen = (
+    [
+      ['stock', DEFAULT_STOCK_SHORT],
+      ['etf', DEFAULT_ETF_SHORT],
+      ['uk-long', DEFAULT_UK_LONG],
+    ] as const
+  ).flatMap(([flag, target]): DrillTarget[] => {
+    const symbol = values.get(flag) ?? target.symbol;
+    return symbol === 'none' ? [] : [{ ...target, symbol }];
+  });
   if (chosen.length === 0) throw new Error(`nothing to drill\n${DRILL_USAGE}`);
   return { targets: chosen, outDir: resolve(values.get('out-dir') ?? DEFAULT_OUT_DIR) };
 }
