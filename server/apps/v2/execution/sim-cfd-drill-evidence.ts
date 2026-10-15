@@ -13,9 +13,12 @@ export interface AmendAttempt {
   readonly body: unknown;
 }
 
+export type DrillSide = 'short' | 'long';
+
 export interface InstrumentEvidence {
   readonly symbol: string;
   readonly assetType: DrillAssetType;
+  readonly side?: DrillSide;
   outcome: 'passed' | 'failed' | 'skipped' | 'running';
   reason?: string;
   uic?: number;
@@ -101,7 +104,7 @@ function instrumentRow(record: InstrumentEvidence): string {
   const stop = record.stop;
   const amended = stop?.amendAttempts?.find((attempt) => attempt.status === 200)?.price;
   return `| ${[
-    record.symbol,
+    record.side === 'long' ? `${record.symbol} long` : record.symbol,
     record.assetType,
     record.outcome,
     record.reason,

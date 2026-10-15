@@ -15,9 +15,9 @@ import { instrumentRules } from './sim-cfd-drill-reads.js';
 import {
   DEFAULT_DRILL_OPTIONS,
   type DrillOptions,
+  entryWithStop,
   newEvidence,
   runSimCfdStopDrill,
-  shortWithStop,
 } from './sim-cfd-stop-drill.js';
 import {
   type DrillDeps,
@@ -66,6 +66,7 @@ class FakeSaxoSim {
   trial = true;
   accountKey = ACCOUNT_KEY;
   etfListed = false;
+  ukListed = false;
   marketOpen = true;
   supportedOrderTypes = ['Market', 'Limit', 'StopIfTraded'];
   orderDistances: Record<string, unknown> = {
@@ -184,6 +185,7 @@ class FakeSaxoSim {
       { Symbol: 'AAPL:xmil', Identifier: 999, AssetType: 'CfdOnStock' },
       { Symbol: 'AAPL:xnas', Identifier: 211, AssetType: 'CfdOnStock' },
       ...(this.etfListed ? [{ Symbol: 'ISF:xlon', Identifier: 311, AssetType: 'CfdOnEtf' }] : []),
+      ...(this.ukListed ? [{ Symbol: 'RR:xlon', Identifier: 411, AssetType: 'CfdOnStock' }] : []),
     ];
     return rows.filter((row) => row.AssetType === assetType || row.AssetType === 'Stock');
   }
@@ -202,11 +204,12 @@ class FakeSaxoSim {
     if (this.entryStatus !== 200)
       return [this.entryStatus, { ErrorInfo: { ErrorCode: 'Rejected', AccountKey: ACCOUNT_KEY } }];
     const [stop, target] = body.Orders as Record<string, unknown>[];
+    const entrySign = body.BuySell === 'Sell' ? 1 : -1;
     if (this.fillsEntry)
       this.positions.push({
         uic,
         assetType,
-        amount: this.fillSign * amount,
+        amount: entrySign * this.fillSign * amount,
         price: this.fillPrice,
       });
     const leg = (id: string, type: string, price: unknown): Order => ({
@@ -215,7 +218,7 @@ class FakeSaxoSim {
       AssetType: assetType,
       OpenOrderType: type,
       Status: this.fillsEntry ? 'Working' : 'NotWorking',
-      BuySell: 'Buy',
+      BuySell: body.BuySell === 'Sell' ? 'Buy' : 'Sell',
       Amount: amount + (type === 'StopIfTraded' ? this.stopAmountDrift : 0),
       Price: Number(price) + (type === 'StopIfTraded' ? this.stopPriceDrift : 0),
       OrderRelation: 'Oco',
@@ -434,7 +437,8 @@ describe('the gateway', () => {
 
 describe('the order payload', () => {
   it('is a market short with a GTC StopIfTraded buy and a GTC limit buy as related orders', () => {
-    const payload = shortWithStop(
+    const payload = entryWithStop(
+      'short',
       { accountKey: ACCOUNT_KEY, clientKey: CLIENT_KEY, currency: 'EUR' },
       { uic: 211, assetType: 'CfdOnStock' },
       1,
@@ -488,6 +492,107 @@ describe('the order payload', () => {
       expect.objectContaining({ OrderType: 'Limit', OrderPrice: 179.91, BuySell: 'Buy' }),
     ]);
     expect(String(entry?.body?.ExternalReference).length).toBeLessThanOrEqual(50);
+  });
+});
+
+describe('the UK single-stock long leg (#1914)', () => {
+  const LONG_OPTIONS: DrillOptions = {
+    ...OPTIONS,
+    targets: [{ symbol: 'RR:xlon', assetType: 'CfdOnStock', side: 'long' }],
+  };
+
+  it('is a market long with a GTC StopIfTraded sell and a GTC limit sell as related orders', () => {
+    const payload = entryWithStop(
+      'long',
+      { accountKey: ACCOUNT_KEY, clientKey: CLIENT_KEY, currency: 'GBP' },
+      { uic: 411, assetType: 'CfdOnStock' },
+      1,
+      { stop: 179.91, target: 220.11 },
+      'drill-r1-411',
+    );
+    expect(payload).toMatchObject({ BuySell: 'Buy', OrderType: 'Market', Amount: 1 });
+    expect(payload.Orders).toEqual([
+      expect.objectContaining({ BuySell: 'Sell', OrderType: 'StopIfTraded', OrderPrice: 179.91 }),
+      expect.objectContaining({ BuySell: 'Sell', OrderType: 'Limit', OrderPrice: 220.11 }),
+    ]);
+  });
+
+  it('rests a sell stop 10% below the bid, amends it above the fill and closes flat', async () => {
+    const fake = new FakeSaxoSim();
+    fake.ukListed = true;
+    const { evidence } = await drill(fake, LONG_OPTIONS);
+    expect(evidence.passed).toBe(true);
+    expect(evidence.instruments[0]).toMatchObject({
+      symbol: 'RR:xlon',
+      side: 'long',
+      outcome: 'passed',
+      uic: 411,
+      targetPrice: 220.11,
+      stop: {
+        placedPrice: 179.91,
+        rest: { status: 'Working', buySell: 'Sell', amount: 1, price: 179.91 },
+        amendAttempts: [{ price: 201, status: 200 }],
+      },
+      positionClosedAfterTrigger: true,
+    });
+    expect(fake.trades()[0]?.body).toMatchObject({ BuySell: 'Buy', Uic: 411 });
+  });
+
+  it('falls back below the fill, then to the default stop-loss distance below it', async () => {
+    const fake = new FakeSaxoSim();
+    fake.ukListed = true;
+    fake.amendStatuses = [400, 400];
+    const { evidence } = await drill(fake, LONG_OPTIONS);
+    expect(evidence.instruments[0]?.stop?.amendAttempts?.map((a) => [a.price, a.status])).toEqual([
+      [201, 400],
+      [199.9, 400],
+      [199, 200],
+    ]);
+    expect(evidence.passed).toBe(true);
+  });
+
+  it('waits for a long of the amount sent', async () => {
+    const fake = new FakeSaxoSim();
+    fake.ukListed = true;
+    fake.fillSign = 1;
+    const { evidence } = await drill(fake, LONG_OPTIONS);
+    expect(evidence.instruments[0]?.reason).toBe('drill_entry_not_filled');
+  });
+
+  it('fails a resting stop on the buy side of a long', async () => {
+    const fake = new FakeSaxoSim();
+    fake.ukListed = true;
+    const placeLong = fake.fetch;
+    const flipped: typeof fake.fetch = async (url, init) => {
+      const reply = await placeLong(url, init);
+      for (const order of fake.orders) order.BuySell = 'Buy';
+      return reply;
+    };
+    const clock = new FakeClock();
+    const gateway = new SaxoSimGateway({
+      baseUrl: SAXO_SIM_GATEWAY,
+      accessToken: async () => TOKEN,
+      fetch: flipped,
+      sleep: clock.sleep,
+      now: () => clock.now().getTime(),
+    });
+    const { evidence } = await runSimCfdStopDrill(gateway, LONG_OPTIONS, clock);
+    expect(evidence.instruments[0]?.reason).toBe('drill_stop_mismatch');
+  });
+
+  it('drills a long even where shorting is disabled', async () => {
+    const fake = new FakeSaxoSim();
+    fake.ukListed = true;
+    fake.shortDisabled = true;
+    const { evidence } = await drill(fake, LONG_OPTIONS);
+    expect(evidence.instruments[0]?.outcome).toBe('passed');
+  });
+
+  it('marks the long leg in the summary table', async () => {
+    const fake = new FakeSaxoSim();
+    fake.ukListed = true;
+    const { evidence } = await drill(fake, LONG_OPTIONS);
+    expect(renderSummary(evidence, 'x.json')).toContain('| RR:xlon long | CfdOnStock | passed |');
   });
 });
 
@@ -845,11 +950,12 @@ describe('the verdict and summary', () => {
 });
 
 describe('CLI arguments', () => {
-  it('defaults to AAPL and ISF CFDs written under docs/reviews', () => {
+  it('defaults to AAPL and ISF CFD shorts and an RR CFD long, written under docs/reviews', () => {
     const args = parseDrillArgs([]);
     expect(args.targets).toEqual([
       { symbol: 'AAPL:xnas', assetType: 'CfdOnStock' },
       { symbol: 'ISF:xlon', assetType: 'CfdOnEtf' },
+      { symbol: 'RR:xlon', assetType: 'CfdOnStock', side: 'long' },
     ]);
     expect(args.outDir.endsWith(join('docs', 'reviews'))).toBe(true);
   });
@@ -858,17 +964,24 @@ describe('CLI arguments', () => {
     expect(
       parseDrillArgs(['--stock', 'MSFT:xnas', '--etf', 'none', '--out-dir', '/tmp/x']),
     ).toEqual({
-      targets: [{ symbol: 'MSFT:xnas', assetType: 'CfdOnStock' }],
+      targets: [
+        { symbol: 'MSFT:xnas', assetType: 'CfdOnStock' },
+        { symbol: 'RR:xlon', assetType: 'CfdOnStock', side: 'long' },
+      ],
       outDir: '/tmp/x',
     });
+    expect(
+      parseDrillArgs(['--stock', 'none', '--etf', 'none', '--uk-long', 'BP:xlon']).targets,
+    ).toEqual([{ symbol: 'BP:xlon', assetType: 'CfdOnStock', side: 'long' }]);
   });
 
-  it.each([[['--stock']], [['--bogus', 'x']], [['--stock', 'none', '--etf', 'none']]])(
-    'refuses %j',
-    (argv) => {
-      expect(() => parseDrillArgs(argv)).toThrow(/usage/);
-    },
-  );
+  it.each([
+    [['--stock']],
+    [['--bogus', 'x']],
+    [['--stock', 'none', '--etf', 'none', '--uk-long', 'none']],
+  ])('refuses %j', (argv) => {
+    expect(() => parseDrillArgs(argv)).toThrow(/usage/);
+  });
 });
 
 describe('SIM token source', () => {
