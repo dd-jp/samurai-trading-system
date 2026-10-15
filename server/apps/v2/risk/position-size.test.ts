@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CFD_SHORT_GAP_BUDGET_FRACTION,
+  CFD_GAP_BUDGET_FRACTION,
   CFD_SHORT_GAP_FRACTION,
   MAX_POSITION_FRACTION_OF_EQUITY,
   positionSizeShares,
+  UK_STOCK_CFD_LONG_GAP_FRACTION,
 } from './position-size.js';
 
 const base = {
@@ -71,38 +72,47 @@ describe('positionSizeShares', () => {
   });
 });
 
-describe('positionSizeShares CFD short gap bound', () => {
+describe('positionSizeShares CFD gap bound', () => {
   const roomy = { ...base, equityGbp: 10_000, priceGbp: 10 };
+  const shortGap = (budgetGbp: number) => ({ budgetGbp, gapFraction: CFD_SHORT_GAP_FRACTION });
 
-  it('carries the ruled +30% gap and a 10% of sleeve loss cap budget', () => {
+  it('carries the ruled +30% short gap, 20% UK long gap and a 10% of sleeve loss cap budget', () => {
     expect(CFD_SHORT_GAP_FRACTION).toBe(0.3);
-    expect(CFD_SHORT_GAP_BUDGET_FRACTION).toBe(0.1);
+    expect(UK_STOCK_CFD_LONG_GAP_FRACTION).toBe(0.2);
+    expect(CFD_GAP_BUDGET_FRACTION).toBe(0.1);
   });
 
   it('leaves the size alone when no gap budget applies', () => {
     expect(positionSizeShares(roomy)).toBe(100);
-    expect(positionSizeShares({ ...roomy, gapBudgetGbp: undefined })).toBe(100);
+    expect(positionSizeShares({ ...roomy, gapBound: undefined })).toBe(100);
   });
 
   it('caps shares so a +30% gap costs at most the budget', () => {
-    expect(positionSizeShares({ ...roomy, gapBudgetGbp: 45 })).toBe(15);
+    expect(positionSizeShares({ ...roomy, gapBound: shortGap(45) })).toBe(15);
     expect(15 * 10 * CFD_SHORT_GAP_FRACTION).toBeCloseTo(45, 9);
   });
 
+  it('divides the budget by the bound gap, so a 20% long gap allows more than a 30% short gap', () => {
+    const longGap = { budgetGbp: 45, gapFraction: UK_STOCK_CFD_LONG_GAP_FRACTION };
+    expect(positionSizeShares({ ...roomy, gapBound: longGap })).toBe(22);
+    expect(positionSizeShares({ ...roomy, priceGbp: 225, gapBound: longGap })).toBe(1);
+    expect(positionSizeShares({ ...roomy, priceGbp: 225.01, gapBound: longGap })).toBe(0);
+  });
+
   it('drops a share the moment the price would push the gap loss over the budget', () => {
-    expect(positionSizeShares({ ...roomy, priceGbp: 10, gapBudgetGbp: 45 })).toBe(15);
-    expect(positionSizeShares({ ...roomy, priceGbp: 10.01, gapBudgetGbp: 45 })).toBe(14);
-    expect(positionSizeShares({ ...roomy, priceGbp: 150, gapBudgetGbp: 45 })).toBe(1);
-    expect(positionSizeShares({ ...roomy, priceGbp: 150.01, gapBudgetGbp: 45 })).toBe(0);
+    expect(positionSizeShares({ ...roomy, priceGbp: 10, gapBound: shortGap(45) })).toBe(15);
+    expect(positionSizeShares({ ...roomy, priceGbp: 10.01, gapBound: shortGap(45) })).toBe(14);
+    expect(positionSizeShares({ ...roomy, priceGbp: 150, gapBound: shortGap(45) })).toBe(1);
+    expect(positionSizeShares({ ...roomy, priceGbp: 150.01, gapBound: shortGap(45) })).toBe(0);
   });
 
   it('never raises a size the fixed-risk or notional rules already made smaller', () => {
-    expect(positionSizeShares({ ...roomy, gapBudgetGbp: 4_500 })).toBe(100);
-    expect(positionSizeShares({ ...base, gapBudgetGbp: 4_500 })).toBe(10);
+    expect(positionSizeShares({ ...roomy, gapBound: shortGap(4_500) })).toBe(100);
+    expect(positionSizeShares({ ...base, gapBound: shortGap(4_500) })).toBe(10);
   });
 
   it('is zero on a zero or negative budget', () => {
-    expect(positionSizeShares({ ...roomy, gapBudgetGbp: 0 })).toBe(0);
-    expect(positionSizeShares({ ...roomy, gapBudgetGbp: -45 })).toBe(0);
+    expect(positionSizeShares({ ...roomy, gapBound: shortGap(0) })).toBe(0);
+    expect(positionSizeShares({ ...roomy, gapBound: shortGap(-45) })).toBe(0);
   });
 });

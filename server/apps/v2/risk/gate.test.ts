@@ -408,7 +408,20 @@ describe('V2RiskGate', () => {
     expect(sized(100, 0.3)).toBe(0);
   });
 
-  it('does not gap-cap a long', () => {
+  it('caps a UK single stock CFD long so a 20% gap costs at most 10% of the sleeve loss cap (#1914)', () => {
+    const ukLong = { ...decision, instrument: 'RR_XLON', venue: 'saxo_cfd_gbp' as const };
+    const ukShort = { ...cfdShort, instrument: 'RR_XLON', venue: 'saxo_cfd_gbp' as const };
+    const sized = (lossCapGbp: number, entry: SleeveDecision) =>
+      gate({ capital: { ...year, lossCapGbp } }).approveEntry(request({ decision: entry })).size;
+    expect(sized(1_500, ukLong)).toBe(4);
+    expect(sized(150, ukLong)).toBe(3);
+    expect(sized(150, ukShort)).toBe(2);
+    expect(sized(100, ukLong)).toBe(2);
+    expect(sized(60, ukLong)).toBe(1);
+    expect(sized(20, ukLong)).toBe(0);
+  });
+
+  it('does not gap-cap a long that is not a UK single stock', () => {
     const tiny = gate({ capital: { ...year, lossCapGbp: 20 } });
     expect(tiny.approveEntry(request()).size).toBe(6);
   });

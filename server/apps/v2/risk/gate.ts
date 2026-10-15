@@ -22,7 +22,13 @@ import type { CapitalConfigStore } from './capital-config.js';
 import { entryLimitFor, entryOffsetBps, offsetRefusal } from './entry-limit.js';
 import { entryRoomRefusal, grossRoomGbp } from './gross-cap.js';
 import { sizeMultiplierFor } from './loss-budget.js';
-import { CFD_SHORT_GAP_BUDGET_FRACTION, positionSizeShares } from './position-size.js';
+import {
+  CFD_GAP_BUDGET_FRACTION,
+  CFD_SHORT_GAP_FRACTION,
+  type GapBound,
+  positionSizeShares,
+  UK_STOCK_CFD_LONG_GAP_FRACTION,
+} from './position-size.js';
 import {
   assertVolTargetSizing,
   type VolTargetSizing,
@@ -119,9 +125,17 @@ function closedUkStockCfd(): string {
   return 'uk_stock_cfd_disabled';
 }
 
-function gapBudgetGbp(decision: SleeveDecision, capital: CapitalYear): number | undefined {
-  if (decision.action !== 'enter_short') return undefined;
-  return capital.lossCapGbp * CFD_SHORT_GAP_BUDGET_FRACTION;
+function gapFractionFor(decision: SleeveDecision): number | undefined {
+  if (decision.action === 'enter_short') return CFD_SHORT_GAP_FRACTION;
+  if (decision.action === 'enter_long' && isUkStock(decision.instrument))
+    return UK_STOCK_CFD_LONG_GAP_FRACTION;
+  return undefined;
+}
+
+function gapBoundFor(decision: SleeveDecision, capital: CapitalYear): GapBound | undefined {
+  const gapFraction = gapFractionFor(decision);
+  if (gapFraction === undefined) return undefined;
+  return { budgetGbp: capital.lossCapGbp * CFD_GAP_BUDGET_FRACTION, gapFraction };
 }
 
 export interface RiskGateDeps {
@@ -297,7 +311,7 @@ export class V2RiskGate implements RiskGate {
       sizeMultiplier: this.#multiplier(book.id, sleeveCapitalYear(spec, capital)),
       macroDay: spec.macroGate && book.variant !== 'no-macro-gate' && request.macroDay,
       volumeCapShares: volumeCap,
-      gapBudgetGbp: gapBudgetGbp(decision, sleeveCapitalYear(spec, capital)),
+      gapBound: gapBoundFor(decision, sleeveCapitalYear(spec, capital)),
       entryToStopGbp: entryToStop(limit, decision.stop_price) / fx,
     });
     return { size };

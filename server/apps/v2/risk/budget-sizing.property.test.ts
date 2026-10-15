@@ -15,6 +15,7 @@ import {
   MAX_POSITION_FRACTION_OF_EQUITY,
   type PositionSizeInput,
   positionSizeShares,
+  UK_STOCK_CFD_LONG_GAP_FRACTION,
 } from './position-size.js';
 import { averageDailyNotional, volumeCapShares } from './volume-cap.js';
 
@@ -188,7 +189,13 @@ const sizing = fc.record({
     fc.integer({ min: 0, max: 10_000_000 }),
     fc.constant(Number.POSITIVE_INFINITY),
   ),
-  gapBudgetGbp: fc.option(positive(0, 1_000), { nil: undefined }),
+  gapBound: fc.option(
+    fc.record({
+      budgetGbp: positive(0, 1_000),
+      gapFraction: fc.constantFrom(CFD_SHORT_GAP_FRACTION, UK_STOCK_CFD_LONG_GAP_FRACTION),
+    }),
+    { nil: undefined },
+  ),
   entryToStopGbp: fc.option(positive(0, 1_000), { nil: undefined }),
 });
 
@@ -197,7 +204,7 @@ const unconstrained = sizing.map(
     ...input,
     equityGbp: Math.abs(input.equityGbp),
     volumeCapShares: Number.POSITIVE_INFINITY,
-    gapBudgetGbp: undefined,
+    gapBound: undefined,
   }),
 );
 
@@ -216,7 +223,7 @@ describe('positionSizeShares bounds (doc 66 D8, Q13)', () => {
     );
   });
 
-  it('never exceeds the volume cap, the notional cap, the risk budget or the CFD short gap budget', () => {
+  it('never exceeds the volume cap, the notional cap, the risk budget or the CFD gap budget', () => {
     fc.assert(
       fc.property(sizing, (input) => {
         const shares = positionSizeShares(input);
@@ -232,9 +239,9 @@ describe('positionSizeShares bounds (doc 66 D8, Q13)', () => {
         expect(shares * riskPerShare).toBeLessThanOrEqual(
           Math.max(0, input.equityGbp * input.riskFraction * scale) * SLACK,
         );
-        if (input.gapBudgetGbp !== undefined) {
-          expect(shares * input.priceGbp * CFD_SHORT_GAP_FRACTION).toBeLessThanOrEqual(
-            input.gapBudgetGbp * SLACK,
+        if (input.gapBound !== undefined) {
+          expect(shares * input.priceGbp * input.gapBound.gapFraction).toBeLessThanOrEqual(
+            input.gapBound.budgetGbp * SLACK,
           );
         }
       }),
