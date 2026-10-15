@@ -1,4 +1,5 @@
 import { rmSync } from 'node:fs';
+import { type AddressInfo, createServer } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openSharedStore } from '../../../shared/store/index.js';
 import { BarsMarketData } from '../data/index.js';
@@ -108,14 +109,23 @@ describe('startFixtureDashboard', () => {
     }
   }
 
+  async function freePort(): Promise<number> {
+    const probe = createServer();
+    await new Promise<void>((done) => probe.listen(0, '127.0.0.1', done));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise((done) => probe.close(done));
+    return port;
+  }
+
   it('serves the named scenario on the host and port the env gives', async () => {
+    const port = await freePort();
     const served = await overviewServed({
-      HOST: '127.0.0.1',
-      PORT: '0',
+      HOST: 'localhost',
+      PORT: String(port),
       V2_FIXTURE_SCENARIO: 'loss-budget-halted',
       V2_BUNDLE_ROOT: '/nonexistent',
     });
-    expect(served.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+/);
+    expect(served.url).toBe(`http://localhost:${port}`);
     expect(served.status).toBe(200);
     expect(served.body).toMatchObject({ control: { state: 'halted-loss-budget' } });
   });

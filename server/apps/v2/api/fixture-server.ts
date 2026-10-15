@@ -5,7 +5,7 @@ import type { Clock } from '../../../shared/index.js';
 import { openSharedStore, type StoreHandle } from '../../../shared/store/index.js';
 import { runWhenInvoked } from '../../../tools/cli-entrypoint.js';
 import { DEFAULT_BUNDLE_ROOT } from './bundle.js';
-import { composeV2Dashboard } from './main.js';
+import { type ComposedDashboard, composeV2Dashboard } from './main.js';
 
 export const FIXTURE_TRADING_DATE = '2026-10-05';
 
@@ -134,7 +134,7 @@ export function createFixtureStore(scenario: FixtureScenario = 'default'): {
 
 export async function startFixtureDashboard(
   env: NodeJS.ProcessEnv,
-): Promise<ReturnType<typeof composeV2Dashboard> & { dir: string }> {
+): Promise<ComposedDashboard & { dir: string }> {
   const { storePath, dir } = createFixtureStore(fixtureScenarioOf(env.V2_FIXTURE_SCENARIO));
   const dashboard = composeV2Dashboard(
     {

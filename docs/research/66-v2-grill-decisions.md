@@ -972,7 +972,7 @@ David ruled in chat on 2026-10-12, recorded on [#2024](https://github.com/dd-jp/
 The CRAP gate (`server/tools/crap-gate.ts`) scored `c × (1 − cov)² + c` from #1776 on, with no recorded reason. Standard CRAP (Savoia & Evans), which CI's `fallow health` step already uses, is `c² × (1 − cov)³ + c`. The gate now scores standard CRAP. Asked whether the thresholds move with it, David chose **"Keep 7 and 15 (Recommended)"**, recorded on [#2120](https://github.com/dd-jp/samurai-trading-system/issues/2120#issuecomment-6202529958): the 7 ratchet and the repo-wide 15 floor stay.
 
 - Measured over 1,311 scored functions: above 7 went from 10 to 12, and above 15 stayed at 0. Both new functions are complexity 3 at 0% coverage, which scores 6 under the old formula and 12 under standard CRAP. The one in the strict v2 scope (the dashboard fixture server's entry point) was split out and tested, which leaves 11 above 7. The other, `formatReport` in `server/tools/check-path-citations.ts`, sits outside the ratchet and under 15.
-- The change only tightens the gate. With u = 1 − cov, new − old = c·u²·(c·u − 1). Below the threshold T, the old formula exceeds T only when u > 1/√c ≥ 1/c, and there the new score is at least the old one. At or above T, both formulas already fail the function. So no function can newly pass at 7 or 15.
+- The change only tightens the gate at any integer threshold, which 7 and 15 are (Biome's complexity is an integer too). With u = 1 − cov, new − old = c·u²·(c·u − 1). Below the threshold T, the old formula exceeds T only when u > 1/√c ≥ 1/c, and there the new score is at least the old one. At or above T, both formulas already fail the function. So no function can newly pass at 7 or 15.
 
 ## Still open
 
