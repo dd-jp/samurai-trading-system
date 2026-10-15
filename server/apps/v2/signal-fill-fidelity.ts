@@ -52,8 +52,8 @@ interface Legs {
   shadow?: number | null;
 }
 
-// Only a primary order that reached Alpaca has a broker fill to compare (V2OrderExecutor
-// .simulates); the no-veto book is the shadow. Prices are native USD, so FX never enters the delta
+// Only a primary order Alpaca accepted outside a dry run has a broker fill to compare; the no-veto
+// book is the shadow. Prices are native USD, so FX never enters the delta
 const SIGNAL_ENTRIES_SQL = `
   SELECT json_extract(d.payload, '$.signal_id') AS signal_id, o.instrument, b.variant,
          (b.variant = 'primary' AND o.venue = 'alpaca' AND o.dry_run = 0
