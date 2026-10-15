@@ -34,6 +34,19 @@ interface OrderSeed {
   }[];
 }
 
+const SEED_DEFAULTS = {
+  date: '2026-10-14',
+  instrument: 'AAPL',
+  venue: 'alpaca',
+  leg: 'entry',
+  dryRun: 0,
+  fills: [] as NonNullable<OrderSeed['fills']>,
+};
+
+function defaultOutcome(book: string): string {
+  return book === SHADOW ? 'simulated' : 'submitted';
+}
+
 function seededStore(orders: readonly OrderSeed[]): StoreHandle {
   const db = migratedMemoryStore();
   const book = db.prepare(
@@ -59,33 +72,24 @@ function seededStore(orders: readonly OrderSeed[]): StoreHandle {
      VALUES (?, ?, ?, ?, ?, 'alpaca', ?, 'buy', ?, 1, 0, ?, 't', 'paper')`,
   );
   orders.forEach((seed, index) => {
+    const row = { ...SEED_DEFAULTS, outcome: defaultOutcome(seed.book), ...seed };
     const id = `o${index}`;
-    const date = seed.date ?? '2026-10-14';
-    const instrument = seed.instrument ?? 'AAPL';
-    const payload = seed.signal === undefined ? {} : { signal_id: seed.signal };
-    decision.run(`d${index}`, seed.book, date, instrument, JSON.stringify(payload));
+    const payload = row.signal === undefined ? {} : { signal_id: row.signal };
+    decision.run(`d${index}`, row.book, row.date, row.instrument, JSON.stringify(payload));
     order.run(
       id,
       `d${index}`,
-      seed.book,
-      date,
-      instrument,
-      seed.venue ?? 'alpaca',
-      seed.leg ?? 'entry',
-      seed.dryRun ?? 0,
-      seed.outcome ?? (seed.book === SHADOW ? 'simulated' : 'submitted'),
+      row.book,
+      row.date,
+      row.instrument,
+      row.venue,
+      row.leg,
+      row.dryRun,
+      row.outcome,
     );
-    (seed.fills ?? []).forEach((part, n) => {
-      fill.run(
-        `${id}-f${n}`,
-        id,
-        seed.book,
-        date,
-        instrument,
-        part.leg ?? 'entry',
-        part.qty,
-        part.price,
-      );
+    row.fills.forEach((part, n) => {
+      const leg = part.leg ?? 'entry';
+      fill.run(`${id}-f${n}`, id, row.book, row.date, row.instrument, leg, part.qty, part.price);
     });
   });
   return db;
