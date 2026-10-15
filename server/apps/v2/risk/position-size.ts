@@ -3,7 +3,6 @@ import { MACRO_DAY_SIZE_FRACTION } from '../data/index.js';
 
 export const MAX_POSITION_FRACTION_OF_EQUITY = 0.1;
 export const CFD_SHORT_GAP_FRACTION = 0.3;
-// David 2026-10-15 (#1914): a UK single-stock CFD long is sized so a 20% overnight gap loses no more than a short's 30% gap does
 export const UK_STOCK_CFD_LONG_GAP_FRACTION = 0.2;
 export const CFD_GAP_BUDGET_FRACTION = 0.1;
 
