@@ -1,4 +1,8 @@
-import { type Arm2BacktestDeps, arm2BacktestSleeve } from './arm2-backtest.js';
+import {
+  type Arm2BacktestDeps,
+  arm2BacktestSleeve,
+  VOL_TARGET_TRIAL_START_CAPITAL_GBP,
+} from './arm2-backtest.js';
 import type { BacktestTrial } from './backtest.js';
 import { type BookSeries, deflatedSharpeOfReturns, type TrialSeries } from './backtest-verdict.js';
 import {
@@ -33,8 +37,8 @@ export const ARM2_UK_POOL_TO = '2026-10-15';
 // Build choice awaiting David (#2143): the vol-target trial's 2023-01-01 boundary. It is not in
 // the trial hash, so a ruling can move it without counting a new trial
 export const ARM2_UK_POOL_OUT_OF_SAMPLE_FROM = '2023-01-01';
-// The £10,000 paper start capital of 2026-09-30, as the vol-target trial (#1860)
-export const ARM2_UK_POOL_START_CAPITAL_GBP = 10_000;
+// Build choice awaiting David (#2143): the vol-target trial's paper start capital (#1860)
+export const ARM2_UK_POOL_START_CAPITAL_GBP = VOL_TARGET_TRIAL_START_CAPITAL_GBP;
 // David 2026-10-15 (#2143 ruling of the short window): 20-session ADV and price from bars
 export const UK_POOL_ADV_SESSIONS = 20;
 
