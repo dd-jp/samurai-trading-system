@@ -98,22 +98,20 @@ function estimateGbp(estimate: CashInLieuEstimate): number {
   return signOf(estimate) * estimate.qty * estimate.price_gbp;
 }
 
-// An estimate no standing payment pairs any more goes back to the estimate itself, but only once
-// the broker cancels the activity its last correction followed; otherwise it stays as booked
+// An estimate no standing payment pairs any more, canceled or now shared by other estimates, goes
+// back to the estimate itself (David 2026-10-16, every re-share is booked)
 function reversedTarget(
   estimate: CashInLieuEstimate,
   reads: readonly CashInLieuRead[],
   priors: readonly PriorCorrection[],
 ): Target | undefined {
   const last = priors.at(-1);
-  const cancel = reads.find(
-    (read) =>
-      read.venue === estimate.venue &&
-      read.activity_id === last?.activity_id &&
-      read.status === 'canceled',
-  );
-  if (cancel === undefined) return undefined;
-  return { cause: cancel, native: estimateNative(estimate), gbp: estimateGbp(estimate) };
+  if (last === undefined) return undefined;
+  const cause = reads
+    .filter((read) => read.venue === estimate.venue && read.activity_id === last.activity_id)
+    .at(-1);
+  if (cause === undefined) return undefined;
+  return { cause, native: estimateNative(estimate), gbp: estimateGbp(estimate) };
 }
 
 function booked(priors: readonly PriorCorrection[], field: 'amount_native' | 'amount_gbp'): number {

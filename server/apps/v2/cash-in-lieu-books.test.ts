@@ -18,11 +18,13 @@ interface Estimate {
   readonly side?: OrderSide;
   readonly outcome?: 'submitted' | 'simulated';
   readonly venue?: 'alpaca' | 'saxo_cfd_usd';
+  readonly fillDate?: string;
 }
 
-function seed(db: StoreHandle, estimates: readonly Estimate[]): void {
+function seed(db: StoreHandle, estimates: readonly Estimate[], first = 0): void {
   const journal = new Journal(db, clock);
-  estimates.forEach((estimate, index) => {
+  estimates.forEach((estimate, offset) => {
+    const index = first + offset;
     const order = `o-${index}`;
     const venue = estimate.venue ?? 'alpaca';
     journal.recordOrder({
@@ -55,7 +57,7 @@ function seed(db: StoreHandle, estimates: readonly Estimate[]): void {
       fee_native: 0,
       fx_quote_per_gbp: FX,
       fx_source: 'year-start',
-      fill_date: SPLIT_DAY,
+      fill_date: estimate.fillDate ?? SPLIT_DAY,
       broker_mode: 'paper',
     });
   });
@@ -167,13 +169,12 @@ describe('cash-in-lieu book-cash corrections (#2001)', () => {
     expect(ledger.pending(NEXT_DAY)).toHaveLength(1);
   });
 
-  it('is idempotent: a recorded correction is not pending again and a repeat insert is ignored', () => {
+  it('is idempotent: a recorded correction is not pending again', () => {
     const db = store(BOTH_BOOKS, [{ amount: 16 }]);
     const ledger = new SqliteCashInLieuBooks(db, clock);
-    const applied = applyAll(ledger, NEXT_DAY);
+    applyAll(ledger, NEXT_DAY);
     expect(ledger.pending(NEXT_DAY)).toEqual([]);
     expect(ledger.pending('2026-10-05')).toEqual([]);
-    expect(ledger.record(applied[0] as CashInLieuCorrection)).toBe(false);
     const rows = db
       .prepare('SELECT fills_before, trading_date FROM v2_cash_in_lieu_adjustments')
       .all();
@@ -218,6 +219,45 @@ describe('cash-in-lieu book-cash corrections (#2001)', () => {
     expect(correction).toMatchObject({ activity_key: 'alpaca:cil-2:executed' });
     expect(correction?.amount_native).toBeCloseTo(1, 9);
     expect(bookedNative(db, 'est-0')).toBeCloseTo(2, 9);
+  });
+
+  it('books the re-share when a later estimate joins a payment of unstated qty, under the same key (PR #2151 B1)', () => {
+    const db = store([{ book: 'debate/primary', qty: 0.3 }], [{ amount: 16, qty: null }]);
+    const ledger = new SqliteCashInLieuBooks(db, clock);
+    expect(applyAll(ledger, NEXT_DAY).map((row) => row.amount_native)).toEqual([
+      expect.closeTo(7, 9),
+    ]);
+    seed(db, [{ book: 'debate/no-macro-gate', qty: 0.2 }], 1);
+    const reshare = applyAll(ledger, '2026-10-05');
+    expect(reshare).toEqual([
+      expect.objectContaining({
+        estimate_fill_id: 'est-0',
+        activity_key: 'alpaca:cil-1:executed',
+        amount_native: expect.closeTo(-6.4, 9),
+      }),
+      expect.objectContaining({
+        estimate_fill_id: 'est-1',
+        activity_key: 'alpaca:cil-1:executed',
+        amount_native: expect.closeTo(0.4, 9),
+      }),
+    ]);
+    expect(bookedNative(db, 'est-0') + bookedNative(db, 'est-1')).toBeCloseTo(16 - 15, 9);
+    expect(ledger.pending('2026-10-06')).toEqual([]);
+  });
+
+  it('takes an estimate back to itself when the payment moves to a nearer-dated estimate', () => {
+    const db = store(
+      [{ book: 'debate/primary', qty: 0.5, fillDate: '2026-09-20' }],
+      [{ amount: 16 }],
+    );
+    const ledger = new SqliteCashInLieuBooks(db, clock);
+    applyAll(ledger, NEXT_DAY);
+    expect(bookedNative(db, 'est-0')).toBeCloseTo(1, 9);
+    seed(db, [{ book: 'debate/no-macro-gate', qty: 0.5 }], 1);
+    applyAll(ledger, '2026-10-05');
+    expect(bookedNative(db, 'est-0')).toBeCloseTo(0, 12);
+    expect(bookedNative(db, 'est-1')).toBeCloseTo(1, 9);
+    expect(ledger.pending('2026-10-06')).toEqual([]);
   });
 
   it('writes nothing for a held-out pairing and leaves earlier corrections as booked (ruling (b))', () => {

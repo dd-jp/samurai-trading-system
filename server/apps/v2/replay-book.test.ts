@@ -496,7 +496,7 @@ describe('replay of cash in lieu book-cash corrections (#2001)', () => {
   const clock = new SimulatedClock(new Date('2026-10-05T07:30:00.000Z'));
   const DAY = '2026-10-05';
   const MARKED = `${DAY}T21:00:00.000Z`;
-  const KEY = 'debate/primary|est|alpaca:cil-1:0';
+  const KEY = '1|debate/primary|est|alpaca:cil-1:0';
 
   function journalWith(corrections: readonly [string, number][]): BetterSqlite3.Database {
     const db = migratedMemoryStore();

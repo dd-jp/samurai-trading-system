@@ -444,16 +444,6 @@ const CASES: readonly Case[] = [
         '2026-10-02T07:00:00.000Z')`,
     attacks: [
       {
-        name: 'same estimate fill and activity key',
-        outcome: 'ignored',
-        sql: `INSERT OR REPLACE INTO v2_cash_in_lieu_adjustments (book_id, estimate_fill_id, venue,
-            instrument, activity_id, activity_key, amount_native, amount_gbp, fx_quote_per_gbp,
-            fx_source, estimate_fill_seq, broker_mode, fills_before, trading_date, recorded_at)
-          VALUES ('debate/primary', 'est-1', 'alpaca', 'NVDA', 'cil-1', 'alpaca:cil-1:executed',
-            99, 79.2, 1.25, 'boe-xudluss:year-start:2026@2025-12-31', 7, 'paper', 0,
-            '2026-10-03', '2026-10-03T07:00:00.000Z')`,
-      },
-      {
         name: 'same adjustment_id',
         outcome: 'refused',
         sql: `INSERT OR REPLACE INTO v2_cash_in_lieu_adjustments (adjustment_id, book_id,

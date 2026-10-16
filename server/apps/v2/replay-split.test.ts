@@ -1077,10 +1077,10 @@ describe('replay of a broker-routed cash in lieu corrected at the next cycle (#2
   const rows = (sql: string) => journalRows(sql, cilOptions.storePath);
 
   it("corrects only the broker-routed book's cash, at the next cycle and before its mark", () => {
-    const [estimate] = rows(
-      `SELECT qty * price_native AS native FROM v2_fills
+    const [{ excess }] = rows(
+      `SELECT 1.5 - qty * price_native AS excess FROM v2_fills
          WHERE book_id = 'debate/primary' AND leg = 'cash_in_lieu'`,
-    ) as { native: number }[];
+    ) as [{ excess: number }];
     expect(
       rows(
         'SELECT book_id, trading_date, activity_key, amount_native, amount_gbp FROM v2_cash_in_lieu_adjustments',
@@ -1090,19 +1090,16 @@ describe('replay of a broker-routed cash in lieu corrected at the next cycle (#2
         book_id: 'debate/primary',
         trading_date: DAY_AFTER,
         activity_key: 'alpaca:cil-1:executed',
-        amount_native: expect.closeTo(1.5 - (estimate?.native ?? 0), 9),
-        amount_gbp: expect.closeTo((1.5 - (estimate?.native ?? 0)) / 1.25, 9),
+        amount_native: expect.closeTo(excess, 9),
+        amount_gbp: expect.closeTo(excess / 1.25, 9),
       },
     ]);
-    const cash = rows(
-      `SELECT trading_date, cash_gbp FROM v2_book_days WHERE book_id = 'debate/primary'
+    const [split, after, last] = rows(
+      `SELECT cash_gbp FROM v2_book_days WHERE book_id = 'debate/primary'
          AND trading_date >= '${SPLIT_DAY}' ORDER BY trading_date`,
-    ) as { cash_gbp: number }[];
-    expect((cash[1]?.cash_gbp ?? 0) - (cash[0]?.cash_gbp ?? 0)).toBeCloseTo(
-      (1.5 - (estimate?.native ?? 0)) / 1.25,
-      9,
-    );
-    expect(cash[2]?.cash_gbp).toBe(cash[1]?.cash_gbp);
+    ) as [{ cash_gbp: number }, { cash_gbp: number }, { cash_gbp: number }];
+    expect(after.cash_gbp - split.cash_gbp).toBeCloseTo(excess / 1.25, 9);
+    expect(last.cash_gbp).toBe(after.cash_gbp);
   });
 
   it.each([SPLIT_DAY, DAY_AFTER, LAST_DAY])('replays %s identical', async (tradingDate) => {

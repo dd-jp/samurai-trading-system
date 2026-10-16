@@ -669,7 +669,8 @@ const TABLES: readonly TableSpec[] = [
   {
     stage: 'cash_in_lieu_corrections',
     presence: true,
-    sql: () => `SELECT book_id || '|' || estimate_fill_id || '|' || activity_key AS key, venue,
+    sql: () => `SELECT adjustment_id || '|' || book_id || '|' || estimate_fill_id || '|' || activity_key
+                  AS key, venue,
                   instrument, amount_native, amount_gbp, fx_quote_per_gbp, fx_source,
                   estimate_fill_seq, broker_mode, fills_before FROM v2_cash_in_lieu_adjustments
                  WHERE trading_date = @date AND recorded_at <= @end ORDER BY adjustment_id`,

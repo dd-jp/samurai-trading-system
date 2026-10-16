@@ -121,7 +121,7 @@ export function standingCashInLieu<R extends TaxCashInLieuRow>(rows: readonly R[
 }
 
 // One broker payment stands for every estimate of its nearest date, since the account holds the
-// books' shares as one position. The tax log and the book-cash correction share this pairing
+// books' shares as one position
 export function pairCashInLieu<F extends TaxFillRow, R extends TaxCashInLieuRow>(
   fills: readonly F[],
   rows: readonly R[],

@@ -1,6 +1,6 @@
 -- #2001, David 2026-10-15/16: amounts are signed positive for cash to the account; amount_gbp
--- converts the broker's amount at the reading row's rate, not the native delta. A repeat of the
--- same estimate and activity_key is ignored
+-- converts the broker's amount at the reading row's rate, not the native delta. An estimate may
+-- take several rows under one activity_key, since every re-share is booked
 CREATE TABLE IF NOT EXISTS v2_cash_in_lieu_adjustments (
   adjustment_id     INTEGER PRIMARY KEY,
   book_id           TEXT NOT NULL,
@@ -17,8 +17,7 @@ CREATE TABLE IF NOT EXISTS v2_cash_in_lieu_adjustments (
   broker_mode       TEXT NOT NULL CHECK (broker_mode IN ('paper', 'live')),
   fills_before      INTEGER NOT NULL,
   trading_date      TEXT NOT NULL,
-  recorded_at       TEXT NOT NULL,
-  UNIQUE (estimate_fill_id, activity_key)
+  recorded_at       TEXT NOT NULL
 );
 
 CREATE TRIGGER IF NOT EXISTS v2_cash_in_lieu_adjustments_no_update
@@ -39,13 +38,4 @@ WHEN NEW.adjustment_id IS NOT NULL AND EXISTS (
   SELECT 1 FROM v2_cash_in_lieu_adjustments WHERE adjustment_id = NEW.adjustment_id)
 BEGIN
   SELECT RAISE(ABORT, 'v2_cash_in_lieu_adjustments is append-only');
-END;
-
-CREATE TRIGGER IF NOT EXISTS v2_cash_in_lieu_adjustments_replay_ignored
-BEFORE INSERT ON v2_cash_in_lieu_adjustments
-WHEN EXISTS (
-  SELECT 1 FROM v2_cash_in_lieu_adjustments WHERE estimate_fill_id = NEW.estimate_fill_id
-    AND activity_key = NEW.activity_key)
-BEGIN
-  SELECT RAISE(IGNORE);
 END;
