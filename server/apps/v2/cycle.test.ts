@@ -4365,7 +4365,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
         pending: () => {
           throw new Error('disk full');
         },
-        record: () => true,
+        record: () => {},
       },
     };
     const logs: LogEntry[] = [];
@@ -4397,7 +4397,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
 
   it('warns and records nothing for a correction naming a book the cycle does not hold (#2001)', async () => {
     const deps = harness([], true);
-    const record = vi.fn(() => true);
+    const record = vi.fn();
     const logs: LogEntry[] = [];
     await runCycle(
       {

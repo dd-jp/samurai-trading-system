@@ -1160,18 +1160,24 @@ class Cycle {
     const known = new Set(this.deps.books.ids());
     this.atomically(() => {
       for (const correction of ledger.pending(this.tradingDate)) {
-        if (!known.has(correction.book_id)) {
-          this.log(
-            'warn',
-            'v2_cash_in_lieu_book_unknown',
-            `${correction.book_id} ${correction.instrument}: no such book, so its cash in lieu correction stays pending`,
-          );
-        } else if (ledger.record(correction)) {
-          this.deps.books.applyCashAdjustment(correction.book_id, correction.amount_gbp);
-          this.logCashInLieuCorrection(correction);
-        }
+        if (known.has(correction.book_id)) this.bookCashInLieuCorrection(ledger, correction);
+        else this.logUnknownCashInLieuBook(correction);
       }
     });
+  }
+
+  bookCashInLieuCorrection(ledger: CashInLieuBookLedger, correction: CashInLieuCorrection): void {
+    ledger.record(correction);
+    this.deps.books.applyCashAdjustment(correction.book_id, correction.amount_gbp);
+    this.logCashInLieuCorrection(correction);
+  }
+
+  logUnknownCashInLieuBook(correction: CashInLieuCorrection): void {
+    this.log(
+      'warn',
+      'v2_cash_in_lieu_book_unknown',
+      `${correction.book_id} ${correction.instrument}: no such book, so its cash in lieu correction stays pending`,
+    );
   }
 
   logCashInLieuCorrection(correction: CashInLieuCorrection): void {

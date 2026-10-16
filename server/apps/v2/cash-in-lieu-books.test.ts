@@ -97,9 +97,7 @@ function store(estimates: readonly Estimate[], reads: readonly Read[]): StoreHan
 
 function applyAll(ledger: SqliteCashInLieuBooks, date: string): CashInLieuCorrection[] {
   const pending = [...ledger.pending(date)];
-  for (const correction of pending) {
-    if (!ledger.record(correction)) throw new Error(`not recorded: ${correction.activity_key}`);
-  }
+  for (const correction of pending) ledger.record(correction);
   return pending;
 }
 

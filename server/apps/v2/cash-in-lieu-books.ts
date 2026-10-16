@@ -170,7 +170,7 @@ function cashInLieuCorrections(inputs: CorrectionInputs): CashInLieuCorrection[]
 
 export interface CashInLieuBookLedger {
   pending(tradingDate: string): readonly CashInLieuCorrection[];
-  record(correction: CashInLieuCorrection): boolean;
+  record(correction: CashInLieuCorrection): void;
 }
 
 // Only a broker-routed order's estimate is paid by the broker (api/tax.ts BROKER_FILLS)
@@ -208,8 +208,8 @@ export class SqliteCashInLieuBooks implements CashInLieuBookLedger {
     });
   }
 
-  record(correction: CashInLieuCorrection): boolean {
-    const result = this.db
+  record(correction: CashInLieuCorrection): void {
+    this.db
       .prepare(
         `INSERT INTO v2_cash_in_lieu_adjustments (book_id, estimate_fill_id, venue, instrument,
            activity_id, activity_key, amount_native, amount_gbp, fx_quote_per_gbp, fx_source,
@@ -220,6 +220,5 @@ export class SqliteCashInLieuBooks implements CashInLieuBookLedger {
            @trading_date, @recorded_at)`,
       )
       .run({ ...correction, recorded_at: toStoredTimestamp(this.clock.now()) });
-    return result.changes === 1;
   }
 }
