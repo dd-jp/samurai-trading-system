@@ -40,7 +40,7 @@ import { inputsHash } from '../journal/index.js';
 import { candleFeatures, candleLine } from './candle.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
-import { selectLseUniverse } from './lse-universe.js';
+import { type LseUniverseSelection, selectLseUniverse } from './lse-universe.js';
 import {
   type Arm2EntryThresholds,
   DEBATE_SLEEVE_ID,
@@ -380,17 +380,27 @@ export function resolveTechnical(
   return { ok: true, venue, read, history };
 }
 
-export function buildUniverse(
-  deps: TechnicalSleeveDeps,
+type PoolDeps = Pick<TechnicalSleeveDeps, 'bars' | 'constituents' | 'lseLegRefusal' | 'ukStocks'>;
+
+export function pooledUniverse(
+  deps: PoolDeps,
   tradingDate: string,
   lseScreen: Parameter<number> = LSE_LIQUIDITY_SCREEN,
-): SleeveUniverse {
+): { readonly pooled: readonly string[]; readonly lse: LseUniverseSelection } {
   const lse = selectLseUniverse(deps.bars, tradingDate, lseScreen);
   const saxoLines =
     deps.lseLegRefusal === undefined
       ? [...lse.instruments, ...(deps.ukStocks?.(tradingDate) ?? [])]
       : [];
-  const pooled = [...deps.constituents(tradingDate), ...saxoLines];
+  return { pooled: [...deps.constituents(tradingDate), ...saxoLines], lse };
+}
+
+export function buildUniverse(
+  deps: TechnicalSleeveDeps,
+  tradingDate: string,
+  lseScreen: Parameter<number> = LSE_LIQUIDITY_SCREEN,
+): SleeveUniverse {
+  const { pooled, lse } = pooledUniverse(deps, tradingDate, lseScreen);
   const slots = deps.ukStocks === undefined ? LSE_ETF_ONLY_RESERVED_SLOTS : LSE_RESERVED_SLOTS;
   const selection = selectUniverse(pooled, { ...deps, tradingDate }, slots);
   return {

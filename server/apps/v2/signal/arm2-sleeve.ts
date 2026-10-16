@@ -37,6 +37,7 @@ export interface Arm2SleeveDeps {
   readonly market: Pick<MarketData, 'gbpUsdAtYearStart'>;
   readonly clock: Clock;
   readonly lseLegRefusal?: string | undefined;
+  readonly ukStocks?: ((tradingDate: string) => readonly string[]) | undefined;
 }
 
 async function decideOne(
