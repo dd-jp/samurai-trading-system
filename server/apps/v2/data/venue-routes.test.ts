@@ -4,6 +4,7 @@ import { CfdCatalogue, type CfdInstrument } from './cfd-catalogue.js';
 import { CfdCatalogueArchive } from './cfd-catalogue-archive.js';
 import {
   CLOSED_VENUE_ROUTER,
+  createAssumedBeforeArchiveRouter,
   createDatedVenueRouter,
   createVenueRouter,
   type VenueRouterDeps,
@@ -326,5 +327,84 @@ describe('createDatedVenueRouter (#2105)', () => {
     expect(gated.route('AAPL', 'alpaca', 'short', FIRST)).toEqual({
       refusal: 'cfd_borrow_model_unset',
     });
+  });
+});
+
+describe('createAssumedBeforeArchiveRouter (#2143 (c))', () => {
+  const FIRST = '2026-10-13';
+  const TODAYS = '2026-10-15';
+  const PAST = '2022-03-01';
+  const archive = new CfdCatalogueArchive([
+    new CfdCatalogue({ asOf: FIRST, instruments: [instrument({ symbol: 'AAPL' })] }),
+  ]);
+  const today = new CfdCatalogue({
+    asOf: TODAYS,
+    instruments: [
+      instrument({ symbol: 'AAPL', borrowCostPerDay: 0.1 / 360 }),
+      instrument({ symbol: 'MSFT', shortTradeDisabled: true }),
+      instrument({ symbol: 'NOQUOTE', borrowCostPerDay: undefined }),
+      instrument({ symbol: 'RR_XLON', currency: 'GBP', borrowCostPerDay: 0.2 / 365 }),
+    ],
+  });
+  const deps = { entryRefusal: () => undefined, maxBorrowRatePerYear: MAX_BORROW };
+  const open = () => undefined;
+  const assumed = createAssumedBeforeArchiveRouter(archive, today, {
+    ...deps,
+    ukStockRefusal: open,
+  });
+
+  it("routes a past CFD short by today's list where the dated router refuses it", () => {
+    expect(createDatedVenueRouter(archive, deps).route('AAPL', 'alpaca', 'short', PAST)).toEqual({
+      refusal: 'cfd_not_backtested',
+    });
+    expect(assumed.route('AAPL', 'alpaca', 'short', PAST)).toEqual({ venue: 'saxo_cfd_usd' });
+    expect(assumed.route('RR_XLON', 'saxo', 'long', PAST)).toEqual({ venue: 'saxo_cfd_gbp' });
+  });
+
+  it("puts every past borrow at the ceiling, so today's quote neither refuses nor is missing", () => {
+    expect(assumed.route('NOQUOTE', 'alpaca', 'short', PAST)).toEqual({ venue: 'saxo_cfd_usd' });
+    expect(assumed.route('RR_XLON', 'saxo', 'short', PAST)).toEqual({ venue: 'saxo_cfd_gbp' });
+  });
+
+  it("keeps today's other checks: ShortTradeDisabled, a name missing from it and the gates", () => {
+    expect(assumed.route('MSFT', 'alpaca', 'short', PAST)).toEqual({
+      refusal: 'ShortTradeDisabled',
+    });
+    expect(assumed.route('TSLA', 'alpaca', 'short', PAST)).toEqual({
+      refusal: 'not_in_catalogue',
+    });
+    const shut = createAssumedBeforeArchiveRouter(archive, today, deps);
+    expect(shut.route('RR_XLON', 'saxo', 'long', PAST)).toEqual({
+      refusal: 'uk_stock_cfd_disabled',
+    });
+    const gated = createAssumedBeforeArchiveRouter(archive, today, {
+      ...deps,
+      entryRefusal: () => 'cfd_cost_model_unset',
+    });
+    expect(gated.route('AAPL', 'alpaca', 'short', PAST)).toEqual({
+      refusal: 'cfd_cost_model_unset',
+    });
+  });
+
+  it('routes as the dated router from the first snapshot on', () => {
+    const dated = createDatedVenueRouter(archive, { ...deps, ukStockRefusal: open });
+    for (const date of [FIRST, '2026-10-16', '2026-10-17']) {
+      for (const symbol of ['AAPL', 'MSFT', 'RR_XLON']) {
+        expect(assumed.route(symbol, 'alpaca', 'short', date)).toEqual(
+          dated.route(symbol, 'alpaca', 'short', date),
+        );
+      }
+    }
+    expect(assumed.route('AAPL', 'alpaca', 'short', '2026-10-17')).toEqual({
+      refusal: 'no_catalogue',
+    });
+  });
+
+  it('reads the right day when the same router is asked about several dates in turn', () => {
+    expect(assumed.route('AAPL', 'alpaca', 'short', PAST)).toEqual({ venue: 'saxo_cfd_usd' });
+    expect(assumed.route('AAPL', 'alpaca', 'short', '2026-10-12')).toEqual({
+      venue: 'saxo_cfd_usd',
+    });
+    expect(assumed.route('AAPL', 'alpaca', 'short', PAST)).toEqual({ venue: 'saxo_cfd_usd' });
   });
 });
