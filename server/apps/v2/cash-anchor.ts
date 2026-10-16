@@ -57,8 +57,8 @@ const MOVE_SIGN: Readonly<Record<CashMoveKind, 1 | -1>> = { deposit: 1, withdraw
 const GO_LIVE_REFERENCE = 'go-live';
 
 // Shadow and control books never trade at a broker, so only fills of broker-routed orders move the
-// venue's cash (the tax log's BROKER_FILLS rule); a paper account's fills never move a live one's.
-// A cash-in-lieu correction counts with its estimate, so a broker payment closes the gap once
+// venue's cash (the tax log's BROKER_FILLS rule), and a paper account's fills never move a live one's;
+// a cash-in-lieu correction counts with its estimate, so a broker payment closes the gap once
 const STORE_FLOW = `
   SELECT SUM(f.price_native IS NULL OR f.fee_native IS NULL) AS unpriced,
     COALESCE(SUM(CASE f.side WHEN 'sell' THEN 1 ELSE -1 END * f.qty * f.price_native

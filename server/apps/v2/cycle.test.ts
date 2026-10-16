@@ -4276,7 +4276,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
   }
 
   function brokerPaid(deps: Harness, amount: number, readOn: string): void {
-    deps.journal.recordCashInLieu({
+    (deps.journal as Journal).recordCashInLieu({
       venue: 'alpaca',
       activity_id: 'cil-1',
       instrument: 'AAPL',
@@ -4323,10 +4323,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
     ]);
     expect(deps.books.cash('debate/primary')).toBeCloseTo(estimated + correctionGbp, 9);
     expect(next.books[0]?.cash_gbp).toBeCloseTo(estimated + correctionGbp, 9);
-    expect(deps.books.lastDay('debate/primary')?.cashGbp).toBeCloseTo(
-      estimated + correctionGbp,
-      9,
-    );
+    expect(deps.books.lastDay('debate/primary')?.cashGbp).toBeCloseTo(estimated + correctionGbp, 9);
     await runCycle(withMarket(deps, threeForTwo), '2026-10-01');
     expect(corrections(deps)).toHaveLength(1);
     expect(deps.books.cash('debate/primary')).toBeCloseTo(estimated + correctionGbp, 9);

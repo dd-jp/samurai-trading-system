@@ -11,19 +11,19 @@ import {
 } from './tax-cash-in-lieu.js';
 import type { TaxFillRow } from './tax-log.js';
 
-export interface CashInLieuEstimate extends TaxFillRow {
+interface CashInLieuEstimate extends TaxFillRow {
   readonly book_id: string;
   readonly fill_seq: number;
   readonly price_gbp: number;
   readonly broker_mode: BrokerMode;
 }
 
-export interface CashInLieuRead extends TaxCashInLieuRow {
+interface CashInLieuRead extends TaxCashInLieuRow {
   readonly fx_quote_per_gbp: number;
   readonly fx_source: string;
 }
 
-export interface PriorCorrection {
+interface PriorCorrection {
   readonly estimate_fill_id: string;
   readonly activity_id: string;
   readonly amount_native: number;
@@ -46,7 +46,7 @@ export interface CashInLieuCorrection {
   readonly trading_date: string;
 }
 
-export interface CorrectionInputs {
+interface CorrectionInputs {
   readonly estimates: readonly CashInLieuEstimate[];
   readonly reads: readonly CashInLieuRead[];
   readonly priors: readonly PriorCorrection[];
@@ -163,7 +163,7 @@ function instrumentCorrections(
 // David 2026-10-15/16 (#2001): book cash follows the broker's amount, shared pro rata over the
 // estimates it pairs and converted at the reading row's rate; a held-out instrument writes nothing,
 // so its earlier corrections stand
-export function cashInLieuCorrections(inputs: CorrectionInputs): CashInLieuCorrection[] {
+function cashInLieuCorrections(inputs: CorrectionInputs): CashInLieuCorrection[] {
   const standing = byInstrument(standingCashInLieu(inputs.reads));
   return [...byInstrument(inputs.estimates)].flatMap(([instrument, estimates]) =>
     instrumentCorrections(estimates, standing.get(instrument) ?? [], inputs),
