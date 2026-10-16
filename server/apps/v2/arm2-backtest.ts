@@ -1,6 +1,6 @@
 import type { Sleeve, SleeveSpec } from '../../../contracts/index.js';
 import { SimulatedClock } from '../../shared/index.js';
-import type { BacktestTrial, SleeveFactory } from './backtest.js';
+import { type BacktestTrial, type SleeveFactory, UK_STOCK_CFD_OPEN } from './backtest.js';
 import {
   type BarsSource,
   type CfdCatalogue,
@@ -55,8 +55,6 @@ export interface Arm2BacktestDeps {
   readonly ukStockCfdOpen?: boolean | undefined;
   readonly assumedBeforeArchive?: CfdCatalogue | undefined;
 }
-
-const UK_STOCK_CFD_OPEN = (): undefined => undefined;
 
 function datedCfdRouter(archive: CfdCatalogueArchive, deps: Arm2BacktestDeps): VenueRouter {
   const gates = deps.cfdEntryGates ?? CFD_ENTRY_GATES;

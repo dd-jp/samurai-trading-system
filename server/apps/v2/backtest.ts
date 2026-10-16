@@ -324,7 +324,7 @@ export function ukStockCfdIdentity(input: Pick<BacktestInput, 'ukStockCfdOpen'>)
   return input.ukStockCfdOpen === true ? { ukStockCfdOpen: true } : {};
 }
 
-const UK_STOCK_CFD_OPEN = (): undefined => undefined;
+export const UK_STOCK_CFD_OPEN = (): undefined => undefined;
 
 function volTargetOf(input: BacktestInput): VolTargetSizing | undefined {
   return input.volTarget ?? declaredVolTarget();
