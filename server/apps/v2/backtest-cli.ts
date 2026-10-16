@@ -18,6 +18,19 @@ import {
   volTargetTrialArms,
 } from './arm2-backtest.js';
 import {
+  ARM2_UK_POOL_CANDIDATE_ID,
+  ARM2_UK_POOL_FROM,
+  ARM2_UK_POOL_OUT_OF_SAMPLE_FROM,
+  ARM2_UK_POOL_START_CAPITAL_GBP,
+  ARM2_UK_POOL_TO,
+  type Arm2UkPoolArms,
+  type Arm2UkPoolVerdict,
+  arm2UkPoolArms,
+  arm2UkPoolVerdict,
+  assertUkBarsReach,
+  ukPoolCatalogue,
+} from './arm2-uk-pool.js';
+import {
   type BacktestInput,
   type BacktestResult,
   type BacktestTrial,
@@ -54,6 +67,7 @@ import {
   MultiVenueBarsSource,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
+  venueDataSanity,
 } from './data/index.js';
 import { minbtl, type RegimeSplit } from './evidence/index.js';
 import {
@@ -63,6 +77,7 @@ import {
   SAXO_SPREADS_PATH,
   SPREADS_PATH,
   V2_STORE_PATH,
+  venueOf,
 } from './index.js';
 import { delayedBars, delayedTrial } from './look-ahead-canary.js';
 import {
@@ -81,6 +96,9 @@ import {
   MEAN_REVERSION_FROM,
   MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
   MEAN_REVERSION_TO,
+  pooledUniverse,
+  requireSet,
+  UK_STOCK_SCREENS,
   VOL_TARGET_INDEX_ATR_WINDOW,
   VOL_TARGET_INDEX_CANDIDATE_ID,
   VOL_TARGET_INDEX_CEILINGS,
@@ -191,6 +209,15 @@ export interface ResearchLogs {
   readonly randomCanaryRuns?: number | undefined;
 }
 
+function windowLength(window: CandidateWindow): { minbtlLimit: number; windowYears: number } {
+  const start = new Date(`${window.from}T00:00:00.000Z`);
+  const end = new Date(`${window.to}T00:00:00.000Z`);
+  return {
+    minbtlLimit: minbtl({ start, end }, MINBTL_EXPECTED_ANNUAL_SHARPE).limit,
+    windowYears: (end.getTime() - start.getTime()) / (365.25 * 86_400_000),
+  };
+}
+
 async function runCandidateAgainst(
   spec: CandidateRunSpec,
   market: MarketData,
@@ -222,9 +249,6 @@ async function runCandidateAgainst(
     randomCanary: { log: canaries, runs: randomCanaryRuns },
   });
   const stressed = await runBacktest(input(COST_STRESS_MULTIPLE));
-  const start = new Date(`${spec.window.from}T00:00:00.000Z`);
-  const end = new Date(`${spec.window.to}T00:00:00.000Z`);
-  const minbtlLimit = minbtl({ start, end }, MINBTL_EXPECTED_ANNUAL_SHARPE).limit;
   const sessions = backtestSessions(
     market,
     spec.window.from,
@@ -245,8 +269,7 @@ async function runCandidateAgainst(
     baseline: { ...baseline, verdict: withCostStress(baseline.verdict, stress) },
     stressed,
     trialsCounted: ledger.count(),
-    minbtlLimit,
-    windowYears: (end.getTime() - start.getTime()) / (365.25 * 86_400_000),
+    ...windowLength(spec.window),
     signFlipped,
     regimeSplit: baseline.verdict.regimeSplit,
     oneBarDelay: baseline.verdict.oneBarDelay,
@@ -552,11 +575,142 @@ export function runVolTargetTrial(
   );
 }
 
+export interface Arm2UkPoolTrialReport {
+  readonly verdict: Arm2UkPoolVerdict;
+  readonly stressed: Arm2UkPoolVerdict;
+  readonly minbtlLimit: number;
+  readonly windowYears: number;
+  readonly dataSanity: DataSanityReport;
+}
+
+const ARM2_UK_POOL_WINDOW: VolTargetTrialWindow = {
+  from: ARM2_UK_POOL_FROM,
+  to: ARM2_UK_POOL_TO,
+  outOfSampleFrom: ARM2_UK_POOL_OUT_OF_SAMPLE_FROM,
+};
+
+interface Arm2UkPoolRun {
+  readonly arms: Arm2UkPoolArms;
+  readonly market: MarketData;
+  readonly halfSpreadBps: (instrument: string) => number;
+  readonly ledger: TrialLedger;
+  readonly logger: Logger;
+  readonly window: VolTargetTrialWindow;
+  readonly cfdCatalogues: CfdCatalogueArchive;
+}
+
+async function arm2UkPoolPass(
+  run: Arm2UkPoolRun,
+  costMultiple: number,
+): Promise<{ dates: readonly string[]; verdict: Arm2UkPoolVerdict }> {
+  const { arms, window, ledger } = run;
+  const simulation = await simulateBacktest({
+    candidate: ARM2_UK_POOL_CANDIDATE_ID,
+    trials: [arms.trial],
+    benchmark: arms.baseline,
+    from: window.from,
+    to: window.to,
+    startCapitalGbp: ARM2_UK_POOL_START_CAPITAL_GBP,
+    lossCapGbp: BACKTEST_LOSS_CAP_GBP,
+    market: run.market,
+    halfSpreadBps: run.halfSpreadBps,
+    ledger,
+    logger: run.logger,
+    calendarReference: CALENDAR_REFERENCE,
+    costMultiple,
+    cfdCatalogues: run.cfdCatalogues,
+    ukStockCfdOpen: true,
+  });
+  const verdict = arm2UkPoolVerdict({
+    dates: simulation.dates,
+    trial: simulation.trials[0] as TrialSeries,
+    baseline: simulation.benchmark,
+    outOfSampleFrom: window.outOfSampleFrom,
+    trialsCounted: ledger.count(),
+    lossCapGbp: BACKTEST_LOSS_CAP_GBP * simulation.trialsShare,
+  });
+  return { dates: simulation.dates, verdict };
+}
+
+function arm2UkPoolSanity(
+  market: MarketData,
+  bars: BarsSource,
+  pool: Parameters<typeof pooledUniverse>[0],
+  window: CandidateWindow,
+  usSessions: readonly string[],
+): DataSanityReport {
+  const pooled = new Map<string, readonly string[]>();
+  const pooledOn = (session: string): readonly string[] => {
+    const held = pooled.get(session) ?? pooledUniverse(pool, session).pooled;
+    pooled.set(session, held);
+    return held;
+  };
+  const onVenue = (venue: 'alpaca' | 'saxo') => (session: string) =>
+    pooledOn(session).filter((symbol) => venueOf(symbol) === venue);
+  return venueDataSanity(bars, [
+    { symbolsOn: onVenue('alpaca'), sessions: usSessions },
+    {
+      symbolsOn: onVenue('saxo'),
+      sessions: backtestSessions(market, window.from, window.to, calendarReferenceFor('saxo')),
+    },
+  ]);
+}
+
+// David 2026-10-15 (#2143 (f)): arm 2's own counted trial over the UK pool and 6 slots, beside
+// the ETF-only arm 2 it replaces as paper's band. Doc 67's 2x cost rerun runs on the same hash
+export async function runArm2UkPoolTrialAgainst(
+  market: MarketData,
+  bars: BarsSource,
+  constituentsFor: (tradingDate: string) => readonly string[],
+  halfSpreadBps: (instrument: string) => number,
+  ledger: TrialLedger,
+  logger: Logger,
+  cfdCatalogues: CfdCatalogueArchive,
+  window: VolTargetTrialWindow = ARM2_UK_POOL_WINDOW,
+): Promise<Arm2UkPoolTrialReport> {
+  const today = ukPoolCatalogue(cfdCatalogues, window.to);
+  assertUkBarsReach(bars, today, window.from);
+  const arms = arm2UkPoolArms({
+    bars,
+    constituents: constituentsFor,
+    cfdCatalogues,
+    today,
+    screens: requireSet(UK_STOCK_SCREENS),
+  });
+  const run = { arms, market, halfSpreadBps, ledger, logger, window, cfdCatalogues };
+  const base = await arm2UkPoolPass(run, 1);
+  const stressed = await arm2UkPoolPass(run, COST_STRESS_MULTIPLE);
+  const pool = { bars, constituents: constituentsFor, ukStocks: arms.ukStocks };
+  return {
+    verdict: base.verdict,
+    stressed: stressed.verdict,
+    ...windowLength(window),
+    dataSanity: arm2UkPoolSanity(market, bars, pool, window, base.dates),
+  };
+}
+
+export function runArm2UkPoolTrial(
+  cliOptions: BacktestCliOptions = {},
+): Promise<Arm2UkPoolTrialReport> {
+  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, research, options }) =>
+    runArm2UkPoolTrialAgainst(
+      market,
+      bars,
+      constituentsReader(options.constituentsPath),
+      halfSpreadBps,
+      research.ledger,
+      options.logger,
+      loadCfdCatalogueArchive(cliOptions.cfdSnapshotStorePath ?? V2_STORE_PATH),
+    ),
+  );
+}
+
 const CANDIDATE_RUNNERS: Record<string, (options: BacktestCliOptions) => Promise<unknown>> = {
   [CROSS_ASSET_TREND_CANDIDATE_ID]: runCrossAssetTrendCandidate,
   [MEAN_REVERSION_CANDIDATE_ID]: runMeanReversionCandidate,
   [VOL_TARGET_INDEX_CANDIDATE_ID]: runVolTargetIndexCandidate,
   [VOL_TARGET_TRIAL_CANDIDATE_ID]: runVolTargetTrial,
+  [ARM2_UK_POOL_CANDIDATE_ID]: runArm2UkPoolTrial,
 };
 
 async function runNamedCandidate(candidateArg: string): Promise<number> {

@@ -291,8 +291,8 @@ describe('parameters', () => {
     });
   });
 
-  it('allows CFD routes to the debate sleeve and arm 2 only (doc 66 (f), #1858, #2105)', () => {
-    expect(CFD_SLEEVE_IDS).toEqual(['debate', 'arm2', 'arm2-vol-target']);
+  it('allows CFD routes to the debate sleeve and arm 2 only (doc 66 (f), #1858, #2105, #2143)', () => {
+    expect(CFD_SLEEVE_IDS).toEqual(['debate', 'arm2', 'arm2-vol-target', 'arm2-uk-pool']);
     for (const cfdFree of [
       SIGNALS_SLEEVE_ID,
       CROSS_ASSET_TREND_CANDIDATE_ID,

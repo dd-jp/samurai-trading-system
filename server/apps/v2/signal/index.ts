@@ -8,7 +8,12 @@ export {
   createCrossAssetTrendBenchmarkSleeve,
   createCrossAssetTrendSleeve,
 } from './cross-asset-trend.js';
-export { createDebateSleeve, SMA_LONG_WINDOW, SPEND_CAP_REASON_PREFIX } from './debate-sleeve.js';
+export {
+  createDebateSleeve,
+  pooledUniverse,
+  SMA_LONG_WINDOW,
+  SPEND_CAP_REASON_PREFIX,
+} from './debate-sleeve.js';
 export { buildLlmPanel, type LlmPanel } from './llm-panel.js';
 export { NousPinnedTransport } from './llm-transport.js';
 export { isLseInstrument, LSE_LINES } from './lse-lines.js';
@@ -30,6 +35,7 @@ export {
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
   ARM2_SLEEVE_SPEC,
+  ARM2_UK_POOL_SLEEVE_ID,
   bookPinDigest,
   bookPreDigestPinDigest,
   CFD_BORROW_MODEL,
@@ -52,6 +58,7 @@ export {
   G18_SOCIAL_SOURCE,
   isSet,
   LSE_LIQUIDITY_SCREEN,
+  LSE_RESERVED_SLOTS,
   MOVERS_MIN_DOLLAR_VOLUME_USD,
   type Parameter,
   RECONCILE_CASH_TOLERANCE_GBP,
@@ -86,6 +93,7 @@ export {
 } from './secret-guard.js';
 export { createSignalsSleeve } from './signals-sleeve.js';
 export { SleeveRegistry } from './sleeve.js';
+export { averageDollarVolume, coveredHistory } from './universe.js';
 export {
   createVolTargetIndexBenchmarkSleeve,
   createVolTargetIndexSleeve,

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { BarSeries, DailyBar } from '../../../shared/index.js';
-import { ADJUSTED_JUMP_MIN_RATIO, dataSanity, seriesSanity } from './bar-sanity.js';
+import {
+  ADJUSTED_JUMP_MIN_RATIO,
+  dataSanity,
+  seriesSanity,
+  venueDataSanity,
+} from './bar-sanity.js';
 import type { BarsSource } from './bars.js';
 
 const SESSIONS = Array.from({ length: 40 }, (_, i) => {
@@ -186,5 +191,34 @@ describe('dataSanity', () => {
 
   it('refuses an empty window even with no symbols', () => {
     expect(() => dataSanity(source([]), () => [], [])).toThrow(/two sessions/);
+  });
+});
+
+describe('venueDataSanity (#2143, postmortem §2)', () => {
+  const UK_HOLIDAY = SESSIONS[10] as string;
+  const lseSessions = SESSIONS.filter((date) => date !== UK_HOLIDAY);
+  const bars = source([
+    { symbol: 'AAPL', bars: clean() },
+    { symbol: 'RR_XLON', bars: clean(lseSessions) },
+    { symbol: 'GAP_XLON', bars: clean(lseSessions.filter((_, index) => index % 4 !== 1)) },
+  ]);
+  const us = { symbolsOn: () => ['AAPL'], sessions: SESSIONS };
+  const lse = { symbolsOn: () => ['RR_XLON', 'GAP_XLON'], sessions: lseSessions };
+
+  it("checks each venue's names against its own calendar, so a UK bank holiday is no gap", () => {
+    const report = venueDataSanity(bars, [us, lse]);
+    expect(report).toMatchObject({ from: SESSIONS[0], to: SESSIONS[39], seriesChecked: 3 });
+    expect(report.flagged.map((entry) => [entry.symbol, entry.flags])).toEqual([
+      ['GAP_XLON', ['coverage', 'gap']],
+    ]);
+    const onUsCalendar = dataSanity(bars, () => ['RR_XLON'], SESSIONS);
+    expect(onUsCalendar.flagged[0]?.missingSessions).toEqual([UK_HOLIDAY]);
+  });
+
+  it('spans every scope and keeps the flagged series in symbol order', () => {
+    const late = { symbolsOn: () => ['AAPL'], sessions: SESSIONS.slice(5) };
+    const report = venueDataSanity(bars, [lse, late]);
+    expect([report.from, report.to]).toEqual([SESSIONS[0], SESSIONS[39]]);
+    expect(report.seriesChecked).toBe(3);
   });
 });

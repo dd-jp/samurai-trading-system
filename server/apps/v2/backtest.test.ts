@@ -21,6 +21,7 @@ import {
   type SimulationInput,
   type SleeveFactory,
   simulateBacktest,
+  ukStockCfdIdentity,
   volTargetIdentity,
 } from './backtest.js';
 import { capitalCeilingGbp } from './backtest-verdict.js';
@@ -1076,5 +1077,28 @@ describe('CFD catalogue archive in the backtest (#2105)', () => {
       at('2026-01-02', '2026-10-14', grown),
       at('2026-01-02', '2026-10-14'),
     ]).toEqual([3, 4, 3]);
+  });
+});
+
+describe('ukStockCfdIdentity (#2143)', () => {
+  const run = { from: '2024-01-01', to: '2024-12-31' };
+
+  it('leaves a run that does not open the UK switch hashing as every trial before #2143', () => {
+    for (const ukStockCfdOpen of [undefined, false]) {
+      expect(ukStockCfdIdentity({ ukStockCfdOpen })).toEqual({});
+    }
+    expect(
+      trialHash('candidate', { lookback: 5, run: { ...run, ...ukStockCfdIdentity({}) } }),
+    ).toBe(trialHash('candidate', { lookback: 5, run }));
+  });
+
+  it('makes a run that opens the switch a new trial', () => {
+    const shared = ledger();
+    const at = (ukStockCfdOpen: boolean | undefined) =>
+      shared.record('candidate', {
+        lookback: 5,
+        run: { ...run, ...ukStockCfdIdentity({ ukStockCfdOpen }) },
+      });
+    expect([at(undefined), at(true), at(false)]).toEqual([3, 4, 3]);
   });
 });
