@@ -63,14 +63,14 @@ function journalRows(
       stage: 'v2',
       level: 'info',
       event: 'v2_cash_in_lieu_read',
-      message: `${reader.venue} reported ${row.amount} ${row.currency} cash in lieu of ${row.qty ?? 'unstated'} ${row.instrument} on ${row.activity_date} (activity ${row.activity_id}, ${row.status}); the tax log uses it in place of the latest-close estimate`,
+      message: `${reader.venue} reported ${row.amount} ${row.currency} cash in lieu of ${row.qty ?? 'unstated'} ${row.instrument} on ${row.activity_date} (activity ${row.activity_id}, ${row.status}); the tax log uses it in place of the latest-close estimate, and the next cycle corrects book cash to it`,
     });
   }
   return added;
 }
 
-// The journal row is the record of the read: the cycle never consumes it, so a replayed day
-// reads nothing and the tax log rebuilds from the same rows
+// The journal row is the record of the read: a replayed day reads nothing, and the tax log and the
+// next cycle's book-cash correction rebuild from the same rows
 export async function readBrokerCashInLieu(
   deps: CashInLieuReadDeps,
   tradingDate: string,

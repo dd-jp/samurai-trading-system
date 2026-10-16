@@ -349,6 +349,38 @@ describe('SqliteCashAnchors.recordActivity (David 2026-10-03, #2035 item 5)', ()
     expect(alpacaNonTradeCashTypes()).not.toContain('CIL');
   });
 
+  it("adds a cash-in-lieu correction of the anchor's venue and mode to its estimate, so the broker's payment closes the gap once (#2001)", () => {
+    const { db, anchors, fill } = anchored();
+    fill({ id: 'entry', side: 'buy', qty: 1, price: 10 });
+    db.prepare(
+      `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+         side, qty, price_gbp, fee_gbp, currency, price_native, fee_native, broker_mode, recorded_at)
+       VALUES ('cil', 'order-entry', 'debate/primary', ?, 'AAPL', 'alpaca', 'cash_in_lieu', 'sell',
+         0.5, 0, 0, 'USD', 30, 0, 'live', 't')`,
+    ).run(DATE);
+    const correct = db.prepare(
+      `INSERT INTO v2_cash_in_lieu_adjustments (book_id, estimate_fill_id, venue, instrument,
+         activity_id, activity_key, amount_native, amount_gbp, fx_quote_per_gbp, fx_source,
+         estimate_fill_seq, broker_mode, fills_before, trading_date, recorded_at)
+       VALUES ('debate/primary', ?, ?, 'AAPL', 'cil-1', ?, ?, 0, 1.25, 'read-day', ?, ?, 0, ?, 't')`,
+    );
+    const paid = (brokerCash: number) =>
+      anchorCashCheck({
+        brokerCashQuote: brokerCash,
+        anchor: { ...(anchors.anchor('alpaca') as NonNullable<ReturnType<typeof anchors.anchor>>) },
+        storeFlow: anchors.storeFlowSince(LIVE_AT(0), 'alpaca'),
+        rate: { ok: true, quotePerGbp: 1, source: 'test' },
+        toleranceGbp: 0.001,
+      }).diffs;
+    expect(paid(12_000 - 10 + 16)).toHaveLength(1);
+    correct.run('cil', 'alpaca', 'alpaca:cil-1:executed', 1, 2, 'live', DATE);
+    correct.run('cil', 'alpaca', 'alpaca:cil-1:paper', 50, 2, 'paper', DATE);
+    correct.run('cil', 'alpaca', 'alpaca:cil-1:before', 70, 0, 'live', DATE);
+    correct.run('cil', 'saxo', 'saxo:cil-1:executed', 90, 2, 'live', DATE);
+    expect(anchors.storeFlowSince(LIVE_AT(0), 'alpaca')).toEqual({ ok: true, quote: -10 + 15 + 1 });
+    expect(paid(12_000 - 10 + 16)).toEqual([]);
+  });
+
   it("sums only the anchor's own account's activities", () => {
     const { anchors } = anchored();
     record(anchors, activity('paper-div', 50), 'paper');

@@ -9,6 +9,7 @@ import type { Clock, Logger } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore } from '../../shared/store/index.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
+import { SqliteCashInLieuBooks } from './cash-in-lieu-books.js';
 import type { CycleDeps } from './cycle.js';
 import { isCfdVenue, type VenueSessionGate } from './data/index.js';
 import {
@@ -174,6 +175,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     brokerMode: options.brokerMode,
     reconcileCashToleranceGbp: options.reconcileCashToleranceGbp ?? declaredCashToleranceGbp(),
     cashAnchors: new SqliteCashAnchors(v2Store, clock),
+    cashInLieuBooks: new SqliteCashInLieuBooks(v2Store, clock),
     controls: new ControlStore(v2Store),
     market,
     clock,

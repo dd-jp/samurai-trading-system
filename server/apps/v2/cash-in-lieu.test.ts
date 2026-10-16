@@ -85,7 +85,7 @@ describe('readBrokerCashInLieu (#2001)', () => {
         level: 'info',
         event: 'v2_cash_in_lieu_read',
         message:
-          'alpaca reported 61.2 USD cash in lieu of 0.5 NVDA on 2026-09-30 (activity cil-1, executed); the tax log uses it in place of the latest-close estimate',
+          'alpaca reported 61.2 USD cash in lieu of 0.5 NVDA on 2026-09-30 (activity cil-1, executed); the tax log uses it in place of the latest-close estimate, and the next cycle corrects book cash to it',
       }),
     ]);
 

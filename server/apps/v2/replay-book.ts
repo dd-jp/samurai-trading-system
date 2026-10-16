@@ -23,6 +23,7 @@ export type ReplayStage =
   | 'reconciles'
   | 'anchors'
   | 'carry'
+  | 'cash_in_lieu_corrections'
   | 'marks'
   | 'signal_events'
   | 'signal_vetoes'
@@ -73,6 +74,8 @@ const DATED_TABLES = [
   'v2_faults',
   'v2_rescales',
   'v2_split_checks',
+  'v2_cash_in_lieu',
+  'v2_cash_in_lieu_adjustments',
 ] as const;
 
 const APPEND_ONLY_TRIGGERS = [
@@ -88,6 +91,8 @@ const APPEND_ONLY_TRIGGERS = [
   'v2_signal_veto_claims_no_delete',
   'v2_signal_veto_retry_verdicts_no_delete',
   'v2_split_checks_no_delete',
+  'v2_cash_in_lieu_no_delete',
+  'v2_cash_in_lieu_adjustments_no_delete',
   'v2_split_clears_no_delete',
 ] as const;
 
@@ -280,6 +285,13 @@ interface JournalRescale {
   readonly fills_before: number;
 }
 
+interface JournalCashCorrection {
+  readonly book_id: string;
+  readonly trading_date: string;
+  readonly amount_gbp: number;
+  readonly fills_before: number;
+}
+
 interface JournalMark {
   readonly book_id: string;
   readonly trading_date: string;
@@ -409,10 +421,10 @@ function byDateThenRank(a: LedgerEvent, b: LedgerEvent): number {
   return a.rank === b.rank ? a.seq - b.seq : a.rank - b.rank;
 }
 
-// A day's fills and split rescales land before its mark, in journal order, so cash and
-// positions are rebuilt by the same floating-point operations that produced the journalled ones;
-// a rescale written after n of its day's fills sorts between the day's fill n - 1 (seq 2n - 1)
-// and fill n (seq 2n + 1)
+// A day's fills, split rescales and cash-in-lieu corrections land before its mark, in journal
+// order, so cash and positions are rebuilt by the same floating-point operations that produced
+// the journalled ones; a rescale or correction written after n of its day's fills sorts between
+// the day's fill n - 1 (seq 2n - 1) and fill n (seq 2n + 1)
 export function rebuildBooks(rebuild: BookRebuild): void {
   const known = new Set(rebuild.books.ids());
   const previous = new Map<string, string>();
@@ -449,8 +461,26 @@ export function rebuildBooks(rebuild: BookRebuild): void {
         previous.set(mark.book_id, mark.trading_date);
       },
     }));
-  for (const event of [...fills, ...rescales, ...marks].sort(byDateThenRank)) event.apply();
+  const events = [...fills, ...rescales, ...cashCorrectionEvents(rebuild, known), ...marks];
+  for (const event of events.sort(byDateThenRank)) event.apply();
   restorePendingExits(rebuild);
+}
+
+function cashCorrectionEvents(rebuild: BookRebuild, known: ReadonlySet<string>): LedgerEvent[] {
+  const rows = rebuild.copy
+    .prepare(
+      `SELECT book_id, trading_date, amount_gbp, fills_before
+       FROM v2_cash_in_lieu_adjustments ORDER BY trading_date, adjustment_id`,
+    )
+    .all() as JournalCashCorrection[];
+  return rows
+    .filter((row) => known.has(row.book_id))
+    .map((row) => ({
+      date: row.trading_date,
+      rank: 0,
+      seq: 2 * row.fills_before,
+      apply: () => rebuild.books.applyCashAdjustment(row.book_id, row.amount_gbp),
+    }));
 }
 
 function lastMarks(copy: StoreHandle): JournalMark[] {
@@ -637,6 +667,15 @@ const TABLES: readonly TableSpec[] = [
                  WHERE trading_date = @date AND recorded_at <= @end ORDER BY rowid`,
   },
   {
+    stage: 'cash_in_lieu_corrections',
+    presence: true,
+    sql: () => `SELECT adjustment_id || '|' || book_id || '|' || estimate_fill_id || '|' || activity_key
+                  AS key, venue,
+                  instrument, amount_native, amount_gbp, fx_quote_per_gbp, fx_source,
+                  estimate_fill_seq, broker_mode, fills_before FROM v2_cash_in_lieu_adjustments
+                 WHERE trading_date = @date AND recorded_at <= @end ORDER BY adjustment_id`,
+  },
+  {
     stage: 'marks',
     presence: true,
     sql: () => `SELECT book_id AS key, equity_gbp, cash_gbp, invested_gbp, ytd_loss_gbp,
@@ -723,13 +762,15 @@ export interface SkippedStage {
 const CUTOVERS: readonly SkippedStage[] = [
   { stage: 'rescales', migration: 87 },
   { stage: 'carry', migration: 94 },
+  { stage: 'cash_in_lieu_corrections', migration: 104 },
 ];
 
 // A day run before a table's migration journals none of its rows, so every row its replay writes
-// would read as an extra one: before #1983 no rescale, before #2071 no per-position CFD carry. The
-// cutover is the migration's apply instant, not the table's first row: a day after the deploy
-// with no such row is still held, and a later re-run of an old date holds no earlier day. A run
-// cannot straddle it, as migrations apply before the process cycles
+// would read as an extra one: before #1983 no rescale, before #2071 no per-position CFD carry,
+// before #2001 no cash-in-lieu book-cash correction. The cutover is the migration's apply
+// instant, not the table's first row: a day after the deploy with no such row is still held, and
+// a later re-run of an old date holds no earlier day. A run cannot straddle it, as migrations
+// apply before the process cycles
 function skippedStages(comparison: TradingComparison): SkippedStage[] {
   const ranAt = comparison.markedAt ?? comparison.startedAt ?? LATEST;
   const applied = comparison.journal.prepare(
