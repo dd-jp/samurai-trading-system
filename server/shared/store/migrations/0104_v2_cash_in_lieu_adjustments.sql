@@ -1,6 +1,7 @@
 -- #2001, David 2026-10-15/16: amounts are signed positive for cash to the account; amount_gbp
--- converts the broker's amount at the reading row's rate, not the native delta. An estimate may
--- take several rows under one activity_key, since every re-share is booked
+-- targets the broker's amount at the reading row's rate, or the estimate's own GBP on a reversal,
+-- and fx_quote_per_gbp records the causing read's rate. An estimate may take several rows under
+-- one activity_key, since every re-share is booked
 CREATE TABLE IF NOT EXISTS v2_cash_in_lieu_adjustments (
   adjustment_id     INTEGER PRIMARY KEY,
   book_id           TEXT NOT NULL,

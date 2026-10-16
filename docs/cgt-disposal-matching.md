@@ -75,8 +75,9 @@ v1-final keeps them.
   out. Saxo's corporate-action
   booking is not read yet, so a Saxo disposal keeps the estimate. Book cash
   of a broker-routed book is corrected to the same pairing's broker amount at
-  the next cycle (`v2_cash_in_lieu_adjustments`, doc 66, 2026-10-16); a
-  held-out instrument keeps its book cash as last corrected.
+  the next cycle (`v2_cash_in_lieu_adjustments`, doc 66, 2026-10-16); an
+  instrument whose broker pairing is refused keeps its book cash as last
+  corrected; the split-conflict and day-rate hold-outs above still correct it.
 - **What clears, and what is never read.** The cash-in-lieu journal is
   append-only, so nothing clears a held-out instrument by itself. A correction
   clears only when the broker later reports the correction's own activity
