@@ -10,13 +10,23 @@ import {
   SaxoSimGateway,
   SimOnlyRefusal,
 } from './saxo-sim-gateway.js';
-import { drillPassed, redact, renderSummary } from './sim-cfd-drill-evidence.js';
+import {
+  type DrillEvidence,
+  drillPassed,
+  redact,
+  renderSummary,
+} from './sim-cfd-drill-evidence.js';
 import { instrumentRules } from './sim-cfd-drill-reads.js';
 import {
+  boundsFrom,
   DEFAULT_DRILL_OPTIONS,
   type DrillOptions,
   entryWithStop,
+  narrowed,
   newEvidence,
+  nextRatchetPrice,
+  placedInstruments,
+  resumeSimCfdDrill,
   runSimCfdStopDrill,
 } from './sim-cfd-stop-drill.js';
 import {
@@ -87,6 +97,10 @@ class FakeSaxoSim {
   fillSign = -1;
   stopAmountDrift = 0;
   triggerCloses = true;
+  ocoCancels = true;
+  market: number | undefined;
+  marketBand = 0.05;
+  readonly amendedTypes: string[] = [];
   positions: Position[] = [];
   orders: Order[] = [];
   activities: Record<string, unknown>[] = [];
@@ -242,20 +256,49 @@ class FakeSaxoSim {
     if (status !== 200) return [status, { ErrorInfo: { ErrorCode: 'OrderPriceWrongSide' } }];
     const order = this.orders.find((row) => row.OrderId === body.OrderId);
     if (order === undefined) return [404, undefined];
-    if (this.amendTriggers) {
-      if (this.triggerCloses)
-        this.positions = this.positions.filter((row) => row.uic !== order.Uic);
-      this.orders = this.orders.filter((row) => row.Uic !== order.Uic);
+    this.amendedTypes.push(String(body.OrderType));
+    if (this.market !== undefined) return this.amendAgainstMarket(order, Number(body.OrderPrice));
+    if (this.amendTriggers) this.fill(order);
+    return [200, { OrderId: order.OrderId }];
+  }
+
+  private amendAgainstMarket(order: Order, price: number): Reply {
+    const market = this.market ?? Number.NaN;
+    const restsAbove = (order.OpenOrderType === 'StopIfTraded') === (order.BuySell === 'Buy');
+    const crosses = restsAbove ? price <= market : price >= market;
+    if (crosses && order.OpenOrderType === 'StopIfTraded') {
+      return [400, { ErrorInfo: { ErrorCode: 'OnWrongSideOfMarket' } }];
+    }
+    order.Price = price;
+    if (crosses || Math.abs(price - market) <= this.marketBand + 1e-9) this.fill(order);
+    return [200, { OrderId: order.OrderId }];
+  }
+
+  private fill(order: Order): void {
+    if (this.triggerCloses) this.positions = this.positions.filter((row) => row.uic !== order.Uic);
+    const siblings = this.orders.filter(
+      (row) => row.Uic === order.Uic && row.OrderId !== order.OrderId,
+    );
+    this.orders = this.orders.filter(
+      (row) => row.OrderId !== order.OrderId && !(this.ocoCancels && row.Uic === order.Uic),
+    );
+    this.activities.push({
+      OrderId: order.OrderId,
+      Status: 'FinalFill',
+      ActivityTime: '2026-10-01T14:40:05.000Z',
+      AveragePrice: 199.5,
+      FillAmount: order.Amount,
+      AccountKey: ACCOUNT_KEY,
+    });
+    if (!this.ocoCancels) return;
+    for (const sibling of siblings) {
       this.activities.push({
-        OrderId: order.OrderId,
-        Status: 'FinalFill',
+        OrderId: sibling.OrderId,
+        Status: 'Cancelled',
         ActivityTime: '2026-10-01T14:40:05.000Z',
-        AveragePrice: 199.5,
-        FillAmount: order.Amount,
         AccountKey: ACCOUNT_KEY,
       });
     }
-    return [200, { OrderId: order.OrderId }];
   }
 
   private cancel(orderId: string): Reply {
@@ -986,6 +1029,9 @@ describe('CLI arguments', () => {
         { symbol: 'RR:xlon', assetType: 'CfdOnStock', side: 'long' },
       ],
       outDir: '/tmp/x',
+      exit: 'stop',
+      phase: 'full',
+      resume: undefined,
     });
     expect(
       parseDrillArgs(['--stock', 'none', '--etf', 'none', '--uk-long', 'BP:xlon']).targets,
@@ -1340,7 +1386,7 @@ describe('what the drill matches on', () => {
   it('records the trial account and every step of a passing run', async () => {
     const { evidence } = await drill(new FakeSaxoSim(), stockOnly);
     expect(evidence.account).toEqual({ isTrialAccount: true, currency: 'EUR' });
-    expect(evidence.refs).toEqual(['#1400', '#1916', '#1914']);
+    expect(evidence.refs).toEqual(['#1400', '#1916', '#1914', '#2107']);
     expect(evidence.steps.map((step) => step.code)).toEqual([
       'drill_trial_account_confirmed',
       'drill_instrument_started',
@@ -1349,6 +1395,7 @@ describe('what the drill matches on', () => {
       'drill_stop_resting',
       'drill_stop_amended',
       'drill_stop_triggered',
+      'drill_sibling_checked',
       'drill_instrument_passed',
       'drill_cleanup_started',
     ]);
@@ -1450,7 +1497,7 @@ describe('the rendered summary', () => {
     expect(renderSummary(evidence, 'r.json').split('\n')).toEqual([
       '# Saxo SIM CFD resting-stop drill, 2026-10-01',
       '',
-      'Refs #1400 #1916 #1914. Verdict: **PASSED**.',
+      'Refs #1400 #1916 #1914 #2107. Mode: stop. Verdict: **PASSED**.',
       '',
       `Gateway ${SAXO_SIM_GATEWAY}, Saxo trial account (EUR). Run ${evidence.startedAt} to ${evidence.finishedAt}. Full record: r.json.`,
       '',
@@ -1460,6 +1507,7 @@ describe('the rendered summary', () => {
       '|---|---|---|---|---|---|---|---|---|---|',
       '| AAPL:xnas | CfdOnStock | passed | - | 200 | 220.11 | Working | 199 | FinalFill | 199.5 |',
       '',
+      '- AAPL:xnas: sibling t-211 gone before the drill cancelled anything: yes (activity: Cancelled)',
       `- Flat before (${evidence.flatBefore?.at}): 0 net positions, 0 open orders`,
       `- Flat after (${evidence.flatAfter?.at}): 0 net positions, 0 open orders`,
       '- Cleanup: 0 orders cancelled, 0 positions flattened, 0 errors',
@@ -1492,5 +1540,424 @@ describe('the rendered summary', () => {
 
   it('keeps null and numbers through redaction', () => {
     expect(redact({ a: null, b: 1, c: [null] }, ['x'])).toEqual({ a: null, b: 1, c: [null] });
+  });
+});
+
+const SHORT_ONLY: DrillOptions = { ...OPTIONS, targets: OPTIONS.targets.slice(0, 1) };
+const RATCHET: DrillOptions = {
+  ...SHORT_ONLY,
+  ratchetIntervalMs: 2_000,
+  triggerTimeoutMs: 120_000,
+};
+
+function amendPrices(evidence: DrillEvidence, leg: 'stop' | 'target'): [number, number][] {
+  const attempts = evidence.instruments[0]?.[leg]?.amendAttempts ?? [];
+  return attempts.map((attempt) => [attempt.price, attempt.status]);
+}
+
+describe('the ratchet toward a market that moved away (#2107)', () => {
+  it('bisects on Saxo accept and wrong-side replies until the stop triggers', async () => {
+    const fake = new FakeSaxoSim();
+    fake.market = 198;
+    const { evidence } = await drill(fake, RATCHET);
+    expect(evidence.passed).toBe(true);
+    expect(amendPrices(evidence, 'stop')).toEqual([
+      [199, 200],
+      [198.9, 200],
+      [198.7, 200],
+      [198.3, 200],
+      [197.5, 400],
+      [197.9, 400],
+      [198.1, 200],
+      [198, 400],
+      [198.05, 200],
+    ]);
+  });
+
+  it('ratchets a long sell stop upward toward a market that rose', async () => {
+    const fake = new FakeSaxoSim();
+    fake.ukListed = true;
+    fake.market = 202;
+    const { evidence } = await drill(fake, {
+      ...RATCHET,
+      targets: [{ symbol: 'RR:xlon', assetType: 'CfdOnStock', side: 'long' }],
+    });
+    expect(evidence.passed).toBe(true);
+    const attempts = amendPrices(evidence, 'stop');
+    expect(attempts[0]).toEqual([201, 200]);
+    const [last, status] = attempts.at(-1) ?? [Number.NaN, 0];
+    expect(status).toBe(200);
+    expect(202 - last).toBeGreaterThan(0);
+    expect(202 - last).toBeLessThanOrEqual(fake.marketBand + 1e-9);
+  });
+
+  it('keeps amending within the window, then fails not_triggered and cleans up', async () => {
+    const fake = new FakeSaxoSim();
+    fake.amendTriggers = false;
+    const { evidence } = await drill(fake, { ...RATCHET, triggerTimeoutMs: 7_000 });
+    expect(evidence.failure).toBe('drill_stop_not_triggered: AAPL:xnas');
+    expect(amendPrices(evidence, 'stop').length).toBeGreaterThan(1);
+    expect(evidence.flatAfter).toMatchObject({ netPositions: 0, openOrders: 0 });
+  });
+});
+
+describe('the ratchet arithmetic', () => {
+  it('takes the last accepted price and the rejected price nearest it on the crossing side', () => {
+    expect(
+      boundsFrom(
+        [
+          { price: 199, status: 400 },
+          { price: 199.5, status: 400 },
+          { price: 201, status: 400 },
+          { price: 200.1, status: 200 },
+        ],
+        1,
+      ),
+    ).toEqual({ accepted: 200.1, rejected: 199.5, stride: 0 });
+  });
+
+  it('bisects a wide gap, rounding toward the resting side', () => {
+    expect(nextRatchetPrice({ accepted: 200, rejected: 199, stride: 3 }, 0.01, 1, 0.1)).toEqual({
+      price: 199.5,
+      bounds: { accepted: 200, rejected: 199, stride: 3 },
+    });
+    expect(
+      nextRatchetPrice({ accepted: 199, rejected: 199.05, stride: 0 }, 0.01, -1, 0.1).price,
+    ).toBe(199.02);
+  });
+
+  it('drops a bound within a tick and steps from the accepted price, doubling each time', () => {
+    const first = nextRatchetPrice({ accepted: 200, rejected: 199.99, stride: 0 }, 0.01, 1, 0.1);
+    expect(first).toEqual({
+      price: 199.9,
+      bounds: { accepted: 200, rejected: undefined, stride: 1 },
+    });
+    expect(nextRatchetPrice(first.bounds, 0.01, 1, 0.1).price).toBe(199.8);
+    expect(nextRatchetPrice({ accepted: 200, stride: 0 }, 0.01, -1, 0.1).price).toBe(200.1);
+  });
+
+  it('moves at least one tick when the step rounds back onto the accepted price', () => {
+    expect(nextRatchetPrice({ accepted: 200, stride: 0 }, 0.5, 1, 0.1).price).toBe(199.5);
+    expect(nextRatchetPrice({ accepted: 200, stride: 0 }, 0.5, -1, 0.1).price).toBe(200.5);
+  });
+
+  it('moves the accepted bound on 200, the rejected bound on 400, and neither otherwise', () => {
+    const bounds = { accepted: 200, rejected: undefined, stride: 2 };
+    expect(narrowed(bounds, 199.9, 200)).toEqual({ ...bounds, accepted: 199.9 });
+    expect(narrowed(bounds, 199.9, 400)).toEqual({ accepted: 200, rejected: 199.9, stride: 0 });
+    expect(narrowed(bounds, 199.9, 404)).toBe(bounds);
+  });
+});
+
+describe('the target-fill exit (#2107 item 1)', () => {
+  it('amends the limit target through the market and records Saxo cancelling the stop', async () => {
+    const fake = new FakeSaxoSim();
+    const { evidence } = await drill(fake, { ...SHORT_ONLY, exit: 'target' });
+    expect(evidence.passed).toBe(true);
+    expect(evidence.mode).toBe('target');
+    expect(fake.trades()[1]?.body).toMatchObject({
+      OrderId: 't-211',
+      OrderType: 'Limit',
+      OrderPrice: 201,
+    });
+    expect(evidence.instruments[0]).toMatchObject({
+      target: { orderId: 't-211', fillStatus: 'FinalFill', fillPrice: 199.5 },
+      sibling: { orderId: 's-211', goneBeforeCleanup: true, statuses: ['Cancelled'] },
+      positionClosedAfterTrigger: true,
+    });
+    expect(evidence.cleanup.cancelled).toEqual([]);
+    expect(evidence.steps.map((step) => step.code)).toContain('drill_target_filled');
+  });
+
+  it('crosses a long sell limit downward', async () => {
+    const fake = new FakeSaxoSim();
+    fake.ukListed = true;
+    const { evidence } = await drill(fake, {
+      ...SHORT_ONLY,
+      exit: 'target',
+      targets: [{ symbol: 'RR:xlon', assetType: 'CfdOnStock', side: 'long' }],
+    });
+    expect(evidence.passed).toBe(true);
+    expect(fake.trades()[1]?.body).toMatchObject({ OrderType: 'Limit', OrderPrice: 199 });
+  });
+
+  it('ratchets a limit that rests unfilled up to a market above it', async () => {
+    const fake = new FakeSaxoSim();
+    fake.market = 203;
+    const { evidence } = await drill(fake, { ...RATCHET, exit: 'target' });
+    expect(evidence.passed).toBe(true);
+    expect(fake.amendedTypes.every((type) => type === 'Limit')).toBe(true);
+    expect(amendPrices(evidence, 'target')[0]).toEqual([201, 200]);
+  });
+
+  it('records a sibling Saxo leaves behind, and cleanup cancels it without failing the run', async () => {
+    const fake = new FakeSaxoSim();
+    fake.ocoCancels = false;
+    const { evidence } = await drill(fake, { ...SHORT_ONLY, exit: 'target' });
+    expect(evidence.instruments[0]?.sibling).toEqual({
+      orderId: 's-211',
+      goneBeforeCleanup: false,
+      statuses: [],
+    });
+    expect(evidence.cleanup.cancelled).toEqual(['s-211']);
+    expect(evidence.passed).toBe(true);
+    expect(renderSummary(evidence, 'r.json')).toContain(
+      '- AAPL:xnas: sibling s-211 gone before the drill cancelled anything: no (activity: none)',
+    );
+  });
+
+  it('fails before any amend when no limit target rests among the related orders', async () => {
+    const fake = new FakeSaxoSim();
+    const clock = new FakeClock();
+    const gateway = new SaxoSimGateway({
+      baseUrl: SAXO_SIM_GATEWAY,
+      accessToken: async () => TOKEN,
+      fetch: async (url, init) => {
+        const reply = await fake.fetch(url, init);
+        fake.orders = fake.orders.filter((order) => order.OpenOrderType !== 'Limit');
+        return reply;
+      },
+      sleep: clock.sleep,
+      now: () => clock.now().getTime(),
+    });
+    const { evidence } = await runSimCfdStopDrill(
+      gateway,
+      { ...SHORT_ONLY, exit: 'target' },
+      clock,
+    );
+    expect(evidence.failure).toBe('drill_target_not_resting: AAPL:xnas');
+    expect(fake.trades().some((call) => call.method === 'PATCH')).toBe(false);
+  });
+
+  it('ratchets from the resting target when Saxo rejects the crossing limit amend', async () => {
+    const fake = new FakeSaxoSim();
+    fake.amendStatuses = [400];
+    const { evidence } = await drill(fake, { ...RATCHET, exit: 'target' });
+    const [record] = evidence.instruments;
+    expect(record?.target?.amendAttempts?.map((attempt) => attempt.status)).toEqual([400, 200]);
+    expect(record?.target?.fillStatus).toBeDefined();
+    expect(evidence.passed).toBe(true);
+  });
+
+  it('fails not_filled when the target never fills', async () => {
+    const fake = new FakeSaxoSim();
+    fake.amendTriggers = false;
+    const { evidence } = await drill(fake, { ...SHORT_ONLY, exit: 'target' });
+    expect(evidence.failure).toBe('drill_target_not_filled: AAPL:xnas');
+  });
+});
+
+describe('one failed instrument does not stop the rest', () => {
+  it('drills the next instrument and keeps the first failure', async () => {
+    const fake = new FakeSaxoSim();
+    fake.etfListed = true;
+    fake.amendStatuses = [400, 400, 400, 400];
+    const { evidence } = await drill(fake);
+    expect(evidence.instruments.map((record) => record.outcome)).toEqual(['failed', 'passed']);
+    expect(evidence.failure).toBe('drill_stop_amend_rejected: AAPL:xnas');
+    expect(evidence.passed).toBe(false);
+    expect(evidence.flatAfter).toMatchObject({ netPositions: 0, openOrders: 0 });
+  });
+});
+
+describe('the kill check: place, exit, resume in a fresh process (#2107)', () => {
+  const PLACE: DrillOptions = { ...SHORT_ONLY, phase: 'place' };
+
+  async function placed(fake: FakeSaxoSim) {
+    const { evidence } = await drill(fake, PLACE);
+    return JSON.parse(JSON.stringify(redact(evidence, [ACCOUNT_KEY]))) as unknown;
+  }
+
+  async function resume(fake: FakeSaxoSim, record: unknown) {
+    const clock = new FakeClock();
+    return resumeSimCfdDrill(
+      gatewayFor(fake, clock),
+      { record, source: 'place.json' },
+      SHORT_ONLY,
+      clock,
+    );
+  }
+
+  it('leaves the position and both legs resting, with no cleanup', async () => {
+    const fake = new FakeSaxoSim();
+    const { evidence } = await drill(fake, PLACE);
+    expect(evidence.passed).toBe(true);
+    expect(evidence.mode).toBe('kill-place');
+    expect(fake.trades().map((call) => call.method)).toEqual(['POST']);
+    expect(fake.orders.map((order) => order.OrderId)).toEqual(['s-211', 't-211']);
+    expect(fake.positions).toHaveLength(1);
+    expect(evidence.steps.map((step) => step.code)).not.toContain('drill_cleanup_started');
+  });
+
+  it('cleans up a place phase that failed', async () => {
+    const fake = new FakeSaxoSim();
+    fake.stopPriceDrift = 1;
+    const { evidence } = await drill(fake, PLACE);
+    expect(evidence.failure).toBe('drill_stop_mismatch: AAPL:xnas');
+    expect(evidence.flatAfter).toMatchObject({ netPositions: 0, openOrders: 0 });
+  });
+
+  it('finds the stop still Working, then cancels both legs and flattens', async () => {
+    const fake = new FakeSaxoSim();
+    const { evidence } = await resume(fake, await placed(fake));
+    expect(evidence.mode).toBe('kill-resume');
+    expect(evidence.resumedFrom).toBe('place.json');
+    expect(evidence.instruments[0]).toMatchObject({
+      symbol: 'AAPL:xnas',
+      uic: 211,
+      outcome: 'passed',
+      stopWorkingAfterExit: true,
+    });
+    expect(evidence.cleanup.cancelled.sort()).toEqual(['s-211', 't-211']);
+    expect(evidence.cleanup.flattened).toEqual(['CfdOnStock:211']);
+    expect(evidence.passed).toBe(true);
+    expect(renderSummary(evidence, 'r.json')).toContain(
+      '- AAPL:xnas: stop s-211 still Working in a fresh process after the placing process exited: yes',
+    );
+  });
+
+  it('fails a stop that is gone or moved, and still cleans up', async () => {
+    const fake = new FakeSaxoSim();
+    const record = await placed(fake);
+    const stop = fake.orders.find((order) => order.OrderId === 's-211');
+    if (stop !== undefined) stop.Price += 1;
+    const { evidence } = await resume(fake, record);
+    expect(evidence.instruments[0]).toMatchObject({
+      outcome: 'failed',
+      reason: 'drill_stop_lost_after_exit',
+      stopWorkingAfterExit: false,
+    });
+    expect(evidence.passed).toBe(false);
+    expect(evidence.flatAfter).toMatchObject({ netPositions: 0, openOrders: 0 });
+  });
+
+  it('cleans up again when rerun after the stops are already gone', async () => {
+    const fake = new FakeSaxoSim();
+    const record = await placed(fake);
+    await resume(fake, record);
+    const { evidence } = await resume(fake, record);
+    expect(evidence.instruments[0]?.stopWorkingAfterExit).toBe(false);
+    expect(evidence.flatAfter).toMatchObject({ netPositions: 0, openOrders: 0 });
+  });
+
+  it.each([
+    ['a full-run record', { mode: 'stop', passed: true, instruments: [] }],
+    ['a failed place record', { mode: 'kill-place', passed: false, instruments: [] }],
+    [
+      'a place record with no stop id',
+      { mode: 'kill-place', passed: true, instruments: [{ outcome: 'passed', uic: 211 }] },
+    ],
+    ['nothing', null],
+  ])('refuses %s and touches nothing', async (_label, record) => {
+    const fake = new FakeSaxoSim();
+    const { evidence } = await resume(fake, record);
+    expect(evidence.failure).toMatch(/^drill_resume_refused/);
+    expect(fake.trades()).toHaveLength(0);
+    expect(evidence.passed).toBe(false);
+  });
+
+  it('reads a long placed record back as a long', () => {
+    expect(
+      placedInstruments({
+        mode: 'kill-place',
+        passed: true,
+        instruments: [
+          { outcome: 'skipped', symbol: 'ISF:xlon' },
+          {
+            outcome: 'passed',
+            symbol: 'RR:xlon',
+            assetType: 'CfdOnStock',
+            side: 'long',
+            uic: 411,
+            amount: 1,
+            stop: { orderId: 's-411', rest: { price: 179.91 } },
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        symbol: 'RR:xlon',
+        assetType: 'CfdOnStock',
+        side: 'long',
+        outcome: 'running',
+        uic: 411,
+        amount: 1,
+        stop: { placedPrice: 179.91, orderId: 's-411' },
+      },
+    ]);
+  });
+});
+
+describe('CLI modes', () => {
+  it('defaults to the stop exit and the full phase', () => {
+    expect(parseDrillArgs([])).toMatchObject({ exit: 'stop', phase: 'full', resume: undefined });
+  });
+
+  it('takes the target exit, the place phase and a resume record', () => {
+    expect(parseDrillArgs(['--exit', 'target', '--phase', 'place'])).toMatchObject({
+      exit: 'target',
+      phase: 'place',
+    });
+    expect(parseDrillArgs(['--resume', '/tmp/p.json']).resume).toBe('/tmp/p.json');
+  });
+
+  it.each([
+    [['--exit', 'both']],
+    [['--phase', 'resume']],
+    [['--resume', '/tmp/p.json', '--exit', 'target']],
+    [['--resume', '/tmp/p.json', '--phase', 'place']],
+    [['--resume', '/tmp/p.json', '--stock', 'none']],
+    [['--resume', '/tmp/p.json', '--uk-long', 'RR']],
+  ])('refuses %j', (argv) => {
+    expect(() => parseDrillArgs(argv)).toThrow(/usage/);
+  });
+
+  it('refuses an unreadable resume record before any token or gateway is set up', async () => {
+    const fake = new FakeSaxoSim();
+    let tokensAsked = false;
+    const tokens = () => {
+      tokensAsked = true;
+      return staticTokens();
+    };
+    await expect(
+      main(['--resume', '/nonexistent/place.json'], {}, cliDeps(fake, new FakeClock(), tokens)),
+    ).rejects.toThrow(/ENOENT/);
+    expect(tokensAsked).toBe(false);
+    expect(fake.trades()).toHaveLength(0);
+  });
+
+  it('places, writes a kill-place record, and a second main resumes from it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sim-drill-kill-'));
+    const fake = new FakeSaxoSim();
+    try {
+      const placedCode = await main(
+        ['--etf', 'none', '--uk-long', 'none', '--phase', 'place', '--out-dir', dir],
+        {},
+        cliDeps(fake, new FakeClock()),
+      );
+      expect(placedCode).toBe(0);
+      const placePath = join(dir, 'sim-cfd-stop-drill-2026-10-01T143500Z-kill-place.json');
+      expect(JSON.stringify(JSON.parse(readFileSync(placePath, 'utf8')))).not.toContain(
+        ACCOUNT_KEY,
+      );
+      const resumedCode = await main(
+        ['--resume', placePath, '--out-dir', dir],
+        {},
+        cliDeps(fake, new FakeClock()),
+      );
+      expect(resumedCode).toBe(0);
+      const resumed = JSON.parse(
+        readFileSync(join(dir, 'sim-cfd-stop-drill-2026-10-01T143500Z-kill-resume.json'), 'utf8'),
+      );
+      expect(resumed).toMatchObject({
+        mode: 'kill-resume',
+        resumedFrom: 'sim-cfd-stop-drill-2026-10-01T143500Z-kill-place.json',
+        passed: true,
+      });
+      expect(fake.orders).toHaveLength(0);
+      expect(fake.positions).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
