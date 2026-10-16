@@ -1,11 +1,6 @@
--- Book-cash corrections from the broker's cash in lieu (#2001, David 2026-10-15). A row moves one
--- broker-routed estimate fill's book cash towards its share of the broker's amount; the estimate
--- fill itself never changes. activity_key is the v2_cash_in_lieu row that caused it
--- (venue:activity_id:status), so a canceled activity reverses under its canceled row's key.
--- amount_native is signed in the venue's currency, positive for cash to the account, and joins
--- the cash anchor's store flow; amount_gbp moves book cash, the broker's amount converted at the
--- reading row's fx_quote_per_gbp. fills_before orders the row among its day's fills for replay.
--- A repeat of the same estimate and cause is ignored
+-- #2001, David 2026-10-15/16: amounts are signed positive for cash to the account; amount_gbp
+-- converts the broker's amount at the reading row's rate, not the native delta. A repeat of the
+-- same estimate and activity_key is ignored
 CREATE TABLE IF NOT EXISTS v2_cash_in_lieu_adjustments (
   adjustment_id     INTEGER PRIMARY KEY,
   book_id           TEXT NOT NULL,
