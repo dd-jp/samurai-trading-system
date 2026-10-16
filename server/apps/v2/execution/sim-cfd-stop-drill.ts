@@ -2,7 +2,10 @@ import { SAXO_SIM_GATEWAY, type SaxoSimGateway } from './saxo-sim-gateway.js';
 import {
   type AccountFlatness,
   type DrillEvidence,
+  type DrillExit,
+  type DrillMode,
   type DrillSide,
+  type DrivenLeg,
   drillPassed,
   type InstrumentEvidence,
   isFlat,
@@ -15,6 +18,8 @@ import {
   instrumentRules,
   isOn,
   netPositions,
+  type OpenOrder,
+  type OrderActivity,
   openOrders,
   orderActivities,
   quoteOf,
@@ -52,7 +57,12 @@ export interface DrillOptions {
   readonly pollIntervalMs: number;
   readonly fillTimeoutMs: number;
   readonly triggerTimeoutMs: number;
+  readonly ratchetIntervalMs: number;
+  readonly exit: DrillExit;
+  readonly phase: DrillPhase;
 }
+
+export type DrillPhase = 'full' | 'place';
 
 export const DEFAULT_DRILL_OPTIONS: Omit<DrillOptions, 'targets' | 'runId'> = {
   restDistance: 0.1,
@@ -61,6 +71,9 @@ export const DEFAULT_DRILL_OPTIONS: Omit<DrillOptions, 'targets' | 'runId'> = {
   pollIntervalMs: 2_000,
   fillTimeoutMs: 60_000,
   triggerTimeoutMs: 600_000,
+  ratchetIntervalMs: 30_000,
+  exit: 'stop',
+  phase: 'full',
 };
 
 export interface DrillClock {
@@ -309,21 +322,93 @@ async function verifyRest(
   if (!matches) fail(record, 'drill_stop_mismatch');
 }
 
+function restingTarget(
+  orders: readonly OpenOrder[],
+  instrument: DrillInstrument,
+  record: InstrumentEvidence,
+): OpenOrder | undefined {
+  return orders.find(
+    (order) =>
+      isOn(instrument)(order) &&
+      order.openOrderType === 'Limit' &&
+      (record.entry?.relatedOrderIds ?? []).includes(order.orderId),
+  );
+}
+
+async function noteTarget(
+  drill: Drill,
+  record: InstrumentEvidence,
+  instrument: DrillInstrument,
+): Promise<void> {
+  const row = restingTarget(await openOrders(drill.gateway), instrument, record);
+  if (row === undefined) {
+    if (drill.options.exit === 'target') fail(record, 'drill_target_not_resting');
+    return;
+  }
+  record.target = { orderId: row.orderId, rest: { ...row, observedAt: stamp(drill) } };
+}
+
+type DrivenType = 'StopIfTraded' | 'Limit';
+
+interface Drive {
+  readonly kind: DrillExit;
+  readonly leg: DrivenLeg;
+  readonly orderId: string;
+  readonly orderType: DrivenType;
+  // +1 when the order rests unfilled above the market, -1 when below
+  readonly restSign: 1 | -1;
+}
+
+function driveFor(drill: Drill, record: InstrumentEvidence): Drive {
+  const stopSign = isLong(record) ? -1 : 1;
+  const leg = drill.options.exit === 'target' ? record.target : record.stop;
+  if (leg?.orderId === undefined) fail(record, 'drill_exit_order_unknown');
+  return drill.options.exit === 'target'
+    ? {
+        kind: 'target',
+        leg,
+        orderId: leg.orderId,
+        orderType: 'Limit',
+        restSign: stopSign === 1 ? -1 : 1,
+      }
+    : { kind: 'stop', leg, orderId: leg.orderId, orderType: 'StopIfTraded', restSign: stopSign };
+}
+
 function amendPayload(
   drill: Drill,
   record: InstrumentEvidence,
-  orderId: string,
+  drive: Drive,
   price: number,
 ): Record<string, unknown> {
   return {
     AccountKey: drill.account.accountKey,
-    OrderId: orderId,
+    OrderId: drive.orderId,
     AssetType: record.assetType,
-    OrderType: 'StopIfTraded',
+    OrderType: drive.orderType,
     OrderPrice: price,
     Amount: record.amount,
     OrderDuration: { DurationType: 'GoodTillCancel' },
   };
+}
+
+async function amendOnce(
+  drill: Drill,
+  record: InstrumentEvidence,
+  drive: Drive,
+  price: number,
+): Promise<number> {
+  const reply = await drill.gateway.send(
+    'PATCH',
+    '/trade/v2/orders',
+    amendPayload(drill, record, drive, price),
+  );
+  drive.leg.amendAttempts?.push({ price, status: reply.status, body: reply.body });
+  note(drill, `drill_${drive.kind}_amended`, {
+    symbol: record.symbol,
+    price,
+    status: reply.status,
+  });
+  return reply.status;
 }
 
 // A crossing amend was refused as OnWrongSideOfMarket on SIM (2026-10-09 record), so one tick
@@ -349,54 +434,195 @@ function triggerCandidates(
   ];
 }
 
-async function amendToTrigger(
+function crossingTick(restSign: 1 | -1): 'up' | 'down' {
+  return restSign > 0 ? 'down' : 'up';
+}
+
+async function firstCandidates(
   drill: Drill,
   record: InstrumentEvidence,
   prepared: { instrument: DrillInstrument; rules: InstrumentRules },
-): Promise<void> {
-  const { rules } = prepared;
-  const fill = record.entry?.fillPrice;
-  const stop = record.stop;
-  if (fill === undefined || stop?.orderId === undefined) fail(record, 'drill_fill_price_unknown');
-  const quote = await quoteOf(drill.gateway, prepared.instrument);
-  const candidates = triggerCandidates(drill.options, record, fill, rules, quote);
-  stop.amendAttempts = [];
-  for (const price of candidates) {
-    const reply = await drill.gateway.send(
-      'PATCH',
-      '/trade/v2/orders',
-      amendPayload(drill, record, stop.orderId, price),
-    );
-    stop.amendAttempts.push({ price, status: reply.status, body: reply.body });
-    note(drill, 'drill_stop_amended', { symbol: record.symbol, price, status: reply.status });
-    if (reply.status === 200) return;
+  drive: Drive,
+  fill: number,
+): Promise<number[]> {
+  if (drive.kind === 'stop') {
+    const quote = await quoteOf(drill.gateway, prepared.instrument);
+    return triggerCandidates(drill.options, record, fill, prepared.rules, quote);
   }
-  fail(record, 'drill_stop_amend_rejected');
+  const crossing = fill * (1 - drive.restSign * drill.options.crossDistance);
+  return [toTick(crossing, prepared.rules.tickSize(fill), crossingTick(drive.restSign))];
 }
 
-async function awaitTrigger(
+async function amendToCross(
+  drill: Drill,
+  record: InstrumentEvidence,
+  prepared: { instrument: DrillInstrument; rules: InstrumentRules },
+  drive: Drive,
+): Promise<void> {
+  const fill = record.entry?.fillPrice;
+  if (fill === undefined) fail(record, 'drill_fill_price_unknown');
+  const candidates = await firstCandidates(drill, record, prepared, drive, fill);
+  drive.leg.amendAttempts = [];
+  for (const price of candidates) {
+    if ((await amendOnce(drill, record, drive, price)) === 200) return;
+  }
+  fail(record, `drill_${drive.kind}_amend_rejected`);
+}
+
+export interface RatchetBounds {
+  readonly accepted: number;
+  readonly rejected?: number | undefined;
+  readonly stride: number;
+}
+
+function onCrossingSide(price: number, accepted: number, restSign: 1 | -1): boolean {
+  return (price - accepted) * restSign < 0;
+}
+
+export function boundsFrom(
+  attempts: readonly { price: number; status: number }[],
+  restSign: 1 | -1,
+): RatchetBounds {
+  const accepted = attempts.findLast((attempt) => attempt.status === 200)?.price ?? Number.NaN;
+  const crossing = attempts
+    .filter(
+      (attempt) => attempt.status === 400 && onCrossingSide(attempt.price, accepted, restSign),
+    )
+    .map((attempt) => attempt.price)
+    .sort((a, b) => (b - a) * restSign);
+  return { accepted, rejected: crossing[0], stride: 0 };
+}
+
+// Saxo's accept or OnWrongSideOfMarket reply locates the live market without the 15-minute
+// delayed quote: bisect between the last accepted and last rejected price, and widen
+// geometrically toward the market once a bound has gone stale
+export function nextRatchetPrice(
+  bounds: RatchetBounds,
+  tick: number,
+  restSign: 1 | -1,
+  stepSize: number,
+): { price: number; bounds: RatchetBounds } {
+  const { accepted, rejected } = bounds;
+  if (rejected !== undefined && Math.abs(accepted - rejected) > tick * 1.5) {
+    const price = toTick((accepted + rejected) / 2, tick, restSign > 0 ? 'up' : 'down');
+    return { price, bounds };
+  }
+  const reach = stepSize * 2 ** bounds.stride;
+  const stepped = toTick(accepted - restSign * reach, tick, crossingTick(restSign));
+  const price =
+    stepped === accepted
+      ? toTick(accepted - restSign * tick, tick, crossingTick(restSign))
+      : stepped;
+  return { price, bounds: { accepted, rejected: undefined, stride: bounds.stride + 1 } };
+}
+
+export function narrowed(bounds: RatchetBounds, price: number, status: number): RatchetBounds {
+  if (status === 200) return { ...bounds, accepted: price };
+  if (status === 400) return { ...bounds, rejected: price, stride: 0 };
+  return bounds;
+}
+
+async function exitFill(
+  drill: Drill,
+  drive: Drive,
+  since: Date,
+): Promise<OrderActivity | undefined> {
+  return (await orderActivities(drill.gateway, drill.account, since)).find(
+    (activity) => activity.orderId === drive.orderId && FILLED_STATUSES.has(activity.status),
+  );
+}
+
+function notFilledReason(drive: Drive): string {
+  return drive.kind === 'stop' ? 'drill_stop_not_triggered' : 'drill_target_not_filled';
+}
+
+async function driveToFill(
+  drill: Drill,
+  record: InstrumentEvidence,
+  rules: InstrumentRules,
+  drive: Drive,
+  since: Date,
+): Promise<OrderActivity> {
+  const deadline = drill.clock.now().getTime() + drill.options.triggerTimeoutMs;
+  const fill = record.entry?.fillPrice ?? Number.NaN;
+  const stepSize = fill * drill.options.nearDistance;
+  let bounds = boundsFrom(drive.leg.amendAttempts ?? [], drive.restSign);
+  for (;;) {
+    const remaining = deadline - drill.clock.now().getTime();
+    const window = Math.min(drill.options.ratchetIntervalMs, remaining);
+    const filled = await poll(drill, window, () => exitFill(drill, drive, since));
+    if (filled !== undefined) return filled;
+    if (drill.clock.now().getTime() >= deadline) fail(record, notFilledReason(drive));
+    const step = nextRatchetPrice(bounds, rules.tickSize(fill), drive.restSign, stepSize);
+    bounds = narrowed(step.bounds, step.price, await amendOnce(drill, record, drive, step.price));
+  }
+}
+
+function recordFill(record: InstrumentEvidence, drive: Drive, fill: OrderActivity): void {
+  const leg = drive.kind === 'target' ? record.target : undefined;
+  if (leg !== undefined) {
+    leg.filledAt = fill.activityTime;
+    leg.fillStatus = fill.status;
+    leg.fillPrice = fill.averagePrice;
+    return;
+  }
+  if (record.stop === undefined) return;
+  record.stop.triggeredAt = fill.activityTime;
+  record.stop.triggerStatus = fill.status;
+  record.stop.triggerFillPrice = fill.averagePrice;
+}
+
+async function awaitFlatPosition(
   drill: Drill,
   record: InstrumentEvidence,
   instrument: DrillInstrument,
 ): Promise<void> {
-  const stop = record.stop;
-  const since = new Date(Date.parse(record.entry?.placedAt ?? drill.evidence.startedAt) - 60_000);
-  const fill = await poll(drill, drill.options.triggerTimeoutMs, async () =>
-    (await orderActivities(drill.gateway, drill.account, since)).find(
-      (activity) => activity.orderId === stop?.orderId && FILLED_STATUSES.has(activity.status),
-    ),
-  );
-  if (fill === undefined || stop === undefined) fail(record, 'drill_stop_not_triggered');
-  stop.triggeredAt = fill.activityTime;
-  stop.triggerStatus = fill.status;
-  stop.triggerFillPrice = fill.averagePrice;
-  note(drill, 'drill_stop_triggered', { symbol: record.symbol, activity: fill });
   const open = await poll(drill, drill.options.fillTimeoutMs, async () => {
     const rows = (await netPositions(drill.gateway)).filter(isOn(instrument));
     return rows.every((row) => row.amount === 0) ? true : undefined;
   });
   record.positionClosedAfterTrigger = open === true;
   if (!record.positionClosedAfterTrigger) fail(record, 'drill_position_not_closed');
+}
+
+// Recorded, not required: a sibling Saxo leaves behind answers #2107 item 1 the other way,
+// and cleanup still cancels it
+async function checkSibling(
+  drill: Drill,
+  record: InstrumentEvidence,
+  drive: Drive,
+  since: Date,
+): Promise<void> {
+  const siblingId = (drive.kind === 'stop' ? record.target : record.stop)?.orderId;
+  if (siblingId === undefined) return;
+  const gone = await poll(drill, drill.options.fillTimeoutMs, async () =>
+    (await openOrders(drill.gateway)).some((order) => order.orderId === siblingId)
+      ? undefined
+      : true,
+  );
+  const statuses = (await orderActivities(drill.gateway, drill.account, since))
+    .filter((activity) => activity.orderId === siblingId)
+    .map((activity) => activity.status);
+  record.sibling = { orderId: siblingId, goneBeforeCleanup: gone === true, statuses };
+  note(drill, 'drill_sibling_checked', { symbol: record.symbol, sibling: record.sibling });
+}
+
+async function exitThroughMarket(
+  drill: Drill,
+  record: InstrumentEvidence,
+  prepared: { instrument: DrillInstrument; rules: InstrumentRules },
+): Promise<void> {
+  const drive = driveFor(drill, record);
+  const since = new Date(Date.parse(record.entry?.placedAt ?? drill.evidence.startedAt) - 60_000);
+  await amendToCross(drill, record, prepared, drive);
+  const fill = await driveToFill(drill, record, prepared.rules, drive, since);
+  recordFill(record, drive, fill);
+  note(drill, drive.kind === 'stop' ? 'drill_stop_triggered' : 'drill_target_filled', {
+    symbol: record.symbol,
+    activity: fill,
+  });
+  await awaitFlatPosition(drill, record, prepared.instrument);
+  await checkSibling(drill, record, drive, since);
 }
 
 async function drillInstrument(drill: Drill, target: DrillTarget): Promise<void> {
@@ -413,10 +639,10 @@ async function drillInstrument(drill: Drill, target: DrillTarget): Promise<void>
   await placeEntry(drill, record, prepared);
   await awaitFill(drill, record, prepared.instrument);
   await verifyRest(drill, record, prepared);
-  await amendToTrigger(drill, record, prepared);
-  await awaitTrigger(drill, record, prepared.instrument);
+  await noteTarget(drill, record, prepared.instrument);
+  if (drill.options.phase === 'full') await exitThroughMarket(drill, record, prepared);
   record.outcome = 'passed';
-  note(drill, 'drill_instrument_passed', { symbol: record.symbol });
+  note(drill, 'drill_instrument_passed', { symbol: record.symbol, phase: drill.options.phase });
 }
 
 function touched(evidence: DrillEvidence): DrillInstrument[] {
@@ -495,10 +721,11 @@ async function cleanUp(drill: Drill): Promise<void> {
   await attempt(drill, 'drill_flat_check_error', () => awaitFlat(drill));
 }
 
-export function newEvidence(clock: DrillClock): DrillEvidence {
+export function newEvidence(clock: DrillClock, mode: DrillMode = 'stop'): DrillEvidence {
   return {
     drill: 'sim-cfd-stop-drill',
-    refs: ['#1400', '#1916', '#1914'],
+    mode,
+    refs: ['#1400', '#1916', '#1914', '#2107', '#1849'],
     gateway: SAXO_SIM_GATEWAY,
     startedAt: clock.now().toISOString(),
     instruments: [],
@@ -508,19 +735,60 @@ export function newEvidence(clock: DrillClock): DrillEvidence {
   };
 }
 
+function modeOf(options: Pick<DrillOptions, 'exit' | 'phase'>): DrillMode {
+  return options.phase === 'place' ? 'kill-place' : options.exit;
+}
+
+async function drillEach(drill: Drill): Promise<void> {
+  for (const target of drill.options.targets) {
+    try {
+      await drillInstrument(drill, target);
+    } catch (error) {
+      if (!(error instanceof DrillFailure) || drill.interrupt.aborted) throw error;
+      drill.evidence.failure ??= error.message;
+      note(drill, 'drill_instrument_failed', error.message);
+    }
+  }
+}
+
+function leftResting(drill: Drill): boolean {
+  return drill.options.phase === 'place' && drillPassed(drill.evidence);
+}
+
 async function runDrill(drill: Drill): Promise<void> {
   try {
     drill.evidence.flatBefore = await flatness(drill.gateway, stamp(drill));
     if (!isFlat(drill.evidence.flatBefore)) throw new DrillFailure('drill_account_not_flat');
-    for (const target of drill.options.targets) await drillInstrument(drill, target);
+    await drillEach(drill);
   } catch (error) {
-    drill.evidence.failure = messageOf(error);
+    drill.evidence.failure ??= messageOf(error);
     note(drill, 'drill_failed', drill.evidence.failure);
   } finally {
-    if (isFlat(drill.evidence.flatBefore)) {
+    if (isFlat(drill.evidence.flatBefore) && !leftResting(drill)) {
       await cleanUp({ ...drill, interrupt: new AbortController().signal });
     }
   }
+}
+
+async function onTrialAccount(
+  gateway: SaxoSimGateway,
+  clock: DrillClock,
+  evidence: DrillEvidence,
+  body: (account: SimAccount) => Promise<void>,
+): Promise<SimAccount | undefined> {
+  let account: SimAccount | undefined;
+  try {
+    account = await trialAccount(gateway);
+    evidence.account = { isTrialAccount: true, currency: account.currency };
+    note({ clock, evidence }, 'drill_trial_account_confirmed');
+    await body(account);
+  } catch (error) {
+    evidence.failure = messageOf(error);
+    note({ clock, evidence }, 'drill_refused', evidence.failure);
+  }
+  evidence.finishedAt = clock.now().toISOString();
+  evidence.passed = drillPassed(evidence);
+  return account;
 }
 
 export async function runSimCfdStopDrill(
@@ -529,18 +797,97 @@ export async function runSimCfdStopDrill(
   clock: DrillClock,
   interrupt: AbortSignal = new AbortController().signal,
 ): Promise<{ evidence: DrillEvidence; account: SimAccount | undefined }> {
-  const evidence = newEvidence(clock);
-  let account: SimAccount | undefined;
-  try {
-    account = await trialAccount(gateway);
-    evidence.account = { isTrialAccount: true, currency: account.currency };
-    note({ clock, evidence }, 'drill_trial_account_confirmed');
-    await runDrill({ gateway, options, clock, evidence, account, interrupt });
-  } catch (error) {
-    evidence.failure = messageOf(error);
-    note({ clock, evidence }, 'drill_refused', evidence.failure);
+  const evidence = newEvidence(clock, modeOf(options));
+  const account = await onTrialAccount(gateway, clock, evidence, (trial) =>
+    runDrill({ gateway, options, clock, evidence, account: trial, interrupt }),
+  );
+  return { evidence, account };
+}
+
+function field(row: unknown, key: string): unknown {
+  return typeof row === 'object' && row !== null
+    ? (row as Record<string, unknown>)[key]
+    : undefined;
+}
+
+function placedRecord(row: unknown): InstrumentEvidence | undefined {
+  const stop = field(row, 'stop');
+  const orderId = field(stop, 'orderId');
+  const price = field(field(stop, 'rest'), 'price');
+  const uic = field(row, 'uic');
+  if (typeof orderId !== 'string' || typeof price !== 'number' || typeof uic !== 'number') {
+    return undefined;
   }
-  evidence.finishedAt = clock.now().toISOString();
-  evidence.passed = drillPassed(evidence);
+  return {
+    symbol: String(field(row, 'symbol')),
+    assetType: field(row, 'assetType') as InstrumentEvidence['assetType'],
+    ...(field(row, 'side') === 'long' ? { side: 'long' as const } : {}),
+    outcome: 'running',
+    uic,
+    amount: Number(field(row, 'amount')),
+    stop: { placedPrice: price, orderId },
+  };
+}
+
+export function placedInstruments(placed: unknown): InstrumentEvidence[] {
+  if (field(placed, 'mode') !== 'kill-place' || field(placed, 'passed') !== true) {
+    throw new Error('drill_resume_refused: not a passing kill-place record');
+  }
+  const rows = field(placed, 'instruments');
+  const ran = (Array.isArray(rows) ? rows : []).filter((row) => field(row, 'outcome') === 'passed');
+  const records = ran.map(placedRecord);
+  if (records.length === 0 || records.some((record) => record === undefined)) {
+    throw new Error('drill_resume_refused: a placed instrument carries no resting stop');
+  }
+  return records as InstrumentEvidence[];
+}
+
+function survived(record: InstrumentEvidence, orders: readonly OpenOrder[]): boolean {
+  const row = orders.find((order) => order.orderId === record.stop?.orderId);
+  return (
+    row?.status === 'Working' &&
+    row.price === record.stop?.placedPrice &&
+    row.amount === record.amount
+  );
+}
+
+async function checkSurvivors(drill: Drill): Promise<void> {
+  stopIfInterrupted(drill);
+  const orders = await openOrders(drill.gateway);
+  for (const record of drill.evidence.instruments) {
+    record.stopWorkingAfterExit = survived(record, orders);
+    record.outcome = record.stopWorkingAfterExit ? 'passed' : 'failed';
+    if (!record.stopWorkingAfterExit) record.reason = 'drill_stop_lost_after_exit';
+    note(drill, 'drill_stop_survival_checked', {
+      symbol: record.symbol,
+      survived: record.stopWorkingAfterExit,
+    });
+  }
+}
+
+async function resumeDrill(drill: Drill, placed: unknown): Promise<void> {
+  try {
+    drill.evidence.instruments.push(...placedInstruments(placed));
+    await checkSurvivors(drill);
+  } catch (error) {
+    drill.evidence.failure = messageOf(error);
+    note(drill, 'drill_failed', drill.evidence.failure);
+  } finally {
+    await cleanUp({ ...drill, interrupt: new AbortController().signal });
+  }
+}
+
+export async function resumeSimCfdDrill(
+  gateway: SaxoSimGateway,
+  placed: { readonly record: unknown; readonly source: string },
+  options: DrillOptions,
+  clock: DrillClock,
+  interrupt: AbortSignal = new AbortController().signal,
+): Promise<{ evidence: DrillEvidence; account: SimAccount | undefined }> {
+  const evidence = newEvidence(clock, 'kill-resume');
+  evidence.resumedFrom = placed.source;
+  const account = await onTrialAccount(gateway, clock, evidence, (trial) =>
+    resumeDrill({ gateway, options, clock, evidence, account: trial, interrupt }, placed.record),
+  );
   return { evidence, account };
 }

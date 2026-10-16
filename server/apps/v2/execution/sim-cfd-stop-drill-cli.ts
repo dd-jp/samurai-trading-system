@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from '../../../shared/index.js';
 import { exitCodeOrOne, flagPairs, isMainModule } from '../../../tools/cli-entrypoint.js';
@@ -16,29 +16,62 @@ import {
   SaxoSimGateway,
   SimOnlyRefusal,
 } from './saxo-sim-gateway.js';
-import { type DrillEvidence, redact, renderSummary } from './sim-cfd-drill-evidence.js';
+import {
+  type DrillEvidence,
+  type DrillExit,
+  redact,
+  renderSummary,
+} from './sim-cfd-drill-evidence.js';
 import {
   DEFAULT_DRILL_OPTIONS,
   DEFAULT_ETF_SHORT,
   DEFAULT_STOCK_SHORT,
   DEFAULT_UK_LONG,
   type DrillClock,
+  type DrillOptions,
+  type DrillPhase,
   type DrillTarget,
+  resumeSimCfdDrill,
   runSimCfdStopDrill,
 } from './sim-cfd-stop-drill.js';
 
 export const DRILL_USAGE =
-  'usage: v2:sim-cfd-stop-drill [--stock SYMBOL|none] [--etf SYMBOL|none] [--uk-long SYMBOL|none] [--out-dir DIR]';
+  'usage: v2:sim-cfd-stop-drill [--stock SYMBOL|none] [--etf SYMBOL|none] [--uk-long SYMBOL|none] [--exit stop|target] [--phase full|place] [--resume PLACE_RECORD.json] [--out-dir DIR]';
 
 const DEFAULT_OUT_DIR = fileURLToPath(new URL('../../../../docs/reviews/', import.meta.url));
 
 export interface DrillArgs {
   readonly targets: readonly DrillTarget[];
   readonly outDir: string;
+  readonly exit: DrillExit;
+  readonly phase: DrillPhase;
+  readonly resume?: string | undefined;
+}
+
+function oneOf<T extends string>(
+  values: ReadonlyMap<string, string>,
+  flag: string,
+  allowed: readonly T[],
+): T {
+  const value = values.get(flag) ?? allowed[0];
+  if (!allowed.includes(value as T)) throw new Error(`unknown --${flag} ${value}\n${DRILL_USAGE}`);
+  return value as T;
+}
+
+function resumeOf(values: ReadonlyMap<string, string>): string | undefined {
+  const resume = values.get('resume');
+  if (resume !== undefined && (values.has('exit') || values.has('phase'))) {
+    throw new Error(`--resume takes no --exit or --phase\n${DRILL_USAGE}`);
+  }
+  return resume === undefined ? undefined : resolve(resume);
 }
 
 export function parseDrillArgs(argv: readonly string[]): DrillArgs {
-  const values = flagPairs(argv, ['--stock', '--etf', '--uk-long', '--out-dir'], DRILL_USAGE);
+  const values = flagPairs(
+    argv,
+    ['--stock', '--etf', '--uk-long', '--exit', '--phase', '--resume', '--out-dir'],
+    DRILL_USAGE,
+  );
   const chosen = (
     [
       ['stock', DEFAULT_STOCK_SHORT],
@@ -50,7 +83,13 @@ export function parseDrillArgs(argv: readonly string[]): DrillArgs {
     return symbol === 'none' ? [] : [{ ...target, symbol }];
   });
   if (chosen.length === 0) throw new Error(`nothing to drill\n${DRILL_USAGE}`);
-  return { targets: chosen, outDir: resolve(values.get('out-dir') ?? DEFAULT_OUT_DIR) };
+  return {
+    targets: chosen,
+    outDir: resolve(values.get('out-dir') ?? DEFAULT_OUT_DIR),
+    exit: oneOf(values, 'exit', ['stop', 'target'] as const),
+    phase: oneOf(values, 'phase', ['full', 'place'] as const),
+    resume: resumeOf(values),
+  };
 }
 
 export interface SimTokenChoice {
@@ -105,13 +144,18 @@ export function writeEvidence(
   outDir: string,
   secrets: readonly string[],
 ): { json: string; markdown: string } {
-  const base = `sim-cfd-stop-drill-${evidence.startedAt.slice(0, 19).replaceAll(':', '')}Z`;
+  const suffix = evidence.mode === 'stop' ? '' : `-${evidence.mode}`;
+  const base = `sim-cfd-stop-drill-${evidence.startedAt.slice(0, 19).replaceAll(':', '')}Z${suffix}`;
   const json = join(outDir, `${base}.json`);
   const markdown = join(outDir, `${base}.md`);
   mkdirSync(outDir, { recursive: true });
   writeFileSync(json, `${JSON.stringify(redact(evidence, secrets), null, 2)}\n`);
   writeFileSync(markdown, String(redact(renderSummary(evidence, `${base}.json`), secrets)));
   return { json, markdown };
+}
+
+function placedRecord(path: string): { record: unknown; source: string } {
+  return { record: JSON.parse(readFileSync(path, 'utf8')) as unknown, source: basename(path) };
 }
 
 export interface DrillDeps {
@@ -179,12 +223,24 @@ export async function main(
     );
     interrupt.abort();
   });
-  const { evidence, account } = await runSimCfdStopDrill(
-    gateway,
-    { ...DEFAULT_DRILL_OPTIONS, targets: args.targets, runId: String(deps.clock.now().getTime()) },
-    deps.clock,
-    interrupt.signal,
-  ).finally(release);
+  const options: DrillOptions = {
+    ...DEFAULT_DRILL_OPTIONS,
+    targets: args.targets,
+    exit: args.exit,
+    phase: args.phase,
+    runId: String(deps.clock.now().getTime()),
+  };
+  const run =
+    args.resume === undefined
+      ? runSimCfdStopDrill(gateway, options, deps.clock, interrupt.signal)
+      : resumeSimCfdDrill(
+          gateway,
+          placedRecord(args.resume),
+          options,
+          deps.clock,
+          interrupt.signal,
+        );
+  const { evidence, account } = await run.finally(release);
   const secrets = await tokens.secrets().catch(() => []);
   await tokens.source.stop();
   const written = writeEvidence(evidence, args.outDir, [
