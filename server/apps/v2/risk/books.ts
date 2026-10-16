@@ -253,6 +253,10 @@ export class PaperBooks implements BookLedger {
       throw new Error(`PaperBooks: ${bookId} has no ${instrument} position`);
   }
 
+  applyCashAdjustment(bookId: string, deltaGbp: number): void {
+    this.#adjustCash(bookId, deltaGbp);
+  }
+
   #setPositionQty(bookId: string, held: Position | undefined, fill: BookFill, qty: number): void {
     if (held !== undefined && Math.sign(held.qty) === Math.sign(qty)) {
       this.#resizePosition(bookId, held, fill, qty);

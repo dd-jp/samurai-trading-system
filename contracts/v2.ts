@@ -225,6 +225,7 @@ export interface BookLedger {
   position(bookId: string, instrument: string): Position | undefined;
   applyFill(bookId: string, fill: BookFill): Position | undefined;
   applySplit(bookId: string, instrument: string, ratio: number, anchorDate: string): void;
+  applyCashAdjustment(bookId: string, deltaGbp: number): void;
   setExitPending(bookId: string, instrument: string, exitClientOrderId: string): void;
   clearExitPending(bookId: string, instrument: string): void;
   valuation(bookId: string, markGbp: MarkPriceGbp): Valuation;

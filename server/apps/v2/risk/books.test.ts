@@ -108,6 +108,22 @@ describe('PaperBooks', () => {
     expect(() => first.cash('nope')).toThrow(/unknown book/);
   });
 
+  it('a cash adjustment moves book cash, and the next mark carries it into equity and the year loss (#2001)', () => {
+    const db = seededStore();
+    const books = openBooks(db);
+    books.applyCashAdjustment('debate/primary', -12.5);
+    expect(books.cash('debate/primary')).toBe(987.5);
+    expect(books.cash('debate/no-macro-gate')).toBe(1_000);
+    const day = books.markDay('debate/primary', '2026-09-25', flat, 1);
+    expect(day).toMatchObject({ equityGbp: 987.5, cashGbp: 987.5 });
+    expect(day.state.ytdLossGbp).toBe(12.5);
+    books.applyCashAdjustment('debate/primary', 12.5);
+    const next = books.markDay('debate/primary', '2026-09-26', flat, 1);
+    expect(next.equityGbp).toBe(1_000);
+    expect(next.state.ytdLossGbp).toBe(0);
+    expect(() => books.applyCashAdjustment('nope', 1)).toThrow(/unknown book/);
+  });
+
   it('applies fills to cash and positions, averages adds, and closes on the opposite side', () => {
     const db = seededStore();
     const books = openBooks(db);

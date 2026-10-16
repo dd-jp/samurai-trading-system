@@ -44,6 +44,7 @@ function book(overrides: Partial<BookSummary> = {}): BookSummary {
         { code: 'gross_cap', count: 1 },
       ],
     },
+    cash_in_lieu_corrections: [],
     ...overrides,
   };
 }

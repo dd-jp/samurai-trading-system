@@ -36,6 +36,13 @@ export interface BookSummary {
   readonly entries_rejected: number;
   readonly exits_filled: number;
   readonly refusals: RefusalTally;
+  readonly cash_in_lieu_corrections: readonly CashInLieuCorrectionLine[];
+}
+
+export interface CashInLieuCorrectionLine {
+  readonly instrument: string;
+  readonly amount_gbp: number;
+  readonly activity_key: string;
 }
 
 export type SummaryFaults = Pick<FaultLedger, 'faultFreeWeeks' | 'kindsRecordedBetween'>;
@@ -103,6 +110,12 @@ const PER_BOOK_COUNTS = {
 } as const;
 
 type CountName = keyof typeof PER_BOOK_COUNTS;
+
+const CASH_IN_LIEU_CORRECTIONS = `
+  SELECT book_id, instrument, amount_gbp, activity_key FROM v2_cash_in_lieu_adjustments
+   WHERE recorded_at > ? AND recorded_at <= ? ORDER BY adjustment_id`;
+
+type CorrectionRow = CashInLieuCorrectionLine & { readonly book_id: string };
 
 const REFUSALS = `
   SELECT book_id, scope, parameter, COUNT(*) AS n FROM v2_refusals WHERE recorded_at > ? AND recorded_at <= ?
@@ -187,6 +200,7 @@ function bookSummary(
   row: BookDayRow,
   counts: Record<CountName, Map<string, number>>,
   refusals: readonly RefusalRow[],
+  corrections: readonly CorrectionRow[],
   lossCapGbp: number | null,
 ): BookSummary {
   const count = (name: CountName) => counts[name].get(row.book_id) ?? 0;
@@ -205,6 +219,13 @@ function bookSummary(
     entries_rejected: count('rejected'),
     exits_filled: count('exits'),
     refusals: tally(refusals.filter((refusal) => refusal.book_id === row.book_id)),
+    cash_in_lieu_corrections: corrections
+      .filter((correction) => correction.book_id === row.book_id)
+      .map(({ instrument, amount_gbp, activity_key }) => ({
+        instrument,
+        amount_gbp,
+        activity_key,
+      })),
   };
 }
 
@@ -229,9 +250,18 @@ export function readDailySummary(
   const { since, window } = windowFor(db, tradingDate);
   const counts = countsByBook(db, window);
   const refusals = db.prepare(REFUSALS).all(window.after, window.through) as RefusalRow[];
+  const corrections = db
+    .prepare(CASH_IN_LIEU_CORRECTIONS)
+    .all(window.after, window.through) as CorrectionRow[];
   const capital = new CapitalConfigStore(db, clock);
   const books = (db.prepare(BOOK_DAYS).all(tradingDate) as BookDayRow[]).map((row) =>
-    bookSummary(row, counts, refusals, lossCapFor(row.sleeve_id, capital, tradingDate)),
+    bookSummary(
+      row,
+      counts,
+      refusals,
+      corrections,
+      lossCapFor(row.sleeve_id, capital, tradingDate),
+    ),
   );
   const unbooked = refusals.filter((refusal) => refusal.book_id === null);
   const verdict = new SqliteMonthlySpendCap(db, clock).check();
@@ -282,6 +312,10 @@ function bookLines(book: BookSummary): string[] {
     `  decisions ${book.decisions}; entries ${book.entries_placed} placed, ${book.entries_filled} filled, ` +
       `${book.entries_rejected} rejected; exits ${book.exits_filled}; open ${book.open_positions}`,
     `  refusals ${codes(book.refusals)}`,
+    ...book.cash_in_lieu_corrections.map(
+      (correction) =>
+        `  realised ${signedGbp(correction.amount_gbp)} cash in lieu correction ${correction.instrument} (broker ${correction.activity_key})`,
+    ),
   ];
 }
 

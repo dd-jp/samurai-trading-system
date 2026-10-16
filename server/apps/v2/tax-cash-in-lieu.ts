@@ -90,20 +90,22 @@ function brokerFill(row: TaxCashInLieuRow, paired: readonly TaxFillRow[]): TaxFi
   };
 }
 
-function pairOne(fills: readonly TaxFillRow[], row: TaxCashInLieuRow): TaxFillRow[] | string {
-  const estimates = fills.filter((fill) => isEstimate(fill, row.venue));
+export interface CashInLieuPair<F extends TaxFillRow, R extends TaxCashInLieuRow> {
+  readonly row: R;
+  readonly estimates: readonly F[];
+}
+
+function pairOne<F extends TaxFillRow, R extends TaxCashInLieuRow>(
+  unpaired: readonly F[],
+  row: R,
+): CashInLieuPair<F, R> | string {
+  const estimates = unpaired.filter((fill) => isEstimate(fill, row.venue));
   const date = nearestEstimateDate(estimates, row.activity_date);
   if (date === undefined) {
     return `broker cash in lieu ${activityOf(row)} on ${row.activity_date} has no estimate within ${CASH_IN_LIEU_PAIRING_DAYS} days`;
   }
   const paired = estimates.filter((fill) => fillDateOf(fill) === date);
-  const refused = refusal(row, paired);
-  if (refused !== undefined) return refused;
-  const replacement = brokerFill(row, paired);
-  return fills.flatMap((fill) => {
-    if (fill === paired[0]) return [replacement];
-    return paired.includes(fill) ? [] : [fill];
-  });
+  return refusal(row, paired) ?? { row, estimates: paired };
 }
 
 function inReadOrder(a: TaxCashInLieuRow, b: TaxCashInLieuRow): number {
@@ -113,26 +115,41 @@ function inReadOrder(a: TaxCashInLieuRow, b: TaxCashInLieuRow): number {
 }
 
 // A canceled status on any read voids every row of that activity, the first read included
-export function standingCashInLieu(rows: readonly TaxCashInLieuRow[]): readonly TaxCashInLieuRow[] {
+export function standingCashInLieu<R extends TaxCashInLieuRow>(rows: readonly R[]): readonly R[] {
   const canceled = new Set(rows.filter((row) => row.status === 'canceled').map(activityOf));
   return rows.filter((row) => !canceled.has(activityOf(row)));
 }
 
 // One broker payment stands for every estimate of its nearest date, since the account holds the
-// books' shares as one position
-export function withBrokerCashInLieu(
-  fills: readonly TaxFillRow[],
-  rows: readonly TaxCashInLieuRow[],
-): readonly TaxFillRow[] | string {
+// books' shares as one position. The tax log and the book-cash correction share this pairing
+export function pairCashInLieu<F extends TaxFillRow, R extends TaxCashInLieuRow>(
+  fills: readonly F[],
+  rows: readonly R[],
+): readonly CashInLieuPair<F, R>[] | string {
   const correction = rows.find((row) => row.status === 'correct');
   if (correction !== undefined) {
     return `broker cash in lieu ${activityOf(correction)} is a correction the broker does not link to the activity it corrects`;
   }
-  let paired: readonly TaxFillRow[] = fills;
+  const pairs: CashInLieuPair<F, R>[] = [];
+  let unpaired = fills;
   for (const row of [...rows].sort(inReadOrder)) {
-    const next = pairOne(paired, row);
-    if (typeof next === 'string') return next;
-    paired = next;
+    const pair = pairOne(unpaired, row);
+    if (typeof pair === 'string') return pair;
+    pairs.push(pair);
+    unpaired = unpaired.filter((fill) => !pair.estimates.includes(fill));
   }
-  return paired;
+  return pairs;
+}
+
+export function withBrokerCashInLieu(
+  fills: readonly TaxFillRow[],
+  rows: readonly TaxCashInLieuRow[],
+): readonly TaxFillRow[] | string {
+  const pairs = pairCashInLieu(fills, rows);
+  if (typeof pairs === 'string') return pairs;
+  return fills.flatMap((fill) => {
+    const pair = pairs.find((candidate) => candidate.estimates.includes(fill));
+    if (pair === undefined) return [fill];
+    return fill === pair.estimates[0] ? [brokerFill(pair.row, pair.estimates)] : [];
+  });
 }

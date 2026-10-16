@@ -89,6 +89,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'v2_fill_sweeps',
     'v2_cash_anchors',
     'v2_cash_in_lieu',
+    'v2_cash_in_lieu_adjustments',
     'v2_cfd_carry',
     'v2_canary_runs',
     'v2_trial_chain',
