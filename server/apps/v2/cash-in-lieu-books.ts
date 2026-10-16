@@ -90,6 +90,14 @@ function pairedTarget(estimate: CashInLieuEstimate, pairs: Pairs): Target | unde
   return { cause: pair.row, native, gbp: native / pair.row.fx_quote_per_gbp };
 }
 
+function estimateNative(estimate: CashInLieuEstimate): number {
+  return signOf(estimate) * estimate.qty * (estimate.price_native as number);
+}
+
+function estimateGbp(estimate: CashInLieuEstimate): number {
+  return signOf(estimate) * estimate.qty * estimate.price_gbp;
+}
+
 // An estimate no standing payment pairs any more goes back to the estimate itself, but only once
 // the broker cancels the activity its last correction followed; otherwise it stays as booked
 function reversedTarget(
@@ -98,36 +106,30 @@ function reversedTarget(
   priors: readonly PriorCorrection[],
 ): Target | undefined {
   const last = priors.at(-1);
-  if (last === undefined) return undefined;
   const cancel = reads.find(
     (read) =>
       read.venue === estimate.venue &&
-      read.activity_id === last.activity_id &&
+      read.activity_id === last?.activity_id &&
       read.status === 'canceled',
   );
   if (cancel === undefined) return undefined;
-  const sign = signOf(estimate);
-  return {
-    cause: cancel,
-    native: sign * estimate.qty * (estimate.price_native as number),
-    gbp: sign * estimate.qty * estimate.price_gbp,
-  };
+  return { cause: cancel, native: estimateNative(estimate), gbp: estimateGbp(estimate) };
+}
+
+function booked(priors: readonly PriorCorrection[], field: 'amount_native' | 'amount_gbp'): number {
+  return priors.reduce((total, prior) => total + prior[field], 0);
 }
 
 function correctionOf(
   estimate: CashInLieuEstimate,
-  target: Target,
-  priors: readonly PriorCorrection[],
-  tradingDate: string,
+  pairs: Pairs,
+  inputs: CorrectionInputs,
 ): CashInLieuCorrection | undefined {
-  const sign = signOf(estimate);
-  const booked = (field: 'amount_native' | 'amount_gbp') =>
-    priors.reduce((total, prior) => total + prior[field], 0);
-  const amountNative =
-    target.native -
-    sign * estimate.qty * (estimate.price_native as number) -
-    booked('amount_native');
-  const amountGbp = target.gbp - sign * estimate.qty * estimate.price_gbp - booked('amount_gbp');
+  const priors = inputs.priors.filter((prior) => prior.estimate_fill_id === estimate.fill_id);
+  const target = pairedTarget(estimate, pairs) ?? reversedTarget(estimate, inputs.reads, priors);
+  if (target === undefined) return undefined;
+  const amountNative = target.native - estimateNative(estimate) - booked(priors, 'amount_native');
+  const amountGbp = target.gbp - estimateGbp(estimate) - booked(priors, 'amount_gbp');
   if (Math.abs(amountNative) < NEGLIGIBLE && Math.abs(amountGbp) < NEGLIGIBLE) return undefined;
   return {
     book_id: estimate.book_id,
@@ -142,8 +144,20 @@ function correctionOf(
     fx_source: target.cause.fx_source,
     estimate_fill_seq: estimate.fill_seq,
     broker_mode: estimate.broker_mode,
-    trading_date: tradingDate,
+    trading_date: inputs.tradingDate,
   };
+}
+
+function instrumentCorrections(
+  estimates: readonly CashInLieuEstimate[],
+  standing: readonly CashInLieuRead[],
+  inputs: CorrectionInputs,
+): CashInLieuCorrection[] {
+  const pairs = pairCashInLieu(estimates, standing);
+  if (typeof pairs === 'string') return [];
+  return estimates
+    .filter((estimate) => estimate.price_native !== null)
+    .flatMap((estimate) => correctionOf(estimate, pairs, inputs) ?? []);
 }
 
 // David 2026-10-15/16 (#2001): book cash follows the broker's amount, shared pro rata over the
@@ -151,23 +165,9 @@ function correctionOf(
 // so its earlier corrections stand
 export function cashInLieuCorrections(inputs: CorrectionInputs): CashInLieuCorrection[] {
   const standing = byInstrument(standingCashInLieu(inputs.reads));
-  const corrections: CashInLieuCorrection[] = [];
-  for (const [instrument, estimates] of byInstrument(inputs.estimates)) {
-    const pairs = pairCashInLieu(estimates, standing.get(instrument) ?? []);
-    if (typeof pairs === 'string') continue;
-    for (const estimate of estimates) {
-      if (estimate.price_native === null) continue;
-      const priors = inputs.priors.filter((prior) => prior.estimate_fill_id === estimate.fill_id);
-      const target =
-        pairedTarget(estimate, pairs) ?? reversedTarget(estimate, inputs.reads, priors);
-      const correction =
-        target === undefined
-          ? undefined
-          : correctionOf(estimate, target, priors, inputs.tradingDate);
-      if (correction !== undefined) corrections.push(correction);
-    }
-  }
-  return corrections;
+  return [...byInstrument(inputs.estimates)].flatMap(([instrument, estimates]) =>
+    instrumentCorrections(estimates, standing.get(instrument) ?? [], inputs),
+  );
 }
 
 export interface CashInLieuBookLedger {
