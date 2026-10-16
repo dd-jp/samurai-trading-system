@@ -9,7 +9,11 @@ import type { DailyBar } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { openSharedStore } from '../../shared/store/index.js';
 import type { VenueSessionGate } from './data/index.js';
-import type { AlpacaBrokerClient, AlpacaOrder } from './execution/alpaca/alpaca-client.js';
+import type {
+  AlpacaBrokerClient,
+  AlpacaCashInLieuActivity,
+  AlpacaOrder,
+} from './execution/alpaca/alpaca-client.js';
 import { composeV2Root, type V2RootOptions } from './index.js';
 import { type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore } from './risk/index.js';
@@ -30,9 +34,9 @@ const OPEN_EVERY_DAY: VenueSessionGate = {
   timeStopPausedVenues: () => [],
 };
 
-function rising(base: number, splitRatio = 1): DailyBar[] {
+function rising(base: number, splitRatio = 1, lastBar = 263): DailyBar[] {
   const bars: DailyBar[] = [];
-  for (let i = 0; i <= 263; i += 1) {
+  for (let i = 0; i <= lastBar; i += 1) {
     const close = base * (1 + 0.001 * i);
     bars.push({
       date: dateAt(i),
@@ -54,6 +58,7 @@ interface Broker {
   positionScale: number;
   partial?: number | undefined;
   failSweeps?: number | undefined;
+  cashInLieu?: readonly AlpacaCashInLieuActivity[] | undefined;
 }
 
 interface Venue {
@@ -72,7 +77,7 @@ function restingStop(order: AlpacaOrder, broker: Broker, venue: Venue): Partial<
   return venue.staleStop
     ? { qty: order.qty, stop_price: String(stop) }
     : {
-        qty: String(Number(order.qty) * broker.positionScale),
+        qty: String(Math.floor(Number(order.qty) * broker.positionScale)),
         stop_price: String(stop / broker.positionScale),
       };
 }
@@ -249,13 +254,14 @@ function splitAlpaca(broker: Broker, venue: Venue): AlpacaBrokerClient {
       Promise.resolve(
         held().map((order) => ({
           symbol: order.symbol,
-          qty: String((broker.partial ?? Number(order.qty)) * broker.positionScale),
+          qty: String(Math.floor((broker.partial ?? Number(order.qty)) * broker.positionScale)),
           side: order.side === 'buy' ? ('long' as const) : ('short' as const),
           avg_entry_price: order.limit_price ?? '0',
         })),
       ),
     ),
     getAccount: vi.fn(() => Promise.resolve({ cash: '100000', equity: '100000' })),
+    listCashInLieu: vi.fn(() => Promise.resolve([...(broker.cashInLieu ?? [])])),
   };
 }
 
@@ -378,6 +384,7 @@ async function journalDays(
   splitDay: Broker = { filled: true, positionScale: 2 },
   extra: Partial<V2RootOptions> = {},
   clearMidRun = false,
+  laterDays: readonly [string, Broker][] = [],
 ) {
   const storePath = join(directory, `${name}.sqlite`);
   const seed = openSharedStore(storePath);
@@ -395,6 +402,7 @@ async function journalDays(
     [ENTRY_DAY, { filled: false, positionScale: 1 }],
     [SPLIT_DAY, splitDay],
     [DAY_AFTER, { ...splitDay, failSweeps: 0 }],
+    ...laterDays,
   ];
   for (const [tradingDate, state] of days) {
     clock.advanceTo(new Date(`${tradingDate}T07:30:00.000Z`));
@@ -1025,5 +1033,111 @@ describe('replay of a blocked line cleared between the run start and the entry c
       const result = await replayFromFiles({ ...clearedOptions, tradingDate });
       expect(result.divergences).toEqual([]);
     }
+  });
+});
+
+describe('replay of a broker-routed cash in lieu corrected at the next cycle (#2001)', () => {
+  const LAST_DAY = dateAt(264);
+  let cilOptions: ReplayCliOptions;
+
+  beforeAll(async () => {
+    const barStoreRoot = join(directory, 'parquet-three-for-two');
+    const store = await ParquetBarStore.open(barStoreRoot);
+    await store.write('alpaca', [
+      { symbol: 'UP', bars: rising(2, 1.5, 264) },
+      { symbol: 'SPY', bars: rising(20, 1, 264) },
+    ]);
+    store.close();
+    const paid: Broker = {
+      filled: true,
+      positionScale: 1.5,
+      cashInLieu: [
+        {
+          id: 'cil-1',
+          activity_type: 'CIL',
+          date: SPLIT_DAY,
+          net_amount: '1.5',
+          symbol: 'UP',
+          qty: '0.5',
+          status: 'executed',
+        },
+      ],
+    };
+    cilOptions = await journalDays(
+      'cash-in-lieu',
+      { ...base, barStoreRoot },
+      false,
+      paid,
+      {},
+      false,
+      [[LAST_DAY, { ...paid, failSweeps: 0 }]],
+    );
+  });
+
+  const rows = (sql: string) => journalRows(sql, cilOptions.storePath);
+
+  it("corrects only the broker-routed book's cash, at the next cycle and before its mark", () => {
+    const [estimate] = rows(
+      `SELECT qty * price_native AS native FROM v2_fills
+         WHERE book_id = 'debate/primary' AND leg = 'cash_in_lieu'`,
+    ) as { native: number }[];
+    expect(
+      rows(
+        'SELECT book_id, trading_date, activity_key, amount_native, amount_gbp FROM v2_cash_in_lieu_adjustments',
+      ),
+    ).toEqual([
+      {
+        book_id: 'debate/primary',
+        trading_date: DAY_AFTER,
+        activity_key: 'alpaca:cil-1:executed',
+        amount_native: expect.closeTo(1.5 - (estimate?.native ?? 0), 9),
+        amount_gbp: expect.closeTo((1.5 - (estimate?.native ?? 0)) / 1.25, 9),
+      },
+    ]);
+    const cash = rows(
+      `SELECT trading_date, cash_gbp FROM v2_book_days WHERE book_id = 'debate/primary'
+         AND trading_date >= '${SPLIT_DAY}' ORDER BY trading_date`,
+    ) as { cash_gbp: number }[];
+    expect((cash[1]?.cash_gbp ?? 0) - (cash[0]?.cash_gbp ?? 0)).toBeCloseTo(
+      (1.5 - (estimate?.native ?? 0)) / 1.25,
+      9,
+    );
+    expect(cash[2]?.cash_gbp).toBe(cash[1]?.cash_gbp);
+  });
+
+  it.each([SPLIT_DAY, DAY_AFTER, LAST_DAY])('replays %s identical', async (tradingDate) => {
+    const result = await replayFromFiles({ ...cilOptions, tradingDate });
+    expect(result.divergences).toEqual([]);
+  });
+
+  it('diverges in book cash on a later day when the journalled correction is gone', async () => {
+    const storePath = tamperedCopy(
+      'cil-correction-gone',
+      `DROP TRIGGER v2_cash_in_lieu_adjustments_no_delete;
+       DELETE FROM v2_cash_in_lieu_adjustments;`,
+      cilOptions.storePath,
+    );
+    const result = await replayFromFiles({ ...cilOptions, storePath, tradingDate: LAST_DAY });
+    expect(result.divergences[0]).toMatchObject({
+      kind: 'book_state',
+      stage: 'book',
+      field: 'cash_gbp',
+    });
+  });
+
+  it("diverges at the correction when the broker's journalled amount is changed", async () => {
+    const storePath = tamperedCopy(
+      'cil-amount-changed',
+      `DROP TRIGGER v2_cash_in_lieu_no_update; UPDATE v2_cash_in_lieu SET amount_native = 1.6;`,
+      cilOptions.storePath,
+    );
+    const result = await replayFromFiles({ ...cilOptions, storePath, tradingDate: DAY_AFTER });
+    expect(result.divergences).toContainEqual(
+      expect.objectContaining({
+        kind: 'row_field',
+        stage: 'cash_in_lieu_corrections',
+        field: 'amount_native',
+      }),
+    );
   });
 });
