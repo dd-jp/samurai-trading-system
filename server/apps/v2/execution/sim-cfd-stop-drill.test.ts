@@ -1386,7 +1386,7 @@ describe('what the drill matches on', () => {
   it('records the trial account and every step of a passing run', async () => {
     const { evidence } = await drill(new FakeSaxoSim(), stockOnly);
     expect(evidence.account).toEqual({ isTrialAccount: true, currency: 'EUR' });
-    expect(evidence.refs).toEqual(['#1400', '#1916', '#1914', '#2107', '#1849']);
+    expect(evidence.refs).toEqual(['#1400', '#1916', '#1914', '#2107']);
     expect(evidence.steps.map((step) => step.code)).toEqual([
       'drill_trial_account_confirmed',
       'drill_instrument_started',
@@ -1497,7 +1497,7 @@ describe('the rendered summary', () => {
     expect(renderSummary(evidence, 'r.json').split('\n')).toEqual([
       '# Saxo SIM CFD resting-stop drill, 2026-10-01',
       '',
-      'Refs #1400 #1916 #1914 #2107 #1849. Mode: stop. Verdict: **PASSED**.',
+      'Refs #1400 #1916 #1914 #2107. Mode: stop. Verdict: **PASSED**.',
       '',
       `Gateway ${SAXO_SIM_GATEWAY}, Saxo trial account (EUR). Run ${evidence.startedAt} to ${evidence.finishedAt}. Full record: r.json.`,
       '',
@@ -1729,11 +1729,14 @@ describe('the target-fill exit (#2107 item 1)', () => {
     expect(fake.trades().some((call) => call.method === 'PATCH')).toBe(false);
   });
 
-  it('fails when Saxo rejects the crossing limit amend', async () => {
+  it('ratchets from the resting target when Saxo rejects the crossing limit amend', async () => {
     const fake = new FakeSaxoSim();
     fake.amendStatuses = [400];
-    const { evidence } = await drill(fake, { ...SHORT_ONLY, exit: 'target' });
-    expect(evidence.failure).toBe('drill_target_amend_rejected: AAPL:xnas');
+    const { evidence } = await drill(fake, { ...RATCHET, exit: 'target' });
+    const [record] = evidence.instruments;
+    expect(record?.target?.amendAttempts?.map((attempt) => attempt.status)).toEqual([400, 200]);
+    expect(record?.target?.fillStatus).toBeDefined();
+    expect(evidence.passed).toBe(true);
   });
 
   it('fails not_filled when the target never fills', async () => {
@@ -1757,7 +1760,7 @@ describe('one failed instrument does not stop the rest', () => {
   });
 });
 
-describe('the kill check: place, exit, resume in a fresh process (#1849)', () => {
+describe('the kill check: place, exit, resume in a fresh process (#2107)', () => {
   const PLACE: DrillOptions = { ...SHORT_ONLY, phase: 'place' };
 
   async function placed(fake: FakeSaxoSim) {
@@ -1903,8 +1906,24 @@ describe('CLI modes', () => {
     [['--phase', 'resume']],
     [['--resume', '/tmp/p.json', '--exit', 'target']],
     [['--resume', '/tmp/p.json', '--phase', 'place']],
+    [['--resume', '/tmp/p.json', '--stock', 'none']],
+    [['--resume', '/tmp/p.json', '--uk-long', 'RR']],
   ])('refuses %j', (argv) => {
     expect(() => parseDrillArgs(argv)).toThrow(/usage/);
+  });
+
+  it('refuses an unreadable resume record before any token or gateway is set up', async () => {
+    const fake = new FakeSaxoSim();
+    let tokensAsked = false;
+    const tokens = () => {
+      tokensAsked = true;
+      return staticTokens();
+    };
+    await expect(
+      main(['--resume', '/nonexistent/place.json'], {}, cliDeps(fake, new FakeClock(), tokens)),
+    ).rejects.toThrow(/ENOENT/);
+    expect(tokensAsked).toBe(false);
+    expect(fake.trades()).toHaveLength(0);
   });
 
   it('places, writes a kill-place record, and a second main resumes from it', async () => {

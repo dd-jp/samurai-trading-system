@@ -60,8 +60,9 @@ function oneOf<T extends string>(
 
 function resumeOf(values: ReadonlyMap<string, string>): string | undefined {
   const resume = values.get('resume');
-  if (resume !== undefined && (values.has('exit') || values.has('phase'))) {
-    throw new Error(`--resume takes no --exit or --phase\n${DRILL_USAGE}`);
+  const ignored = ['exit', 'phase', 'stock', 'etf', 'uk-long'].filter((flag) => values.has(flag));
+  if (resume !== undefined && ignored.length > 0) {
+    throw new Error(`--resume takes no --${ignored.join(', --')}\n${DRILL_USAGE}`);
   }
   return resume === undefined ? undefined : resolve(resume);
 }
@@ -203,6 +204,7 @@ export async function main(
   deps: DrillDeps = DEFAULT_DEPS,
 ): Promise<number> {
   const args = parseDrillArgs(argv);
+  const placed = args.resume === undefined ? undefined : placedRecord(args.resume);
   const baseUrl = env.SAXO_SIM_GATEWAY?.trim() || SAXO_SIM_GATEWAY;
   assertSimGateway(baseUrl);
   const tokens = deps.tokens(env, deps.logger);
@@ -231,15 +233,9 @@ export async function main(
     runId: String(deps.clock.now().getTime()),
   };
   const run =
-    args.resume === undefined
+    placed === undefined
       ? runSimCfdStopDrill(gateway, options, deps.clock, interrupt.signal)
-      : resumeSimCfdDrill(
-          gateway,
-          placedRecord(args.resume),
-          options,
-          deps.clock,
-          interrupt.signal,
-        );
+      : resumeSimCfdDrill(gateway, placed, options, deps.clock, interrupt.signal);
   const { evidence, account } = await run.finally(release);
   const secrets = await tokens.secrets().catch(() => []);
   await tokens.source.stop();

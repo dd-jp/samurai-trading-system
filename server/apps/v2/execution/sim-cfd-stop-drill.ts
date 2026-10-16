@@ -355,7 +355,6 @@ interface Drive {
   readonly leg: DrivenLeg;
   readonly orderId: string;
   readonly orderType: DrivenType;
-  // +1 when the order rests unfilled above the market, -1 when below
   readonly restSign: 1 | -1;
 }
 
@@ -466,6 +465,7 @@ async function amendToCross(
   for (const price of candidates) {
     if ((await amendOnce(drill, record, drive, price)) === 200) return;
   }
+  if (drive.kind === 'target' && drive.leg.rest?.price !== undefined) return;
   fail(record, `drill_${drive.kind}_amend_rejected`);
 }
 
@@ -482,8 +482,9 @@ function onCrossingSide(price: number, accepted: number, restSign: 1 | -1): bool
 export function boundsFrom(
   attempts: readonly { price: number; status: number }[],
   restSign: 1 | -1,
+  resting = Number.NaN,
 ): RatchetBounds {
-  const accepted = attempts.findLast((attempt) => attempt.status === 200)?.price ?? Number.NaN;
+  const accepted = attempts.findLast((attempt) => attempt.status === 200)?.price ?? resting;
   const crossing = attempts
     .filter(
       (attempt) => attempt.status === 400 && onCrossingSide(attempt.price, accepted, restSign),
@@ -493,9 +494,8 @@ export function boundsFrom(
   return { accepted, rejected: crossing[0], stride: 0 };
 }
 
-// Saxo's accept or OnWrongSideOfMarket reply locates the live market without the 15-minute
-// delayed quote: bisect between the last accepted and last rejected price, and widen
-// geometrically toward the market once a bound has gone stale
+// Saxo's accept or OnWrongSideOfMarket reply locates the live market; the SIM quote is
+// 15 minutes delayed and cannot
 export function nextRatchetPrice(
   bounds: RatchetBounds,
   tick: number,
@@ -546,7 +546,7 @@ async function driveToFill(
   const deadline = drill.clock.now().getTime() + drill.options.triggerTimeoutMs;
   const fill = record.entry?.fillPrice ?? Number.NaN;
   const stepSize = fill * drill.options.nearDistance;
-  let bounds = boundsFrom(drive.leg.amendAttempts ?? [], drive.restSign);
+  let bounds = boundsFrom(drive.leg.amendAttempts ?? [], drive.restSign, drive.leg.rest?.price);
   for (;;) {
     const remaining = deadline - drill.clock.now().getTime();
     const window = Math.min(drill.options.ratchetIntervalMs, remaining);
@@ -725,7 +725,7 @@ export function newEvidence(clock: DrillClock, mode: DrillMode = 'stop'): DrillE
   return {
     drill: 'sim-cfd-stop-drill',
     mode,
-    refs: ['#1400', '#1916', '#1914', '#2107', '#1849'],
+    refs: ['#1400', '#1916', '#1914', '#2107'],
     gateway: SAXO_SIM_GATEWAY,
     startedAt: clock.now().toISOString(),
     instruments: [],
