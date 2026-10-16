@@ -333,6 +333,40 @@ describe('readDailySummary', () => {
     expect(next.faults.recorded).toEqual([{ code: 'stuck_order', count: 1 }]);
   });
 
+  it('lists each cash in lieu correction journalled since the last mark as its own realised line (#2001)', () => {
+    seedBook('debate/primary', 'debate', 'primary');
+    seedBook('signals/primary', 'signals', 'primary');
+    seedDay('debate/primary', PREVIOUS, 600);
+    seedDay('debate/primary', DAY, 600.4);
+    seedDay('signals/primary', DAY, 600);
+    const correct = db.prepare(
+      `INSERT INTO v2_cash_in_lieu_adjustments (book_id, estimate_fill_id, venue, instrument,
+         activity_id, activity_key, amount_native, amount_gbp, fx_quote_per_gbp, fx_source,
+         estimate_fill_seq, broker_mode, fills_before, trading_date, recorded_at)
+       VALUES ('debate/primary', 'est', 'alpaca', 'NVDA', 'cil-1', ?, 0, ?, 1.25, 'read-day', 1,
+         'live', 0, ?, ?)`,
+    );
+    correct.run('alpaca:cil-0:executed', 9, PREVIOUS, PREVIOUS_MARK);
+    correct.run('alpaca:cil-1:executed', 0.48, DAY, IN_WINDOW);
+    correct.run('alpaca:cil-1:canceled', -0.08, DAY, IN_WINDOW);
+    const read = readDailySummary(db, CLOCK, DAY, new FaultLedger(db, CLOCK));
+    expect(read.books.map((book) => book.cash_in_lieu_corrections)).toEqual([
+      [
+        { instrument: 'NVDA', amount_gbp: 0.48, activity_key: 'alpaca:cil-1:executed' },
+        { instrument: 'NVDA', amount_gbp: -0.08, activity_key: 'alpaca:cil-1:canceled' },
+      ],
+      [],
+    ]);
+    const text = formatDailySummary(read, 'paper');
+    expect(text).toContain(
+      '  realised +£0.48 cash in lieu correction NVDA (broker alpaca:cil-1:executed)',
+    );
+    expect(text).toContain(
+      '  realised -£0.08 cash in lieu correction NVDA (broker alpaca:cil-1:canceled)',
+    );
+    expect(text.match(/cash in lieu correction/g)).toHaveLength(2);
+  });
+
   it('reads everything as the first cycle when no earlier cycle marked a book', () => {
     seedBook('debate/primary', 'debate', 'primary');
     seedDay('debate/primary', DAY, 600);
