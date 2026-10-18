@@ -1,3 +1,4 @@
+import { SAXO_CHART_PAGE } from '../../providers/saxo-bars/index.js';
 import {
   type Arm2BacktestDeps,
   arm2BacktestSleeve,
@@ -16,6 +17,7 @@ import {
   sessionsBefore,
   type UkStockScreens,
 } from './data/index.js';
+import { WINDOW_SHRINK_SLACK_BARS } from './saxo-bar-refresh.js';
 import {
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
@@ -23,20 +25,25 @@ import {
   averageDollarVolume,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   coveredHistory,
+  isSet,
   LSE_RESERVED_SLOTS,
+  type Parameter,
   requireSet,
 } from './signal/index.js';
 import { type ArmSummary, armSummary } from './vol-target-verdict.js';
 
 export const ARM2_UK_POOL_CANDIDATE_ID = 'arm2-uk-pool';
-// David 2026-10-15 (#2143 (a), (b)): the ~4.7 years Saxo holds, measured on the Mac's bar store
-// on 2026-10-16, where 106 of the 109 stored UK stock series start 2022-01-14 and all end
-// 2026-10-15; both ends are in the trial hash, so they are pinned, not read from the rolling store
+// David 2026-10-15 (#2143 (a), (b)) and 2026-10-18 (window end): from the start of the ~4.7 years
+// Saxo holds, measured on the Mac's bar store on 2026-10-16 (106 of the 109 stored UK stock series
+// start 2022-01-14), to 2025-09-24, so the 12-month locked holdout stays clean as in every
+// earlier trial; both ends are in the trial hash, so they are pinned, not read from the store
 export const ARM2_UK_POOL_FROM = '2022-01-14';
-export const ARM2_UK_POOL_TO = '2026-10-15';
-// Build choice awaiting David (#2143): the vol-target trial's 2023-01-01 boundary. It is not in
-// the trial hash, so a ruling can move it without counting a new trial
-export const ARM2_UK_POOL_OUT_OF_SAMPLE_FROM = '2023-01-01';
+export const ARM2_UK_POOL_TO = '2025-09-24';
+// David 2026-10-18 (#2143), pinned in the trial hash
+export const ARM2_UK_POOL_OUT_OF_SAMPLE_FROM = '2024-01-01';
+// #2143 (a): "today's surviving names" are the first snapshot holding UK stock rows, pinned so the
+// name list, and with it the trial hash, does not move with each daily snapshot
+export const ARM2_UK_POOL_NAMES_AS_OF = '2026-10-15';
 // Build choice awaiting David (#2143): the vol-target trial's paper start capital (#1860)
 export const ARM2_UK_POOL_START_CAPITAL_GBP = VOL_TARGET_TRIAL_START_CAPITAL_GBP;
 // David 2026-10-15 (#2143 ruling of the short window): 20-session ADV and price from bars
@@ -72,56 +79,81 @@ export function ukStockPoolFromBars(
   };
 }
 
-export function ukPoolCatalogue(archive: CfdCatalogueArchive, to: string): CfdCatalogue {
-  const today = archive.inForceOn(to);
+export function ukPoolCatalogue(archive: CfdCatalogueArchive, namesAsOf: string): CfdCatalogue {
+  const today = archive.inForceOn(namesAsOf);
   if (today === undefined || poolNames(today).length === 0) {
     throw new Error(
-      `arm 2 UK pool: no archived CFD catalogue in force on ${to} holds a tradable UK stock CFD`,
+      `arm 2 UK pool: no archived CFD catalogue in force on ${namesAsOf} holds a tradable UK stock CFD`,
     );
   }
   return today;
 }
 
-// The UK refresh stores a rolling 1,200-bar page and drops what ages out, so a store that no
-// longer reaches the pinned start would run the same trial hash over a shorter UK history
-export function assertUkBarsReach(bars: BarsSource, today: CfdCatalogue, from: string): void {
-  const starts = poolNames(today)
-    .map((symbol) => bars.load(symbol)?.bars[0]?.date)
-    .filter((date): date is string => date !== undefined)
-    .sort();
-  const earliest = starts[0];
-  if (earliest === undefined || earliest > from) {
+// The UK refresh keeps a rolling chart/v3 page and drops what ages out, so a name holding a full
+// page that starts after the pinned start has lost the window's head; a shorter series is all
+// Saxo holds for a name listed later (HLN, SUNB), so its start is its own
+const FULL_UK_PAGE_BARS = SAXO_CHART_PAGE - WINDOW_SHRINK_SLACK_BARS;
+
+function shortOfWindow(bars: readonly { date: string }[], from: string, to: string): boolean {
+  const first = bars[0]?.date;
+  const last = bars.at(-1)?.date;
+  if (first === undefined || last === undefined) return false;
+  return last < to || (first > from && bars.length >= FULL_UK_PAGE_BARS);
+}
+
+export function assertUkBarsReach(
+  bars: BarsSource,
+  today: CfdCatalogue,
+  window: { readonly from: string; readonly to: string },
+): void {
+  const stored = poolNames(today).filter((symbol) => bars.load(symbol) !== undefined);
+  const short = stored.filter((symbol) =>
+    shortOfWindow(bars.load(symbol)?.bars ?? [], window.from, window.to),
+  );
+  if (stored.length === 0 || short.length > 0) {
     throw new Error(
-      `arm 2 UK pool: the stored UK stock bars start ${earliest ?? 'nowhere'}, after the pinned ${from}; the rolling chart/v3 page has aged out the trial's window (postmortem §2)`,
+      `arm 2 UK pool: the stored UK stock bars do not span the pinned ${window.from} to ${window.to} (${short.length > 0 ? short.join(', ') : 'none stored'}); the rolling chart/v3 page has aged out the trial's window (postmortem §2)`,
     );
   }
+}
+
+// David 2026-10-18 (#2143): no counted run until CFD dividend cash (ruling (e)) is modelled
+export function assertArm2UkPoolRunReady(parameter: Parameter<boolean>): void {
+  if (isSet(parameter) && parameter.value === true) return;
+  throw new Error(
+    `arm 2 UK pool: ${parameter.name} is unset (${parameter.ticket}); phase 2 sets it once CFD dividend cash is modelled, and no trial is recorded before then`,
+  );
 }
 
 export interface Arm2UkPoolDeps
   extends Omit<Arm2BacktestDeps, 'ukStocks' | 'assumedBeforeArchive'> {
   readonly today: CfdCatalogue;
   readonly screens: UkStockScreens;
+  readonly outOfSampleFrom: string;
 }
 
 export interface Arm2UkPoolArms {
   readonly trial: BacktestTrial;
   readonly baseline: BacktestTrial;
   readonly ukStocks: (tradingDate: string) => readonly string[];
+  readonly ukStockCfdOpen: true;
 }
 
 // #2143 (c): the same pre-archive route policy for both arms, so the ETF-only baseline is not
 // held long-only where the trial can short (the asymmetry #2105 ruling 4 rejected)
 export function arm2UkPoolArms(deps: Arm2UkPoolDeps): Arm2UkPoolArms {
-  const { today, screens, ...arm2 } = deps;
+  const { today, screens, outOfSampleFrom, ...arm2 } = deps;
   const catalogue = { asOf: today.asOf, sha256: today.sha256 };
   const routesBeforeArchive = {
     catalogue,
     borrow_per_year: CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   };
-  const shared = { ...arm2, assumedBeforeArchive: today, ukStockCfdOpen: true };
+  const ukStockCfdOpen = true;
+  const shared = { ...arm2, assumedBeforeArchive: today, ukStockCfdOpen };
   const ukStocks = ukStockPoolFromBars(arm2.bars, today, screens);
   return {
     ukStocks,
+    ukStockCfdOpen,
     trial: {
       config: {
         entries: ARM2_SLEEVE_ID,
@@ -138,6 +170,7 @@ export function arm2UkPoolArms(deps: Arm2UkPoolDeps): Arm2UkPoolArms {
         },
         cfd_routes_before_archive: routesBeforeArchive,
         cfd_dividends: 'not_modelled',
+        out_of_sample_from: outOfSampleFrom,
       },
       sleeve: arm2BacktestSleeve({ ...shared, ukStocks }, ARM2_UK_POOL_SLEEVE_ID),
     },

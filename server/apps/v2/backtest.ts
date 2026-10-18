@@ -92,8 +92,6 @@ export interface BacktestInput {
   // #2105: must be the archive the trial sleeves route by, or a short is carried at another
   // snapshot's borrow than the one that admitted it
   readonly cfdCatalogues?: CfdCatalogueArchive | undefined;
-  // #2143: opens the risk gate's UK stock CFD switch for this run alone; the live
-  // UK_STOCK_CFD_ENABLED stays as David set it
   readonly ukStockCfdOpen?: boolean | undefined;
   // The input's trials, in their order, one bar later (doc 66, 2026-10-07 rulings on #1747)
   readonly shiftCanary?: ShiftCanaryInput | undefined;

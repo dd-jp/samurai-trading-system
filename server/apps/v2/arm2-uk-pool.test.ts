@@ -4,15 +4,18 @@ import type { BarSeries, DailyBar } from '../../shared/index.js';
 import { volTargetTrialArms } from './arm2-backtest.js';
 import {
   ARM2_UK_POOL_FROM,
+  ARM2_UK_POOL_NAMES_AS_OF,
+  ARM2_UK_POOL_OUT_OF_SAMPLE_FROM,
   ARM2_UK_POOL_TO,
   arm2UkPoolArms,
   arm2UkPoolVerdict,
+  assertArm2UkPoolRunReady,
   assertUkBarsReach,
   UK_POOL_ADV_SESSIONS,
   ukPoolCatalogue,
   ukStockPoolFromBars,
 } from './arm2-uk-pool.js';
-import type { BacktestTrial } from './backtest.js';
+import { type BacktestTrial, datedCfdBorrowPerDay } from './backtest.js';
 import {
   type BarsSource,
   CfdCatalogue,
@@ -22,9 +25,12 @@ import {
 import { venueOf } from './index.js';
 import {
   ARM2_ENTRY_THRESHOLDS,
+  ARM2_UK_POOL_RUN_READY,
   ARM2_UK_POOL_SLEEVE_ID,
+  CFD_BORROW_MODEL,
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   CFD_SLEEVE_IDS,
+  isSet,
   LSE_RESERVED_SLOTS,
   requireSet,
   UK_STOCK_SCREENS,
@@ -166,13 +172,13 @@ describe('ukStockPoolFromBars (#2143 (a), (d))', () => {
 });
 
 describe('ukPoolCatalogue (#2143)', () => {
-  it('returns the snapshot in force on the last day of the window', () => {
+  it('returns the snapshot in force on the pinned names date', () => {
     const later = catalogueOf('2026-10-15', [row('RR_XLON')]);
     const archive = new CfdCatalogueArchive([catalogueOf('2026-10-13', [row('AAPL')]), later]);
     expect(ukPoolCatalogue(archive, '2026-10-16')).toBe(later);
   });
 
-  it('refuses a window whose last snapshot holds no tradable UK stock CFD, or none at all', () => {
+  it('refuses a names date whose snapshot holds no tradable UK stock CFD, or none at all', () => {
     const usOnly = new CfdCatalogueArchive([
       catalogueOf('2026-10-13', [row('AAPL'), row('RR_XLON', { tradable: false })]),
       catalogueOf('2026-10-15', [row('RR_XLON')]),
@@ -183,23 +189,53 @@ describe('ukPoolCatalogue (#2143)', () => {
 });
 
 describe('assertUkBarsReach (#2143, postmortem §2)', () => {
-  const today = catalogueOf(TRADING_DATE, [row('RR_XLON'), row('NEW_XLON'), row('AAPL')]);
+  const page = weekdays('2020-01-01', 1200);
+  const window = { from: page[0] as string, to: page.at(-1) as string };
+  const today = catalogueOf(window.to, [
+    row('RR_XLON'),
+    row('LATE_XLON'),
+    row('NOBARS_XLON'),
+    row('AAPL'),
+  ]);
+  const full = series('RR_XLON', { dates: page });
 
-  it('passes while one UK pool name still reaches the pinned start', () => {
-    const bars = sourceOf(series('RR_XLON'), series('NEW_XLON', { dates: DATES.slice(100) }));
-    expect(() => assertUkBarsReach(bars, today, DATES[0] as string)).not.toThrow();
+  it('passes when every stored pool name spans the window or was listed inside it', () => {
+    const late = series('LATE_XLON', { dates: page.slice(1000) });
+    expect(() => assertUkBarsReach(sourceOf(full, late), today, window)).not.toThrow();
   });
 
-  it('fails once the rolling page has aged the pinned start out of every UK pool name', () => {
-    const rolled = sourceOf(series('RR_XLON', { dates: DATES.slice(1) }), series('AAPL'));
-    expect(() => assertUkBarsReach(rolled, today, DATES[0] as string)).toThrow(
-      /aged out the trial's window/,
+  it('fails on any one name whose full page has rolled past the pinned start', () => {
+    const rolled = series('LATE_XLON', { dates: weekdays(page[1] as string, 1200) });
+    expect(() => assertUkBarsReach(sourceOf(full, rolled), today, window)).toThrow(
+      /\(LATE_XLON\); the rolling chart\/v3 page has aged out/,
     );
-    expect(() => assertUkBarsReach(sourceOf(), today, DATES[0] as string)).toThrow(/nowhere/);
   });
 
-  it('pins the window measured on the bar store', () => {
-    expect([ARM2_UK_POOL_FROM, ARM2_UK_POOL_TO]).toEqual(['2022-01-14', '2026-10-15']);
+  it('fails on any one name whose bars stop before the pinned end', () => {
+    const ended = series('LATE_XLON', { dates: page.slice(0, -1) });
+    expect(() => assertUkBarsReach(sourceOf(full, ended), today, window)).toThrow(/LATE_XLON/);
+  });
+
+  it('fails when no pool name has bars at all', () => {
+    expect(() => assertUkBarsReach(sourceOf(series('AAPL')), today, window)).toThrow(/none stored/);
+  });
+
+  it('pins the ruled window, split and name list', () => {
+    expect([ARM2_UK_POOL_FROM, ARM2_UK_POOL_TO]).toEqual(['2022-01-14', '2025-09-24']);
+    expect(ARM2_UK_POOL_OUT_OF_SAMPLE_FROM).toBe('2024-01-01');
+    expect(ARM2_UK_POOL_NAMES_AS_OF).toBe('2026-10-15');
+  });
+});
+
+describe('assertArm2UkPoolRunReady (#2143)', () => {
+  it('refuses while the run gate is unset or false, and passes once set', () => {
+    expect(isSet(ARM2_UK_POOL_RUN_READY)).toBe(false);
+    expect(() => assertArm2UkPoolRunReady(ARM2_UK_POOL_RUN_READY)).toThrow(
+      /ARM2_UK_POOL_RUN_READY is unset \(#2143\)/,
+    );
+    const gate = { name: 'ARM2_UK_POOL_RUN_READY', ticket: '#2143' };
+    expect(() => assertArm2UkPoolRunReady({ ...gate, value: false })).toThrow(/unset/);
+    expect(() => assertArm2UkPoolRunReady({ ...gate, value: true })).not.toThrow();
   });
 });
 
@@ -216,6 +252,7 @@ function armsOver(bars: BarsSource, today: CfdCatalogue, constituents: readonly 
     cfdCatalogues: ARCHIVE,
     today,
     screens: SCREENS,
+    outOfSampleFrom: '2024-01-01',
   });
 }
 
@@ -270,7 +307,9 @@ describe('arm2UkPoolArms (#2143)', () => {
       },
       cfd_routes_before_archive: routes,
       cfd_dividends: 'not_modelled',
+      out_of_sample_from: '2024-01-01',
     });
+    expect(arms.ukStockCfdOpen).toBe(true);
     expect(arms.baseline.config).toEqual({
       benchmark: 'arm2',
       universe: 'lse_etf_only',
@@ -298,6 +337,19 @@ describe('arm2UkPoolArms (#2143)', () => {
         reason: decision.reason,
       }));
     };
+
+    it('carries a short at the 2% ceiling before the first snapshot, at its quote from it on', () => {
+      const archive = new CfdCatalogueArchive([
+        catalogueOf('2026-10-13', [row('DOWN_XLON', { borrowCostPerDay: 0.005 / 365 })]),
+      ]);
+      const today = { current: TRADING_DATE };
+      const quoted = datedCfdBorrowPerDay(archive, () => today.current);
+      const carried = () =>
+        requireSet(CFD_BORROW_MODEL).dailyRate('saxo_cfd_gbp', quoted('DOWN_XLON'));
+      expect(carried()).toBe(CFD_SHORT_MAX_BORROW_RATE_PER_YEAR / 365);
+      today.current = '2026-10-13';
+      expect(carried()).toBe(0.005 / 365);
+    });
 
     it("opens the UK switch and routes by today's list, for this trial alone", async () => {
       const uk = armsOver(routed, listed, ['DOWN']);

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,7 @@ import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { VOL_TARGET_TRIAL_SIZING } from './arm2-backtest.js';
 import {
   resolveCliOptions,
+  runArm2UkPoolTrial,
   runArm2UkPoolTrialAgainst,
   runCrossAssetTrendAgainst,
   runCrossAssetTrendCandidate,
@@ -585,6 +586,33 @@ function ukRow(symbol: string) {
   };
 }
 
+const RUN_READY = { name: 'ARM2_UK_POOL_RUN_READY', ticket: '#2143', value: true };
+
+function marketOver(bars: { load: (symbol: string) => BarSeries | undefined }) {
+  return new BarsMarketData(bars, parseBoeGbpUsdCsv('DATE,XUDLUSS\n31 Dec 2020,1.36\n'));
+}
+
+function archiveOf(asOf: string) {
+  return new CfdCatalogueArchive([new CfdCatalogue({ asOf, instruments: [ukRow('UP_XLON')] })]);
+}
+
+async function refusalIn(
+  run: (ledger: TrialLedger) => Promise<unknown>,
+): Promise<{ readonly refusal: string; readonly trialsCounted: number }> {
+  const db = migratedMemoryStore();
+  const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-16T00:00:00.000Z')), {
+    entries: [],
+  });
+  try {
+    await run(ledger);
+    return { refusal: 'none', trialsCounted: ledger.count() };
+  } catch (error) {
+    return { refusal: String(error), trialsCounted: ledger.count() };
+  } finally {
+    db.close();
+  }
+}
+
 describe('runArm2UkPoolTrialAgainst', () => {
   it('#2143: runs one counted arm 2 trial over the UK pool against ETF-only arm 2, with the UK switch open for the run alone', {
     timeout: 240_000,
@@ -625,6 +653,7 @@ describe('runArm2UkPoolTrialAgainst', () => {
           { log: () => undefined },
           archive,
           window,
+          RUN_READY,
         );
       compositions.length = 0;
       const report = await run();
@@ -643,6 +672,7 @@ describe('runArm2UkPoolTrialAgainst', () => {
         universe: { reserved_lse_slots: 6, uk_stock_pool: { spread_screen: false } },
         cfd_routes_before_archive: { catalogue: { asOf: window.to, sha256: today.sha256 } },
         cfd_dividends: 'not_modelled',
+        out_of_sample_from: '2023-01-01',
         run: {
           from: window.from,
           to: window.to,
@@ -669,41 +699,56 @@ describe('runArm2UkPoolTrialAgainst', () => {
     }
   });
 
-  it('#2143: refuses to run once the stored UK bars no longer reach the pinned start', async () => {
+  it('#2143: refuses to run once the stored UK bars stop before the pinned end', async () => {
     const base = arm2BarsSource();
-    const late = arm2Series('UP_XLON', 0.002);
-    const rolled = { symbol: 'UP_XLON', bars: late.bars.slice(1) };
+    const ended = arm2Series('UP_XLON', 0.002);
+    const short = { symbol: 'UP_XLON', bars: ended.bars.slice(0, -1) };
     const barsSource = {
-      load: (symbol: string) => (symbol === 'UP_XLON' ? rolled : base.load(symbol)),
+      load: (symbol: string) => (symbol === 'UP_XLON' ? short : base.load(symbol)),
     };
-    const market = new BarsMarketData(
-      barsSource,
-      parseBoeGbpUsdCsv('DATE,XUDLUSS\n31 Dec 2020,1.36\n'),
-    );
     const to = ARM2_DATES.at(-1) as string;
-    const archive = new CfdCatalogueArchive([
-      new CfdCatalogue({ asOf: to, instruments: [ukRow('UP_XLON')] }),
-    ]);
-    const db = migratedMemoryStore();
+    const { refusal, trialsCounted } = await refusalIn((ledger) =>
+      runArm2UkPoolTrialAgainst(
+        marketOver(barsSource),
+        barsSource,
+        () => ARM2_SYMBOLS,
+        () => 5,
+        ledger,
+        { log: () => undefined },
+        archiveOf(to),
+        { from: ARM2_DATES[0] as string, to, outOfSampleFrom: '2023-01-01' },
+        RUN_READY,
+      ),
+    );
+    expect(refusal).toMatch(/\(UP_XLON\); the rolling chart\/v3 page has aged out/);
+    expect(trialsCounted).toBe(0);
+  });
+
+  it('#2143: refuses before any ledger write while ARM2_UK_POOL_RUN_READY is unset', async () => {
+    const barsSource = arm2BarsSource();
+    const to = ARM2_DATES.at(-1) as string;
+    const { refusal, trialsCounted } = await refusalIn((ledger) =>
+      runArm2UkPoolTrialAgainst(
+        marketOver(barsSource),
+        barsSource,
+        () => ARM2_SYMBOLS,
+        () => 5,
+        ledger,
+        { log: () => undefined },
+        archiveOf(to),
+      ),
+    );
+    expect(refusal).toMatch(/ARM2_UK_POOL_RUN_READY is unset/);
+    expect(trialsCounted).toBe(0);
+    const dir = mkdtempSync(join(tmpdir(), 'arm2-uk-pool-'));
     try {
-      const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-16T00:00:00.000Z')), {
-        entries: [],
-      });
-      await expect(
-        runArm2UkPoolTrialAgainst(
-          market,
-          barsSource,
-          () => ARM2_SYMBOLS,
-          () => 5,
-          ledger,
-          { log: () => undefined },
-          archive,
-          { from: ARM2_DATES[0] as string, to, outOfSampleFrom: '2023-01-01' },
-        ),
-      ).rejects.toThrow(/aged out/);
-      expect(ledger.count()).toBe(0);
+      const storePath = join(dir, 'research.sqlite');
+      await expect(runArm2UkPoolTrial({ storePath })).rejects.toThrow(
+        /ARM2_UK_POOL_RUN_READY is unset/,
+      );
+      expect(readdirSync(dir)).toEqual([]);
     } finally {
-      db.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
@@ -816,10 +861,12 @@ describe('candidate trial hashes', () => {
           research.ledger,
           quiet,
           archive,
+          undefined,
+          RUN_READY,
         ),
       1,
     );
-    expect(hashes, NEW_TRIAL).toEqual(['c28ac1f6ab6cf0be']);
+    expect(hashes, NEW_TRIAL).toEqual(['207125ce41d2c2e8']);
   });
 
   it('#2105: makes an archived CFD catalogue inside the window a new vol-target trial', async () => {

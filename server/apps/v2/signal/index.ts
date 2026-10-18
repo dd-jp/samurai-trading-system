@@ -35,6 +35,7 @@ export {
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
   ARM2_SLEEVE_SPEC,
+  ARM2_UK_POOL_RUN_READY,
   ARM2_UK_POOL_SLEEVE_ID,
   bookPinDigest,
   bookPreDigestPinDigest,

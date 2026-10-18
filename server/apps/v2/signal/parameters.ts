@@ -121,6 +121,9 @@ export const UK_STOCK_CFD_ENABLED = unset<boolean>('UK_STOCK_CFD_ENABLED', '#191
 // Setting it is a new counted trial (CLAUDE.md), so it stays unset until David pre-declares the
 // target, window and sleeves; unset, every sleeve sizes exactly as before
 export const VOL_TARGET_SIZING = unset<VolTargetSizing>('VOL_TARGET_SIZING', '#1860');
+// David 2026-10-18 (#2143): phase 2 sets it once CFD dividend cash is modelled. No cycle reads it,
+// so it stays out of DECLARED_PARAMETERS, whose unset members smoke expects every cycle to refuse
+export const ARM2_UK_POOL_RUN_READY = unset<boolean>('ARM2_UK_POOL_RUN_READY', '#2143');
 
 export function declaredVolTarget(
   parameter: Parameter<VolTargetSizing> = VOL_TARGET_SIZING,

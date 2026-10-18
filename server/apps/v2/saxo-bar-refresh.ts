@@ -189,7 +189,7 @@ function lseBarLine(line: SaxoLine, api: SaxoBarsApi): BarLine {
 
 // A truncated page (an outage, a paused response) must not replace a full window; the slack
 // covers the few bars hygiene drops differently from one day's pull to the next
-const WINDOW_SHRINK_SLACK_BARS = 5;
+export const WINDOW_SHRINK_SLACK_BARS = 5;
 
 function storedWithinWindow(
   tidm: string,

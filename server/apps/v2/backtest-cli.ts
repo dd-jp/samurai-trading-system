@@ -20,6 +20,7 @@ import {
 import {
   ARM2_UK_POOL_CANDIDATE_ID,
   ARM2_UK_POOL_FROM,
+  ARM2_UK_POOL_NAMES_AS_OF,
   ARM2_UK_POOL_OUT_OF_SAMPLE_FROM,
   ARM2_UK_POOL_START_CAPITAL_GBP,
   ARM2_UK_POOL_TO,
@@ -27,6 +28,7 @@ import {
   type Arm2UkPoolVerdict,
   arm2UkPoolArms,
   arm2UkPoolVerdict,
+  assertArm2UkPoolRunReady,
   assertUkBarsReach,
   ukPoolCatalogue,
 } from './arm2-uk-pool.js';
@@ -81,6 +83,7 @@ import {
 } from './index.js';
 import { delayedBars, delayedTrial } from './look-ahead-canary.js';
 import {
+  ARM2_UK_POOL_RUN_READY,
   CROSS_ASSET_TREND_CANDIDATE_ID,
   CROSS_ASSET_TREND_FROM,
   CROSS_ASSET_TREND_TIDMS,
@@ -96,6 +99,7 @@ import {
   MEAN_REVERSION_FROM,
   MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
   MEAN_REVERSION_TO,
+  type Parameter,
   pooledUniverse,
   requireSet,
   UK_STOCK_SCREENS,
@@ -619,7 +623,7 @@ async function arm2UkPoolPass(
     calendarReference: CALENDAR_REFERENCE,
     costMultiple,
     cfdCatalogues: run.cfdCatalogues,
-    ukStockCfdOpen: true,
+    ukStockCfdOpen: arms.ukStockCfdOpen,
   });
   const verdict = arm2UkPoolVerdict({
     dates: simulation.dates,
@@ -667,15 +671,18 @@ export async function runArm2UkPoolTrialAgainst(
   logger: Logger,
   cfdCatalogues: CfdCatalogueArchive,
   window: VolTargetTrialWindow = ARM2_UK_POOL_WINDOW,
+  runReady: Parameter<boolean> = ARM2_UK_POOL_RUN_READY,
 ): Promise<Arm2UkPoolTrialReport> {
-  const today = ukPoolCatalogue(cfdCatalogues, window.to);
-  assertUkBarsReach(bars, today, window.from);
+  assertArm2UkPoolRunReady(runReady);
+  const today = ukPoolCatalogue(cfdCatalogues, ARM2_UK_POOL_NAMES_AS_OF);
+  assertUkBarsReach(bars, today, window);
   const arms = arm2UkPoolArms({
     bars,
     constituents: constituentsFor,
     cfdCatalogues,
     today,
     screens: requireSet(UK_STOCK_SCREENS),
+    outOfSampleFrom: window.outOfSampleFrom,
   });
   const run = { arms, market, halfSpreadBps, ledger, logger, window, cfdCatalogues };
   const base = await arm2UkPoolPass(run, 1);
@@ -689,9 +696,11 @@ export async function runArm2UkPoolTrialAgainst(
   };
 }
 
-export function runArm2UkPoolTrial(
+export async function runArm2UkPoolTrial(
   cliOptions: BacktestCliOptions = {},
+  runReady: Parameter<boolean> = ARM2_UK_POOL_RUN_READY,
 ): Promise<Arm2UkPoolTrialReport> {
+  assertArm2UkPoolRunReady(runReady);
   return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, research, options }) =>
     runArm2UkPoolTrialAgainst(
       market,
@@ -701,6 +710,8 @@ export function runArm2UkPoolTrial(
       research.ledger,
       options.logger,
       loadCfdCatalogueArchive(cliOptions.cfdSnapshotStorePath ?? V2_STORE_PATH),
+      ARM2_UK_POOL_WINDOW,
+      runReady,
     ),
   );
 }
