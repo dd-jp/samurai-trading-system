@@ -36,6 +36,8 @@ import {
   barsSourceFor,
   composeV2Root,
   DEFAULT_HALF_SPREAD_BPS,
+  type DecisionSleeveInputs,
+  decisionSleeves,
   exitCodeFor,
   halfSpreadLookup,
   llmKeysPresent,
@@ -57,7 +59,14 @@ import {
 import { CapitalConfigStore } from './risk/index.js';
 import { RunLease } from './run-lease.js';
 import type { ModelPin } from './signal/index.js';
-import { BULLISH_SCRIPT, isLseInstrument, ScriptedTransport } from './signal/index.js';
+import {
+  ARM2_UK_POOL_SLEEVE_ID,
+  BULLISH_SCRIPT,
+  CFD_SLEEVE_IDS,
+  isLseInstrument,
+  ScriptedTransport,
+  VOL_TARGET_TRIAL_SLEEVE_ID,
+} from './signal/index.js';
 import { LSE_LIQUIDITY_SCREEN } from './signal/parameters.js';
 
 const liveTokenFile = vi.hoisted(() => ({ path: undefined as string | undefined }));
@@ -286,6 +295,17 @@ describe('withoutRefusedLse', () => {
       decisions: [],
       refusals: [],
     });
+  });
+});
+
+describe('decisionSleeves', () => {
+  it('registers no backtest-only trial id, so their CFD_SLEEVE_IDS entries never reach a cycle (#2105, #2143)', () => {
+    const ids = decisionSleeves({} as DecisionSleeveInputs).map((sleeve) => sleeve.id);
+    expect(ids).toEqual(['debate', 'arm2', 'signals']);
+    for (const backtestOnly of [ARM2_UK_POOL_SLEEVE_ID, VOL_TARGET_TRIAL_SLEEVE_ID]) {
+      expect(CFD_SLEEVE_IDS).toContain(backtestOnly);
+      expect(ids).not.toContain(backtestOnly);
+    }
   });
 });
 

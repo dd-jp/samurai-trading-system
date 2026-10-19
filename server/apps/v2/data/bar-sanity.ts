@@ -157,3 +157,28 @@ export function dataSanity(
     flagged,
   };
 }
+
+export interface SanityScope {
+  readonly symbolsOn: (session: string) => readonly string[];
+  readonly sessions: readonly string[];
+}
+
+// Each venue's series is checked against its own calendar, so an LSE line is never flagged for
+// a US session that is a UK bank holiday
+export function venueDataSanity(
+  bars: BarsSource,
+  scopes: readonly SanityScope[],
+): DataSanityReport {
+  const reports = scopes.map((scope) => dataSanity(bars, scope.symbolsOn, scope.sessions));
+  return {
+    from: reports.map((report) => report.from).sort()[0] as string,
+    to: reports
+      .map((report) => report.to)
+      .sort()
+      .at(-1) as string,
+    seriesChecked: reports.reduce((total, report) => total + report.seriesChecked, 0),
+    flagged: reports
+      .flatMap((report) => report.flagged)
+      .sort((a, b) => a.symbol.localeCompare(b.symbol)),
+  };
+}

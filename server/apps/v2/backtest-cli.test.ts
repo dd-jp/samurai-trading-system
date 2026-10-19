@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,8 @@ import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { VOL_TARGET_TRIAL_SIZING } from './arm2-backtest.js';
 import {
   resolveCliOptions,
+  runArm2UkPoolTrial,
+  runArm2UkPoolTrialAgainst,
   runCrossAssetTrendAgainst,
   runCrossAssetTrendCandidate,
   runMeanReversionAgainst,
@@ -570,6 +572,187 @@ describe('runVolTargetTrialAgainst', () => {
   });
 });
 
+function ukRow(symbol: string) {
+  return {
+    symbol,
+    saxoSymbol: symbol,
+    uic: 1,
+    assetType: 'CfdOnStock' as const,
+    currency: 'GBP' as const,
+    priceToContractFactor: 0.01,
+    tradable: true,
+    shortTradeDisabled: false,
+    borrowCostPerDay: 0.005 / 365,
+  };
+}
+
+const RUN_READY = { name: 'ARM2_UK_POOL_RUN_READY', ticket: '#2143', value: true };
+
+function marketOver(bars: { load: (symbol: string) => BarSeries | undefined }) {
+  return new BarsMarketData(bars, parseBoeGbpUsdCsv('DATE,XUDLUSS\n31 Dec 2020,1.36\n'));
+}
+
+function archiveOf(asOf: string) {
+  return new CfdCatalogueArchive([new CfdCatalogue({ asOf, instruments: [ukRow('UP_XLON')] })]);
+}
+
+async function refusalIn(
+  run: (ledger: TrialLedger) => Promise<unknown>,
+): Promise<{ readonly refusal: string; readonly trialsCounted: number }> {
+  const db = migratedMemoryStore();
+  const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-16T00:00:00.000Z')), {
+    entries: [],
+  });
+  try {
+    await run(ledger);
+    return { refusal: 'none', trialsCounted: ledger.count() };
+  } catch (error) {
+    return { refusal: String(error), trialsCounted: ledger.count() };
+  } finally {
+    db.close();
+  }
+}
+
+describe('runArm2UkPoolTrialAgainst', () => {
+  it('#2143: runs one counted arm 2 trial over the UK pool against ETF-only arm 2, with the UK switch open for the run alone', {
+    timeout: 240_000,
+  }, async () => {
+    const base = arm2BarsSource();
+    const uk = new Map<string, BarSeries>([
+      ['ISF', arm2Series('ISF', 0.0003)],
+      ['UP_XLON', arm2Series('UP_XLON', 0.002)],
+      ['DN_XLON', arm2Series('DN_XLON', -0.002)],
+    ]);
+    const barsSource = { load: (symbol: string) => uk.get(symbol) ?? base.load(symbol) };
+    const market = new BarsMarketData(
+      barsSource,
+      parseBoeGbpUsdCsv('DATE,XUDLUSS\n31 Dec 2020,1.36\n31 Dec 2021,1.35\n30 Dec 2022,1.21\n'),
+    );
+    const window = {
+      from: ARM2_DATES[220] as string,
+      to: ARM2_DATES.at(-1) as string,
+      outOfSampleFrom: '2023-01-01',
+    };
+    const today = new CfdCatalogue({
+      asOf: window.to,
+      instruments: [ukRow('UP_XLON'), ukRow('DN_XLON')],
+    });
+    const archive = new CfdCatalogueArchive([today]);
+    const db = migratedMemoryStore();
+    try {
+      const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-16T00:00:00.000Z')), {
+        entries: [],
+      });
+      const run = () =>
+        runArm2UkPoolTrialAgainst(
+          market,
+          barsSource,
+          () => ARM2_SYMBOLS,
+          () => 5,
+          ledger,
+          { log: () => undefined },
+          archive,
+          window,
+          RUN_READY,
+        );
+      compositions.length = 0;
+      const report = await run();
+      expect(ledger.count()).toBe(1);
+      expect(compositions.map((composition) => composition.options.costMultiple)).toEqual([1, 2]);
+      for (const { options } of compositions) {
+        expect(options.ukStockCfdRefusal).toBeTypeOf('function');
+        expect(options.ukStockCfdRefusal?.()).toBeUndefined();
+        expect(options.sleeves.map((sleeve) => sleeve.id)).toEqual(['arm2-uk-pool', 'arm2']);
+      }
+      const config = JSON.parse(
+        (db.prepare('SELECT config FROM v2_trials').get() as { config: string }).config,
+      );
+      expect(config).toMatchObject({
+        entries: 'arm2',
+        universe: { reserved_lse_slots: 6, uk_stock_pool: { spread_screen: false } },
+        cfd_routes_before_archive: { catalogue: { asOf: window.to, sha256: today.sha256 } },
+        cfd_dividends: 'not_modelled',
+        out_of_sample_from: '2023-01-01',
+        run: {
+          from: window.from,
+          to: window.to,
+          startCapitalGbp: 10_000,
+          ukStockCfdOpen: true,
+          cfdCatalogues: [{ asOf: window.to, sha256: today.sha256 }],
+          benchmark: { id: 'arm2', config: { benchmark: 'arm2', universe: 'lse_etf_only' } },
+        },
+      });
+      const { verdict, stressed } = report;
+      expect(verdict).toMatchObject({ trial: 1, trialsCounted: 1, from: window.from });
+      expect(verdict.outOfSampleFrom).toBe('2023-01-02');
+      expect(verdict.sessionsInSample + verdict.sessionsOutOfSample).toBe(ARM2_DATES.length - 220);
+      expect(verdict.ukPool.totalReturn).not.toBe(verdict.etfOnly.totalReturn);
+      expect(stressed.ukPool.totalReturn).toBeLessThan(verdict.ukPool.totalReturn);
+      expect(report.minbtlLimit).toBeGreaterThan(0);
+      expect(report.dataSanity.seriesChecked).toBe(ARM2_SYMBOLS.length + 3);
+      expect(report.dataSanity.flagged).toEqual([]);
+      const rerun = await run();
+      expect(ledger.count()).toBe(1);
+      expect(rerun).toEqual(report);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('#2143: refuses to run once the stored UK bars stop before the pinned end', async () => {
+    const base = arm2BarsSource();
+    const ended = arm2Series('UP_XLON', 0.002);
+    const short = { symbol: 'UP_XLON', bars: ended.bars.slice(0, -1) };
+    const barsSource = {
+      load: (symbol: string) => (symbol === 'UP_XLON' ? short : base.load(symbol)),
+    };
+    const to = ARM2_DATES.at(-1) as string;
+    const { refusal, trialsCounted } = await refusalIn((ledger) =>
+      runArm2UkPoolTrialAgainst(
+        marketOver(barsSource),
+        barsSource,
+        () => ARM2_SYMBOLS,
+        () => 5,
+        ledger,
+        { log: () => undefined },
+        archiveOf(to),
+        { from: ARM2_DATES[0] as string, to, outOfSampleFrom: '2023-01-01' },
+        RUN_READY,
+      ),
+    );
+    expect(refusal).toMatch(/\(UP_XLON\); the rolling chart\/v3 page has aged out/);
+    expect(trialsCounted).toBe(0);
+  });
+
+  it('#2143: refuses before any ledger write while ARM2_UK_POOL_RUN_READY is unset', async () => {
+    const barsSource = arm2BarsSource();
+    const to = ARM2_DATES.at(-1) as string;
+    const { refusal, trialsCounted } = await refusalIn((ledger) =>
+      runArm2UkPoolTrialAgainst(
+        marketOver(barsSource),
+        barsSource,
+        () => ARM2_SYMBOLS,
+        () => 5,
+        ledger,
+        { log: () => undefined },
+        archiveOf(to),
+      ),
+    );
+    expect(refusal).toMatch(/ARM2_UK_POOL_RUN_READY is unset/);
+    expect(trialsCounted).toBe(0);
+    const dir = mkdtempSync(join(tmpdir(), 'arm2-uk-pool-'));
+    try {
+      const storePath = join(dir, 'research.sqlite');
+      await expect(runArm2UkPoolTrial({ storePath })).rejects.toThrow(
+        /ARM2_UK_POOL_RUN_READY is unset/,
+      );
+      expect(readdirSync(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 class TrialsRecorded extends Error {}
 
 const NEW_TRIAL =
@@ -662,6 +845,28 @@ describe('candidate trial hashes', () => {
       1,
     );
     expect(hashes, NEW_TRIAL).toEqual(['8a6c1e64731b2058']);
+  });
+
+  it('#2143 arm 2 UK-pool rerun keeps its identity', async () => {
+    const archive = new CfdCatalogueArchive([
+      new CfdCatalogue({ asOf: '2026-10-15', instruments: [ukRow('RR_XLON')] }),
+    ]);
+    const hashes = await recordedHashes(
+      (market, bars, research) =>
+        runArm2UkPoolTrialAgainst(
+          market,
+          bars,
+          () => [],
+          () => 5,
+          research.ledger,
+          quiet,
+          archive,
+          undefined,
+          RUN_READY,
+        ),
+      1,
+    );
+    expect(hashes, NEW_TRIAL).toEqual(['207125ce41d2c2e8']);
   });
 
   it('#2105: makes an archived CFD catalogue inside the window a new vol-target trial', async () => {

@@ -121,6 +121,9 @@ export const UK_STOCK_CFD_ENABLED = unset<boolean>('UK_STOCK_CFD_ENABLED', '#191
 // Setting it is a new counted trial (CLAUDE.md), so it stays unset until David pre-declares the
 // target, window and sleeves; unset, every sleeve sizes exactly as before
 export const VOL_TARGET_SIZING = unset<VolTargetSizing>('VOL_TARGET_SIZING', '#1860');
+// David 2026-10-18 (#2143): phase 2 sets it once CFD dividend cash is modelled. No cycle reads it,
+// so it stays out of DECLARED_PARAMETERS, whose unset members smoke expects every cycle to refuse
+export const ARM2_UK_POOL_RUN_READY = unset<boolean>('ARM2_UK_POOL_RUN_READY', '#2143');
 
 export function declaredVolTarget(
   parameter: Parameter<VolTargetSizing> = VOL_TARGET_SIZING,
@@ -218,6 +221,7 @@ export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
 
 export const ARM2_SLEEVE_ID = 'arm2';
 export const VOL_TARGET_TRIAL_SLEEVE_ID = 'arm2-vol-target';
+export const ARM2_UK_POOL_SLEEVE_ID = 'arm2-uk-pool';
 
 // #1773: arm 2 never routes a real order (its only book variant is not 'primary', so
 // `V2OrderExecutor.simulates()` always simulates it), so its capital share is notional —
@@ -262,11 +266,14 @@ export const SIGNALS_SLEEVE_SPEC: SleeveSpec = {
 };
 
 // doc 66 (f), #1858: the rules-based candidates and the signals sleeve stay CFD-free. David
-// 2026-10-11 (#2105): the vol-target trial arm counts as arm 2, so it shorts as its baseline does
+// 2026-10-11 (#2105): the vol-target trial arm counts as arm 2, so it shorts as its baseline does;
+// the UK-pool rerun is arm 2's own counted trial (David 2026-10-15, #2143 (f)). Neither trial id
+// is registered outside the backtest
 export const CFD_SLEEVE_IDS: readonly string[] = [
   DEBATE_SLEEVE_ID,
   ARM2_SLEEVE_ID,
   VOL_TARGET_TRIAL_SLEEVE_ID,
+  ARM2_UK_POOL_SLEEVE_ID,
 ];
 
 // A sleeve missing here is a build gap, not a trading-state check
