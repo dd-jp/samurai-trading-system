@@ -17,7 +17,7 @@ import {
   sessionsBefore,
   type UkStockScreens,
 } from './data/index.js';
-import { WINDOW_SHRINK_SLACK_BARS } from './saxo-bar-refresh.js';
+import { PAGE_SHRINK_SLACK_BARS } from './saxo-bar-refresh.js';
 import {
   ARM2_ENTRY_THRESHOLDS,
   ARM2_SLEEVE_ID,
@@ -89,10 +89,10 @@ export function ukPoolCatalogue(archive: CfdCatalogueArchive, namesAsOf: string)
   return today;
 }
 
-// The UK refresh keeps a rolling chart/v3 page and drops what ages out, so a name holding a full
-// page that starts after the pinned start has lost the window's head; a shorter series is all
-// Saxo holds for a name listed later (HLN, SUNB), so its start is its own
-const FULL_UK_PAGE_BARS = SAXO_CHART_PAGE - WINDOW_SHRINK_SLACK_BARS;
+// A name holding at least a full chart/v3 page that starts after the pinned start lost the
+// window's head before the refresh kept history (#2143); a shorter series is all Saxo holds for a
+// name listed later (HLN, SUNB), so its start is its own
+const FULL_UK_PAGE_BARS = SAXO_CHART_PAGE - PAGE_SHRINK_SLACK_BARS;
 
 function shortOfWindow(bars: readonly { date: string }[], from: string, to: string): boolean {
   const first = bars[0]?.date;

@@ -41,7 +41,7 @@ function quotedUnitOf(instrument: CfdInstrument): 'GBX' | 'GBP' {
 function ukStockBarLine(instrument: CfdInstrument, api: UkStockBarsApi): BarLine {
   return {
     tidm: instrument.symbol,
-    windowed: true,
+    pageStartMoves: true,
     pull: async () => {
       const unit = quotedUnitOf(instrument);
       const page = await api.dailyPage(instrument.uic, 'CfdOnStock');

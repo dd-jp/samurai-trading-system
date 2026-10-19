@@ -12,6 +12,7 @@ import {
   isSpliced,
   LSE_MOMENTUM_LINES,
   openSaxoLiveSession,
+  SAXO_CHART_PAGE,
   type SaxoLine,
   type SaxoReadOnlyApi,
   samplesToBars,
@@ -69,7 +70,7 @@ export interface SaxoBarRefreshOptions extends BarLineContext {
 
 export interface BarLine {
   readonly tidm: string;
-  readonly windowed: boolean;
+  readonly pageStartMoves: boolean;
   readonly pull: () => Promise<DailyBar[]>;
 }
 
@@ -143,8 +144,8 @@ function revisedCloses(existing: BarSeries, next: readonly DailyBar[]): string |
   return `revises stored close(s) by more than ${MAX_CLOSE_REVISION * 100}%: ${listed(shown)}`;
 }
 
-// A windowed line's page start moves every day, so its first pulled bar can be one hygiene
-// dropped from the stored copy; only a fixed-start line treats an earlier start as a conflict
+// A moving page's first pulled bar can be one hygiene dropped from the stored copy; only a
+// fixed-start line treats an earlier start as a conflict
 function assertHistoryConsistent(
   line: BarLine,
   existing: BarSeries,
@@ -152,7 +153,7 @@ function assertHistoryConsistent(
 ): void {
   const symbol = line.tidm;
   const conflict =
-    (line.windowed ? undefined : earlierStart(existing, next)) ??
+    (line.pageStartMoves ? undefined : earlierStart(existing, next)) ??
     interiorGap(existing, next) ??
     revisedCloses(existing, next);
   if (conflict === undefined) return;
@@ -184,37 +185,64 @@ async function pullBars(line: SaxoLine, api: SaxoBarsApi): Promise<DailyBar[]> {
 }
 
 function lseBarLine(line: SaxoLine, api: SaxoBarsApi): BarLine {
-  return { tidm: line.tidm, windowed: false, pull: () => pullBars(line, api) };
+  return { tidm: line.tidm, pageStartMoves: false, pull: () => pullBars(line, api) };
 }
 
-// A truncated page (an outage, a paused response) must not replace a full window; the slack
-// covers the few bars hygiene drops differently from one day's pull to the next
-export const WINDOW_SHRINK_SLACK_BARS = 5;
+// A short page that starts late shares too few bars with the stored copy for the overlap guards
+// to see a truncation or a rewrite; the slack covers the few samples a page varies by day to day
+export const PAGE_SHRINK_SLACK_BARS = 5;
 
-function storedWithinWindow(
+interface StoredHistory {
+  readonly older: readonly DailyBar[];
+  readonly overlap: BarSeries | undefined;
+}
+
+const NO_STORED_HISTORY: StoredHistory = { older: [], overlap: undefined };
+
+function refuseMovingPage(tidm: string, reason: string): never {
+  throw new Error(
+    `${tidm}: the Saxo page ${reason}; refusing to write, the stored bars stand until the line ` +
+      'is checked and re-seeded',
+  );
+}
+
+function assertFullPage(tidm: string, existing: BarSeries, pageSamples: number): void {
+  const expected = Math.min(existing.bars.length, SAXO_CHART_PAGE);
+  if (pageSamples + PAGE_SHRINK_SLACK_BARS >= expected) return;
+  refuseMovingPage(tidm, `is truncated (${pageSamples} samples where ${expected} were expected)`);
+}
+
+// Older bars keep the stored scale, so a page Saxo rewrote (split, unit break) would leave a step
+// at the page's first date that no later refresh sees
+function splitAtPageStart(
   tidm: string,
   existing: BarSeries,
+  pageSamples: number,
   pulled: readonly DailyBar[],
-): BarSeries | undefined {
-  if (pulled.length + WINDOW_SHRINK_SLACK_BARS < existing.bars.length) {
-    throw new Error(
-      `${tidm}: refresh would shrink the window (had ${existing.bars.length} bars, got ${pulled.length}) — refusing to overwrite`,
-    );
-  }
+): StoredHistory {
+  assertFullPage(tidm, existing, pageSamples);
   const first = pulled[0]?.date ?? '';
-  const bars = existing.bars.filter((bar) => bar.date >= first);
-  return bars.length === 0 ? undefined : { ...existing, bars };
+  const older = existing.bars.filter((bar) => bar.date < first);
+  const overlap = { ...existing, bars: existing.bars.filter((bar) => bar.date >= first) };
+  if (overlap.bars.length === 0)
+    refuseMovingPage(tidm, `starts at ${first}, after every stored bar`);
+  const factor = historyRescaleFactor(overlap, pulled);
+  if (older.length > 0 && factor !== undefined) {
+    refuseMovingPage(tidm, `rewrites the stored bars by ${Number(factor.toPrecision(4))}x`);
+  }
+  return { older, overlap };
 }
 
 function guardedStored(
   line: BarLine,
   existing: BarSeries | undefined,
+  pageSamples: number,
   pulled: readonly DailyBar[],
-): BarSeries | undefined {
-  if (existing === undefined) return undefined;
-  if (line.windowed) return storedWithinWindow(line.tidm, existing, pulled);
+): StoredHistory {
+  if (existing === undefined) return NO_STORED_HISTORY;
+  if (line.pageStartMoves) return splitAtPageStart(line.tidm, existing, pageSamples, pulled);
   assertNoShrink(line.tidm, existing, pulled);
-  return existing;
+  return { older: [], overlap: existing };
 }
 
 function assertFresh(tidm: string, bars: readonly DailyBar[], tradingDate: string): void {
@@ -379,17 +407,16 @@ async function refreshLine(
   existing: BarSeries | undefined,
   options: BarLineContext,
 ): Promise<BarRefreshSymbolResult> {
-  const hygiene = applyBarHygiene(line.tidm, await line.pull(), {
-    fetchDate: options.tradingDate,
-  });
+  const page = await line.pull();
+  const hygiene = applyBarHygiene(line.tidm, page, { fetchDate: options.tradingDate });
   if (hygiene.bars.length === 0) throw new Error(`${line.tidm}: Saxo returned no bars`);
   const repaired = repairBarShape(hygiene.bars);
   if (repaired.bars.length === 0) throw new Error(`${line.tidm}: no bars left after shape repair`);
   assertNoRecentRepair(line.tidm, hygiene.bars, repaired.report);
   const pulled = roundPrices(repaired.bars);
-  const stored = guardedStored(line, existing, pulled);
-  if (stored !== undefined) assertHistoryConsistent(line, stored, pulled);
-  const rounded = withSplitStep(stored, pulled, hygiene.report, options.logger);
+  const { older, overlap } = guardedStored(line, existing, page.length, pulled);
+  if (overlap !== undefined) assertHistoryConsistent(line, overlap, pulled);
+  const rounded = [...older, ...withSplitStep(overlap, pulled, hygiene.report, options.logger)];
   await (options.limit ?? UNLIMITED).atomic(() =>
     options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]),
   );
@@ -468,7 +495,7 @@ async function refreshStep(
   buckets: Buckets,
 ): Promise<SymbolOutcome | undefined> {
   if (aborted(options)) return undefined;
-  if (!line.windowed) warnIfUnguarded(line.tidm, existing, options.logger);
+  if (!line.pageStartMoves) warnIfUnguarded(line.tidm, existing, options.logger);
   const outcome = await refreshLineSafely(line, existing.get(line.tidm), options);
   if (aborted(options)) return undefined;
   recordOutcome(outcome, buckets, options.logger);
