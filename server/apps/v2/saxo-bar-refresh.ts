@@ -265,7 +265,7 @@ function alignedOlder(
     logger,
     'warn',
     'v2_saxo_history_rescaled',
-    `${tidm}: Saxo shifted every close from ${pulled[0]?.date} by ${Number(multiplier.toPrecision(4))}x; ` +
+    `${tidm}: Saxo shifted every close from ${pulled[0]?.date} by ${Number(multiplier.toPrecision(6))}x; ` +
       `the ${older.length} older stored bar(s) are multiplied by the same factor so no step stands at the seam`,
   );
   return roundPrices(older.map((bar) => rescaledBar(bar, multiplier)));

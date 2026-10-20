@@ -346,18 +346,33 @@ describe('ukStockBarRefreshFor', () => {
   });
 
   it.each([
-    { quote: 'GBX near 1,000p', row: {}, before: 1000, after: 1004, stored: 10.04 },
-    { quote: 'GBX near 20p', row: {}, before: 20.13, after: 20.21, stored: 0.2021 },
+    {
+      quote: 'GBX near 1,000p',
+      row: {},
+      before: 1000,
+      after: 1004,
+      stored: 10.04,
+      factor: '1.004',
+    },
+    {
+      quote: 'GBX near 20p',
+      row: {},
+      before: 20.13,
+      after: 20.21,
+      stored: 0.2021,
+      factor: '1.00397',
+    },
     {
       quote: 'GBP near £0.50',
       row: { priceToContractFactor: 1 },
       before: 0.5,
       after: 0.502,
       stored: 0.502,
+      factor: '1.004',
     },
   ])(
     'rescales a 0.4% uniform shift once, and the next refresh leaves it ($quote)',
-    async ({ row, before, after, stored }) => {
+    async ({ row, before, after, stored, factor }) => {
       const rows = [ukRow('RR_XLON', 11, row)];
       const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], before));
       const rescaled = await runLeg(rows, async () => pencePage(DATES, after), { root });
@@ -366,7 +381,7 @@ describe('ukStockBarRefreshFor', () => {
         expect.objectContaining({
           level: 'warn',
           message: expect.stringContaining(
-            'RR_XLON: Saxo shifted every close from 2026-09-21 by 1.004x',
+            `RR_XLON: Saxo shifted every close from 2026-09-21 by ${factor}x`,
           ),
         }),
       ]);
@@ -379,15 +394,42 @@ describe('ukStockBarRefreshFor', () => {
     },
   );
 
-  it('leaves the older bars alone, and logs nothing, when the overlap shifts by 0.03%', async () => {
+  it.each([
+    { shift: '0.03%', after: 1000.3, close: 10.003 },
+    { shift: '0.045%', after: 1000.45, close: 10.0045 },
+  ])(
+    'leaves the older bars alone, and logs nothing, when the overlap shifts by $shift',
+    async ({ after, close }) => {
+      const rows = [ukRow('RR_XLON', 11)];
+      const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 1000));
+      const { report, entries } = await runLeg(rows, async () => pencePage(DATES, after), { root });
+      expect(report.failed).toEqual([]);
+      expect((await storedCloses(root, 'RR_XLON')).map(([, stored]) => stored)).toEqual([
+        10,
+        close,
+        close,
+        close,
+        close,
+      ]);
+      expect(rescaleEntries(entries)).toEqual([]);
+    },
+  );
+
+  it('rescales the older bars when the overlap shifts by 0.06%, just above the floor', async () => {
     const rows = [ukRow('RR_XLON', 11)];
     const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 1000));
-    const { report, entries } = await runLeg(rows, async () => pencePage(DATES, 1000.3), { root });
+    const { report, entries } = await runLeg(rows, async () => pencePage(DATES, 1000.6), { root });
     expect(report.failed).toEqual([]);
     expect((await storedCloses(root, 'RR_XLON')).map(([, close]) => close)).toEqual([
-      10, 10.003, 10.003, 10.003, 10.003,
+      10.006, 10.006, 10.006, 10.006, 10.006,
     ]);
-    expect(rescaleEntries(entries)).toEqual([]);
+    expect(rescaleEntries(entries)).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining(
+          'RR_XLON: Saxo shifted every close from 2026-09-21 by 1.0006x',
+        ),
+      }),
+    ]);
   });
 
   it('refuses a shift that is not uniform across the overlap, and rescales nothing', async () => {
