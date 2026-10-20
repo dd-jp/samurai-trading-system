@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { ParquetBarStore } from '../../providers/bar-store/index.js';
-import type { ChartPage, ChartSample } from '../../providers/saxo-bars/index.js';
+import {
+  type ChartPage,
+  type ChartSample,
+  SAXO_CHART_PAGE,
+} from '../../providers/saxo-bars/index.js';
 import type { Logger } from '../../shared/index.js';
 import {
   type CfdCatalogue,
@@ -71,16 +75,33 @@ function catalogueOf(rows: readonly Row[], asOf: string = TRADING_DATE): CfdCata
   );
 }
 
-function pencePage(dates: readonly string[], pence: number): ChartPage {
-  const samples: ChartSample[] = dates.map((date) => ({
-    Time: `${date}T00:00:00.000000Z`,
-    Open: pence,
-    High: pence,
-    Low: pence,
-    Close: pence,
-    Volume: 1_000,
-  }));
+function pencePage(
+  dates: readonly string[],
+  pence: number,
+  revised: Readonly<Record<string, number>> = {},
+): ChartPage {
+  const samples: ChartSample[] = dates.map((date) => {
+    const price = revised[date] ?? pence;
+    return {
+      Time: `${date}T00:00:00.000000Z`,
+      Open: price,
+      High: price,
+      Low: price,
+      Close: price,
+      Volume: 1_000,
+    };
+  });
   return { firstSampleTime: undefined, delayedByMinutes: 15, samples };
+}
+
+function weekdaysEndingOn(last: string, count: number): string[] {
+  const dates: string[] = [];
+  const day = new Date(`${last}T00:00:00Z`);
+  while (dates.length < count) {
+    if (day.getUTCDay() % 6 !== 0) dates.unshift(day.toISOString().slice(0, 10));
+    day.setUTCDate(day.getUTCDate() - 1);
+  }
+  return dates;
 }
 
 type PageFor = (uic: number) => Promise<ChartPage>;
@@ -115,6 +136,16 @@ async function runLeg(
   return { report, entries, calls, stopped, root };
 }
 
+async function storedBars(root: string, symbol: string) {
+  const store = await ParquetBarStore.open(root);
+  stores.push(store);
+  return (await store.readSeries('saxo', symbol))?.bars ?? [];
+}
+
+function rescaleEntries(entries: readonly Parameters<Logger['log']>[0][]) {
+  return entries.filter((entry) => entry.event === 'v2_saxo_history_rescaled');
+}
+
 async function storedCloses(root: string, symbol: string): Promise<[string, number][]> {
   const store = await ParquetBarStore.open(root);
   stores.push(store);
@@ -138,7 +169,7 @@ describe('ukStockBarLines', () => {
       recordingApi(async () => pencePage([], 1)).api,
       logger,
     );
-    expect(lines.map((line) => [line.tidm, line.windowed])).toEqual([
+    expect(lines.map((line) => [line.tidm, line.pageStartMoves])).toEqual([
       ['RR_XLON', true],
       ['WIDE_XLON', true],
     ]);
@@ -198,15 +229,19 @@ describe('ukStockBarRefreshFor', () => {
     expect(bars.load('VOD_XLON')).toBeUndefined();
   });
 
-  it('rolls the window forward a day, letting the oldest stored bar age out', async () => {
+  it('keeps the stored bars older than the page start when the page rolls forward', async () => {
     const rows = [ukRow('RR_XLON', 11)];
     const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 450));
     const { report } = await runLeg(rows, async () => pencePage(DATES, 450), { root });
     expect(report.failed).toEqual([]);
-    expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual(DATES);
+    expect(report.updated.map((updated) => updated.bars)).toEqual([5]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual([
+      '2026-09-18',
+      ...DATES,
+    ]);
   });
 
-  it('accepts a window whose first bar is one the stored copy lacks', async () => {
+  it('accepts a page whose first bar is one the stored copy lacks', async () => {
     const rows = [ukRow('RR_XLON', 11)];
     const { root } = await runLeg(rows, async () => pencePage(DATES.slice(1), 450));
     const { report } = await runLeg(rows, async () => pencePage(DATES, 450), { root });
@@ -214,7 +249,48 @@ describe('ukStockBarRefreshFor', () => {
     expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual(DATES);
   });
 
-  it('still refuses a window that drops a stored bar inside it', async () => {
+  it('keeps a history longer than a Saxo page and refuses a page truncated against it', async () => {
+    const rows = [ukRow('RR_XLON', 11)];
+    const history = weekdaysEndingOn('2026-09-24', SAXO_CHART_PAGE + 10);
+    const { root } = await runLeg(rows, async () => pencePage(history, 450));
+    const { report: full } = await runLeg(
+      rows,
+      async () => pencePage(history.slice(-SAXO_CHART_PAGE), 450),
+      { root },
+    );
+    expect(full.failed).toEqual([]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual(history);
+    const { report: truncated } = await runLeg(
+      rows,
+      async () => pencePage(history.slice(-(SAXO_CHART_PAGE - 6)), 450),
+      { root },
+    );
+    expect(truncated.failed.map((failed) => failed.reason)).toEqual([
+      expect.stringContaining(
+        `the Saxo page is truncated (${SAXO_CHART_PAGE - 6} samples where ${SAXO_CHART_PAGE} were expected)`,
+      ),
+    ]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual(history);
+  });
+
+  it('refuses a page more than five bars short of a stored history under a page long', async () => {
+    const rows = [ukRow('RR_XLON', 11)];
+    const seeded = weekdaysEndingOn('2026-09-24', 18);
+    const { root } = await runLeg(rows, async () => pencePage(seeded, 450));
+    const { report: short } = await runLeg(rows, async () => pencePage(seeded.slice(-12), 450), {
+      root,
+    });
+    expect(short.failed.map((failed) => failed.reason)).toEqual([
+      expect.stringContaining('the Saxo page is truncated (12 samples where 18 were expected)'),
+    ]);
+    const { report: slack } = await runLeg(rows, async () => pencePage(seeded.slice(-13), 450), {
+      root,
+    });
+    expect(slack.failed).toEqual([]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual(seeded);
+  });
+
+  it('still refuses a page that drops a stored bar inside it', async () => {
     const rows = [ukRow('RR_XLON', 11)];
     const { root } = await runLeg(rows, async () => pencePage(DATES, 450));
     const gapped = [DATES[0], DATES[2], DATES[3]] as string[];
@@ -225,21 +301,185 @@ describe('ukStockBarRefreshFor', () => {
     expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual(DATES);
   });
 
-  it('refuses a page more than five bars short of the stored window', async () => {
+  it('refuses a page that revises a stored close inside it', async () => {
     const rows = [ukRow('RR_XLON', 11)];
-    const weekdays = [1, 2, 3, 4, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18];
-    const seeded = [...weekdays.map((day) => `2026-09-${String(day).padStart(2, '0')}`), ...DATES];
-    const { root } = await runLeg(rows, async () => pencePage(seeded, 450));
-    const { report: short } = await runLeg(rows, async () => pencePage(seeded.slice(-12), 450), {
-      root,
-    });
-    expect(short.failed.map((failed) => failed.reason)).toEqual([
-      expect.stringContaining('refresh would shrink the window (had 18 bars, got 12)'),
+    const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 450));
+    const { report } = await runLeg(
+      rows,
+      async () => pencePage(DATES, 450, { '2026-09-22': 460 }),
+      { root },
+    );
+    expect(report.failed.map((failed) => failed.reason)).toEqual([
+      expect.stringContaining('revises stored close(s) by more than 0.5%: 2026-09-22 4.5 to 4.6'),
     ]);
-    const { report: slack } = await runLeg(rows, async () => pencePage(seeded.slice(-13), 450), {
-      root,
+    expect((await storedCloses(root, 'RR_XLON')).map(([, close]) => close)).toEqual([
+      4.5, 4.5, 4.5, 4.5, 4.5,
+    ]);
+  });
+
+  it('rescales the older bars to a uniform shift under the split tolerance, leaving no step', async () => {
+    const rows = [ukRow('RR_XLON', 11)];
+    const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 450));
+    const [seededOlder] = await storedBars(root, 'RR_XLON');
+    const { report, entries } = await runLeg(rows, async () => pencePage(DATES, 463.5), { root });
+    expect(report.failed).toEqual([]);
+    const bars = await storedBars(root, 'RR_XLON');
+    expect(bars.map((bar) => [bar.date, bar.close, bar.rawClose])).toEqual(
+      ['2026-09-18', ...DATES].map((date) => [date, 4.635, 4.635]),
+    );
+    expect(bars[0]).toEqual({
+      ...seededOlder,
+      open: 4.635,
+      high: 4.635,
+      low: 4.635,
+      close: 4.635,
+      rawClose: 4.635,
     });
-    expect(slack.failed).toEqual([]);
+    expect(rescaleEntries(entries)).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        message:
+          'RR_XLON: Saxo shifted every close from 2026-09-21 by 1.03x; the 1 older stored bar(s) ' +
+          'are multiplied by the same factor so no step stands at the seam',
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      quote: 'GBX near 1,000p',
+      row: {},
+      before: 1000,
+      after: 1004,
+      stored: 10.04,
+      factor: '1.004',
+    },
+    {
+      quote: 'GBX near 20p',
+      row: {},
+      before: 20.13,
+      after: 20.21,
+      stored: 0.2021,
+      factor: '1.00397',
+    },
+    {
+      quote: 'GBP near £0.50',
+      row: { priceToContractFactor: 1 },
+      before: 0.5,
+      after: 0.502,
+      stored: 0.502,
+      factor: '1.004',
+    },
+  ])(
+    'rescales a 0.4% uniform shift once, and the next refresh leaves it ($quote)',
+    async ({ row, before, after, stored, factor }) => {
+      const rows = [ukRow('RR_XLON', 11, row)];
+      const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], before));
+      const rescaled = await runLeg(rows, async () => pencePage(DATES, after), { root });
+      expect(rescaled.report.failed).toEqual([]);
+      expect(rescaleEntries(rescaled.entries)).toEqual([
+        expect.objectContaining({
+          level: 'warn',
+          message: expect.stringContaining(
+            `RR_XLON: Saxo shifted every close from 2026-09-21 by ${factor}x`,
+          ),
+        }),
+      ]);
+      const closes = ['2026-09-18', ...DATES].map((date) => [date, stored]);
+      expect(await storedCloses(root, 'RR_XLON')).toEqual(closes);
+      const next = await runLeg(rows, async () => pencePage(DATES.slice(1), after), { root });
+      expect(next.report.failed).toEqual([]);
+      expect(rescaleEntries(next.entries)).toEqual([]);
+      expect(await storedCloses(root, 'RR_XLON')).toEqual(closes);
+    },
+  );
+
+  it.each([
+    { shift: '0.03%', after: 1000.3, close: 10.003 },
+    { shift: '0.045%', after: 1000.45, close: 10.0045 },
+  ])(
+    'leaves the older bars alone, and logs nothing, when the overlap shifts by $shift',
+    async ({ after, close }) => {
+      const rows = [ukRow('RR_XLON', 11)];
+      const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 1000));
+      const { report, entries } = await runLeg(rows, async () => pencePage(DATES, after), { root });
+      expect(report.failed).toEqual([]);
+      expect((await storedCloses(root, 'RR_XLON')).map(([, stored]) => stored)).toEqual([
+        10,
+        close,
+        close,
+        close,
+        close,
+      ]);
+      expect(rescaleEntries(entries)).toEqual([]);
+    },
+  );
+
+  it('rescales the older bars when the overlap shifts by 0.06%, just above the floor', async () => {
+    const rows = [ukRow('RR_XLON', 11)];
+    const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 1000));
+    const { report, entries } = await runLeg(rows, async () => pencePage(DATES, 1000.6), { root });
+    expect(report.failed).toEqual([]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([, close]) => close)).toEqual([
+      10.006, 10.006, 10.006, 10.006, 10.006,
+    ]);
+    expect(rescaleEntries(entries)).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining(
+          'RR_XLON: Saxo shifted every close from 2026-09-21 by 1.0006x',
+        ),
+      }),
+    ]);
+  });
+
+  it('refuses a shift that is not uniform across the overlap, and rescales nothing', async () => {
+    const rows = [ukRow('RR_XLON', 11)];
+    const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 450));
+    const { report, entries } = await runLeg(
+      rows,
+      async () => pencePage(DATES, 463.5, { '2026-09-21': 450 }),
+      { root },
+    );
+    expect(report.failed.map((failed) => failed.reason)).toEqual([
+      expect.stringContaining('revises stored close(s) by more than 0.5%: 2026-09-21 4.5 to 4.5'),
+    ]);
+    expect(rescaleEntries(entries)).toEqual([]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([, close]) => close)).toEqual([
+      4.5, 4.5, 4.5, 4.5, 4.5,
+    ]);
+  });
+
+  it('rescales a split across a stored history no longer than the page', async () => {
+    const rows = [ukRow('RR_XLON', 11)];
+    const { root } = await runLeg(rows, async () => pencePage(DATES, 450));
+    const { report, entries } = await runLeg(rows, async () => pencePage(DATES, 900), { root });
+    expect(report.failed).toEqual([]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([, close]) => close)).toEqual([9, 9, 9, 9]);
+    expect(rescaleEntries(entries)).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('RR_XLON: Saxo rewrote') }),
+    ]);
+  });
+
+  it('refuses a page Saxo rewrote while older stored bars keep the old scale', async () => {
+    const rows = [ukRow('RR_XLON', 11)];
+    const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 450));
+    const { report } = await runLeg(rows, async () => pencePage(DATES, 900), { root });
+    expect(report.failed.map((failed) => failed.reason)).toEqual([
+      expect.stringContaining('the Saxo page rewrites the stored bars by 0.5x; refusing to write'),
+    ]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([, close]) => close)).toEqual([
+      4.5, 4.5, 4.5, 4.5, 4.5,
+    ]);
+  });
+
+  it('refuses a page that shares no bar with the stored history', async () => {
+    const rows = [ukRow('RR_XLON', 11)];
+    const { root } = await runLeg(rows, async () => pencePage(DATES.slice(0, 2), 450));
+    const { report } = await runLeg(rows, async () => pencePage(DATES.slice(2), 450), { root });
+    expect(report.failed.map((failed) => failed.reason)).toEqual([
+      expect.stringContaining('the Saxo page starts at 2026-09-23, after every stored bar'),
+    ]);
+    expect((await storedCloses(root, 'RR_XLON')).map(([date]) => date)).toEqual(DATES.slice(0, 2));
   });
 
   it('fails a name whose catalogue unit is neither GBX nor GBP, and pulls nothing for it', async () => {
