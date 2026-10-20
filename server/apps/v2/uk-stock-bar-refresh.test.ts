@@ -345,13 +345,47 @@ describe('ukStockBarRefreshFor', () => {
     ]);
   });
 
-  it('leaves the older bars alone when the overlap shifts by no more than 0.5%', async () => {
+  it.each([
+    { quote: 'GBX near 1,000p', row: {}, before: 1000, after: 1004, stored: 10.04 },
+    { quote: 'GBX near 20p', row: {}, before: 20.13, after: 20.21, stored: 0.2021 },
+    {
+      quote: 'GBP near £0.50',
+      row: { priceToContractFactor: 1 },
+      before: 0.5,
+      after: 0.502,
+      stored: 0.502,
+    },
+  ])(
+    'rescales a 0.4% uniform shift once, and the next refresh leaves it ($quote)',
+    async ({ row, before, after, stored }) => {
+      const rows = [ukRow('RR_XLON', 11, row)];
+      const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], before));
+      const rescaled = await runLeg(rows, async () => pencePage(DATES, after), { root });
+      expect(rescaled.report.failed).toEqual([]);
+      expect(rescaleEntries(rescaled.entries)).toEqual([
+        expect.objectContaining({
+          level: 'warn',
+          message: expect.stringContaining(
+            'RR_XLON: Saxo shifted every close from 2026-09-21 by 1.004x',
+          ),
+        }),
+      ]);
+      const closes = ['2026-09-18', ...DATES].map((date) => [date, stored]);
+      expect(await storedCloses(root, 'RR_XLON')).toEqual(closes);
+      const next = await runLeg(rows, async () => pencePage(DATES.slice(1), after), { root });
+      expect(next.report.failed).toEqual([]);
+      expect(rescaleEntries(next.entries)).toEqual([]);
+      expect(await storedCloses(root, 'RR_XLON')).toEqual(closes);
+    },
+  );
+
+  it('leaves the older bars alone, and logs nothing, when the overlap shifts by 0.03%', async () => {
     const rows = [ukRow('RR_XLON', 11)];
-    const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 450));
-    const { report, entries } = await runLeg(rows, async () => pencePage(DATES, 451), { root });
+    const { root } = await runLeg(rows, async () => pencePage(['2026-09-18', ...DATES], 1000));
+    const { report, entries } = await runLeg(rows, async () => pencePage(DATES, 1000.3), { root });
     expect(report.failed).toEqual([]);
     expect((await storedCloses(root, 'RR_XLON')).map(([, close]) => close)).toEqual([
-      4.5, 4.51, 4.51, 4.51, 4.51,
+      10, 10.003, 10.003, 10.003, 10.003,
     ]);
     expect(rescaleEntries(entries)).toEqual([]);
   });

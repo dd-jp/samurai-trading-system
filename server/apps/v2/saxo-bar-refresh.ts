@@ -52,6 +52,9 @@ const HISTORY_RESCALE_TOLERANCE = 0.05;
 // it holds only while Saxo closes stay price-only (doc 70's ISF/CUKX check): a back-adjustment
 // revising the closes before an ex-date inside the overlap refuses the line (see alignedOlder)
 const MAX_CLOSE_REVISION = 0.005;
+// #2143's "0.05% floor"; with prices rounded to 4 decimals it sits above one rounding tick only
+// from £0.20 up (the UK pool screens at 100p), and a re-pull of unchanged closes measures exactly 1
+const UNIFORM_SHIFT_RESCALE_FLOOR = 0.0005;
 const SAXO_VENUE = 'saxo';
 
 export type SaxoBarsApi = Pick<SaxoReadOnlyApi, 'instrumentDetails' | 'dailyHistory'>;
@@ -256,7 +259,7 @@ function alignedOlder(
 ): readonly DailyBar[] {
   if (older.length === 0 || overlap === undefined) return older;
   const shift = median(closeRatios(overlap, pulled).map(({ ratio }) => ratio)) ?? 1;
-  if (Math.abs(shift - 1) <= MAX_CLOSE_REVISION) return older;
+  if (Math.abs(shift - 1) <= UNIFORM_SHIFT_RESCALE_FLOOR) return older;
   const multiplier = 1 / shift;
   logRefresh(
     logger,
