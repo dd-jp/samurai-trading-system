@@ -49,8 +49,8 @@ const HISTORY_RESCALE_TOLERANCE = 0.05;
 // Between the 2026-09-25 pull (data/bars/saxo-aux/raw) and the 2026-09-30 store, 0 of 85,175
 // overlapping completed closes changed; the largest gap, 1.29%, was the partial fetch-day bar
 // hygiene drops, so any revision is unexplained; 0.5% only leaves room above 4-decimal rounding;
-// it holds only while Saxo closes stay price-only (doc 70's ISF/CUKX check): a distribution
-// back-adjustment would revise every close before an ex-date and refuse the line
+// it holds only while Saxo closes stay price-only (doc 70's ISF/CUKX check): a back-adjustment
+// revising the closes before an ex-date inside the overlap refuses the line (see alignedOlder)
 const MAX_CLOSE_REVISION = 0.005;
 const SAXO_VENUE = 'saxo';
 
@@ -231,6 +231,41 @@ function splitAtPageStart(
     refuseMovingPage(tidm, `rewrites the stored bars by ${Number(factor.toPrecision(4))}x`);
   }
   return { older, overlap };
+}
+
+function rescaledBar(bar: DailyBar, multiplier: number): DailyBar {
+  return {
+    ...bar,
+    open: bar.open * multiplier,
+    high: bar.high * multiplier,
+    low: bar.low * multiplier,
+    close: bar.close * multiplier,
+    rawClose: bar.rawClose * multiplier,
+  };
+}
+
+// A uniform shift under HISTORY_RESCALE_TOLERANCE (a dividend back-adjust with the ex-date on
+// the newest bar) passes revisedCloses, and the older bars must follow it or the seam carries
+// a step no later refresh sees; volume stays, as on the overlap
+function alignedOlder(
+  tidm: string,
+  older: readonly DailyBar[],
+  overlap: BarSeries | undefined,
+  pulled: readonly DailyBar[],
+  logger: Logger,
+): readonly DailyBar[] {
+  if (older.length === 0 || overlap === undefined) return older;
+  const shift = median(closeRatios(overlap, pulled).map(({ ratio }) => ratio)) ?? 1;
+  if (Math.abs(shift - 1) <= MAX_CLOSE_REVISION) return older;
+  const multiplier = 1 / shift;
+  logRefresh(
+    logger,
+    'warn',
+    'v2_saxo_history_rescaled',
+    `${tidm}: Saxo shifted every close from ${pulled[0]?.date} by ${Number(multiplier.toPrecision(4))}x; ` +
+      `the ${older.length} older stored bar(s) are multiplied by the same factor so no step stands at the seam`,
+  );
+  return roundPrices(older.map((bar) => rescaledBar(bar, multiplier)));
 }
 
 function guardedStored(
@@ -416,7 +451,8 @@ async function refreshLine(
   const pulled = roundPrices(repaired.bars);
   const { older, overlap } = guardedStored(line, existing, page.length, pulled);
   if (overlap !== undefined) assertHistoryConsistent(line, overlap, pulled);
-  const rounded = [...older, ...withSplitStep(overlap, pulled, hygiene.report, options.logger)];
+  const kept = alignedOlder(line.tidm, older, overlap, pulled, options.logger);
+  const rounded = [...kept, ...withSplitStep(overlap, pulled, hygiene.report, options.logger)];
   await (options.limit ?? UNLIMITED).atomic(() =>
     options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]),
   );
