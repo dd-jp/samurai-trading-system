@@ -1,12 +1,7 @@
 {
   "drill": "sim-cfd-stop-drill",
   "mode": "kill-resume",
-  "refs": [
-    "#1400",
-    "#1916",
-    "#1914",
-    "#2107"
-  ],
+  "refs": ["#1400", "#1916", "#1914", "#2107"],
   "gateway": "https://gateway.saxobank.com/sim/openapi",
   "startedAt": "2026-10-16T15:08:36.344Z",
   "instruments": [
@@ -24,13 +19,8 @@
     }
   ],
   "cleanup": {
-    "cancelled": [
-      "5040931361",
-      "5040931360"
-    ],
-    "flattened": [
-      "CfdOnStock:211"
-    ],
+    "cancelled": ["5040931361", "5040931360"],
+    "flattened": ["CfdOnStock:211"],
     "errors": []
   },
   "steps": [

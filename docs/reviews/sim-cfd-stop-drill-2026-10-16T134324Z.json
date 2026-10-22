@@ -1,10 +1,6 @@
 {
   "drill": "sim-cfd-stop-drill",
-  "refs": [
-    "#1400",
-    "#1916",
-    "#1914"
-  ],
+  "refs": ["#1400", "#1916", "#1914"],
   "gateway": "https://gateway.saxobank.com/sim/openapi",
   "startedAt": "2026-10-16T13:43:24.391Z",
   "instruments": [
@@ -87,10 +83,7 @@
         "orderId": "5040928350",
         "externalReference": "drill-1792158204390-4361",
         "placedAt": "2026-10-16T13:43:25.089Z",
-        "relatedOrderIds": [
-          "5040928351",
-          "5040928352"
-        ],
+        "relatedOrderIds": ["5040928351", "5040928352"],
         "fillPrice": 1059.6,
         "filledAt": "2026-10-16T13:43:25.153Z"
       },
@@ -176,10 +169,7 @@
         "orderId": "5040928566",
         "externalReference": "drill-1792158204390-878",
         "placedAt": "2026-10-16T13:48:52.078Z",
-        "relatedOrderIds": [
-          "5040928567",
-          "5040928568"
-        ],
+        "relatedOrderIds": ["5040928567", "5040928568"],
         "fillPrice": 1357.4,
         "filledAt": "2026-10-16T13:48:52.185Z"
       },
