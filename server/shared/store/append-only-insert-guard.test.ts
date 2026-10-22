@@ -19,7 +19,13 @@ const SIGNAL_COLUMNS = `signal_id, payload_digest, symbol, entry_low, entry_high
 const CASH_ANCHOR_COLUMNS = `anchor_row_id, venue, kind, currency, amount_quote, fill_seq,
   reference, trading_date, recorded_at, broker_mode`;
 
-const FILL_COLUMNS = `fill_seq, fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+const OUTCOME_COLUMNS = `outcome_id, decision_id, book_id, sleeve_id, instrument, venue, direction,
+  decision_date, entry_client_order_id, exit_client_order_id, exit_leg, exit_reason, entry_date,
+  exit_date, holding_days, entry_qty, exit_qty, entry_price_gbp, exit_price_gbp, fees_gbp,
+  carry_gbp, realised_pnl_gbp, trade_return, benchmark_symbol, benchmark_return, excess_return,
+  settled_at, schema_version`;
+
+const FILL_COLUMNS =`fill_seq, fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
   side, qty, price_gbp, fee_gbp, recorded_at, broker_mode`;
 
 const CASES: readonly Case[] = [
@@ -471,6 +477,37 @@ const CASES: readonly Case[] = [
             entry_after, recorded_at)
           VALUES (1, '2026-10-01', 'debate/primary', 'NVDA', 'detector', 1, '2026-09-30', 0, 10,
             10, 400, 400, '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
+    table: 'v2_decision_outcomes',
+    seed: `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+        VALUES ('debate/primary', 'debate', 'primary', 1000, 1000, 't');
+      INSERT INTO v2_decisions (decision_id, book_id, trading_date, instrument, venue, inputs_hash,
+          direction, confidence, action, reason, size_shares, stop_price, payload, recorded_at)
+        VALUES ('d-1', 'debate/primary', '2026-10-01', 'AAPL', 'alpaca', 'h', 'long', 0.6, 'enter',
+          'r', 1, 90, '{}', 't');
+      INSERT INTO v2_decision_outcomes (${OUTCOME_COLUMNS})
+        VALUES (1, 'd-1', 'debate/primary', 'debate', 'AAPL', 'alpaca', 'long', '2026-10-01', 'o-1',
+          'o-2', 'exit', 'time_stop', '2026-10-02', '2026-10-09', 7, 1, 1, 100, 110, 0, 0, 10, 0.1,
+          'SPY', 0.02, 0.08, '2026-10-09', 1)`,
+    attacks: [
+      {
+        name: 'same outcome_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_decision_outcomes (${OUTCOME_COLUMNS})
+          VALUES (1, 'd-1', 'debate/primary', 'debate', 'AAPL', 'alpaca', 'long', '2026-10-01',
+            'o-1', 'o-3', 'stop', 'stop', '2026-10-02', '2026-10-05', 3, 1, 1, 100, 80, 0, 0, -20,
+            -0.2, 'SPY', 0, -0.2, '2026-10-05', 1)`,
+      },
+      {
+        name: 'same book and exit order under a new id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_decision_outcomes (${OUTCOME_COLUMNS})
+          VALUES (2, 'd-1', 'debate/primary', 'debate', 'AAPL', 'alpaca', 'long', '2026-10-01',
+            'o-1', 'o-2', 'stop', 'stop', '2026-10-02', '2026-10-05', 3, 1, 1, 100, 80, 0, 0, -20,
+            -0.2, 'SPY', 0, -0.2, '2026-10-05', 1)`,
       },
     ],
   },
