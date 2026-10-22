@@ -52,8 +52,9 @@ export interface CycleCompositionOptions {
   readonly tradingDate: () => string;
   readonly dryRun: boolean;
   readonly halfSpreadBps: (instrument: string) => number;
-  // Scales all three modelled-cost legs (spread, impact, fee) together, so a cost-sensitivity
-  // run (doc 67 "2x modelled cost") stresses the whole cost model, not just the quoted spread
+  // Scales every modelled cost (spread, impact, fee, CFD financing and borrow) together, so a
+  // cost-sensitivity run (doc 67 "2x modelled cost") stresses the whole cost model, not just the
+  // quoted spread
   readonly costMultiple?: number | undefined;
   readonly alpacaClient?: AlpacaBrokerClient | undefined;
   readonly cfdCosts?: CfdCosts | undefined;
