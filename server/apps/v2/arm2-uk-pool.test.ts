@@ -478,4 +478,18 @@ describe('arm2UkPoolPassRule (#2143)', () => {
     expect(rule.afterHaircut.beatsAfterHaircut).toBe(false);
     expect(rule.pass).toBe(false);
   });
+
+  it.each([
+    { leg: 'at 1x', base: verdictAt(-0.5, -0.4), stressed: verdictAt(1, 0.5) },
+    { leg: 'at 2x', base: verdictAt(1, 0.5), stressed: verdictAt(-0.5, -0.4) },
+  ])(
+    'does not pass a negative Sharpe that beats only after the haircut $leg',
+    ({ base, stressed }) => {
+      const rule = arm2UkPoolPassRule(base, stressed);
+      const losing =
+        rule.afterHaircut.ukPoolSharpeOutOfSample < 0 ? rule.afterHaircut : rule.atDoubledCost;
+      expect(losing).toMatchObject({ beatsBeforeHaircut: false, beatsAfterHaircut: true });
+      expect(rule.pass).toBe(false);
+    },
+  );
 });

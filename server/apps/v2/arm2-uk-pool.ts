@@ -276,7 +276,8 @@ function passRuleLeg(verdict: Arm2UkPoolVerdict): Arm2UkPoolLeg {
 // David 2026-10-20 (#2143): beat ETF-only arm 2 after the 40% haircut, and still beat it with both
 // arms at 2x modelled cost. One trial has no fold selection, so its walk-forward Sharpe is the
 // out-of-sample Sharpe past the pinned split, as the vol-target trial's verdict reads it. The 2x
-// leg keeps the haircut, so the stricter reading of "still beats" can only withhold a pass
+// leg keeps the haircut. The haircut shrinks a negative Sharpe towards zero, so each leg must also
+// beat before it (David 2026-10-22, #2143)
 export function arm2UkPoolPassRule(
   base: Arm2UkPoolVerdict,
   stressed: Arm2UkPoolVerdict,
@@ -286,6 +287,8 @@ export function arm2UkPoolPassRule(
   return {
     afterHaircut,
     atDoubledCost,
-    pass: afterHaircut.beatsAfterHaircut && atDoubledCost.beatsAfterHaircut,
+    pass: [afterHaircut, atDoubledCost].every(
+      (leg) => leg.beatsBeforeHaircut && leg.beatsAfterHaircut,
+    ),
   };
 }
