@@ -1,5 +1,9 @@
 import { SAXO_CHART_PAGE } from '../../providers/saxo-bars/index.js';
-import { type Arm2BacktestDeps, arm2BacktestSleeve } from './arm2-backtest.js';
+import {
+  type Arm2BacktestDeps,
+  arm2BacktestSleeve,
+  VOL_TARGET_TRIAL_START_CAPITAL_GBP,
+} from './arm2-backtest.js';
 import type { BacktestTrial } from './backtest.js';
 import {
   type BookSeries,
@@ -47,8 +51,8 @@ export const ARM2_UK_POOL_OUT_OF_SAMPLE_FROM = '2024-01-01';
 // name list, and with it the trial hash, does not move with each daily snapshot
 export const ARM2_UK_POOL_NAMES_AS_OF = '2026-10-15';
 // David 2026-10-19 (#2143): both arms' books start at £3,000, arm 2's 30% share of this £10,000
-// paper book
-export const ARM2_UK_POOL_START_CAPITAL_GBP = 10_000;
+// paper book, the vol-target trial's
+export const ARM2_UK_POOL_START_CAPITAL_GBP = VOL_TARGET_TRIAL_START_CAPITAL_GBP;
 // David 2026-10-15 (#2143 ruling of the short window): 20-session ADV and price from bars
 export const UK_POOL_ADV_SESSIONS = 20;
 
