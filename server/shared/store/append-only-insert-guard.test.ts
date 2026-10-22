@@ -25,7 +25,7 @@ const OUTCOME_COLUMNS = `outcome_id, decision_id, book_id, sleeve_id, instrument
   carry_gbp, realised_pnl_gbp, trade_return, benchmark_symbol, benchmark_return, excess_return,
   settled_at, schema_version`;
 
-const FILL_COLUMNS =`fill_seq, fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+const FILL_COLUMNS = `fill_seq, fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
   side, qty, price_gbp, fee_gbp, recorded_at, broker_mode`;
 
 const CASES: readonly Case[] = [
