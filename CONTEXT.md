@@ -113,7 +113,7 @@ The Telegram message the system sends David once the gate passes for anything th
 ### Self-improvement
 
 **Research loop**
-The offline process that reads the **trade journal** and error log, proposes rule or parameter changes, walk-forward tests them as counted trials, and submits survivors to the gate. Its design is open (G11); it is built last, once a journal exists.
+The offline process that reads the **trade journal** and error log, proposes rule or parameter changes, walk-forward tests them as counted trials, and submits survivors to the gate. It proposes only declared-parameter retunes and lessons-in-prompt variants, runs after every 25 further closed debate trades, and turns at most one proposal per run into a counted trial (G11).
 
 **Adaptation rule**
 The only way live behaviour changes without a promotion: a pre-declared, backtested rule (volatility scaling, trend filter, sleeve demotion) or a risk change that only tightens. Everything else on live is frozen between promotions.
