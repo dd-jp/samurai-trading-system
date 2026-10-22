@@ -1059,6 +1059,15 @@ David ruled G11 one question at a time in chat on 2026-10-22, each recorded on [
 5. **Trial budget ([#1717](https://github.com/dd-jp/samurai-trading-system/issues/1717#issuecomment-6343789288)):** "At most 1 per run". Each run ranks its candidates and only the top one becomes a counted trial; the rest are recorded as research output, uncounted.
 6. **Start ([#1717](https://github.com/dd-jp/samurai-trading-system/issues/1717#issuecomment-6343794172)):** "After first 25 closed". #2146 and #2147 are offline and may be built now; the first run fires at 25 closed debate trades. Lessons reach a prompt only through #2148, as a counted trial against a no-lessons shadow.
 
+## Rulings of 2026-10-22 — decision outcome ledger (#2146)
+
+David ruled two design questions for the ledger G11's loop reads, in chat on 2026-10-22, each recorded on [#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6344726410).
+
+1. **Writer ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6344726410)):** "(b) Post-cycle rebuild". A step after the cycle rebuilds `v2_decision_outcomes` from the journal, so `cycle.ts` is not touched (#1942); the backfill runs the same code.
+2. **Benchmark ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6345327251)):** "Index by venue". SPY for `alpaca` and `saxo_cfd_usd`, ISF for `saxo` and `saxo_cfd_gbp`, from the entry bar's open to the exit bar's close; the excess return is net of the trade's direction.
+
+*Built 2026-10-22 (#2146).* Build notes (not rulings): `docs/specs/debate-sleeve-spec.md` §9 describes the table, its finality rule and the fault code. On the 2026-10-22 paper snapshot the rebuild settled 17 closed trades and left 4 pending on the next index bar, the 21 the evidence panel counts; a second run wrote nothing, and two independent rebuilds wrote identical rows. R is null for entries journalled before migration 0085, which carry no native price.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

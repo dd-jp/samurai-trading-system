@@ -55,6 +55,7 @@ import {
   type VenueRouter,
   type VenueSessionGate,
 } from './data/index.js';
+import { rebuildDecisionOutcomes } from './decision-outcomes.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { alpacaQuotesFor, saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import {
@@ -579,8 +580,26 @@ export async function runDigestedCycle(
   if (!report.skipped) {
     journalInputDigests(cycle.faults, tradingDate, inputs);
     await readBrokerCashInLieu(cycle, tradingDate);
+    settleDecisionOutcomes(cycle.faults, tradingDate, inputs);
   }
   return report;
+}
+
+function settleDecisionOutcomes(
+  faults: Pick<FaultLedger, 'record'>,
+  tradingDate: string,
+  inputs: DigestedInputs,
+): void {
+  try {
+    rebuildDecisionOutcomes(inputs.db, inputs.bars);
+  } catch (error) {
+    faults.record({
+      kind: 'refused_cycle',
+      trading_date: tradingDate,
+      code: 'v2_decision_outcomes_failed',
+      detail: describeThrownSafely(error),
+    });
+  }
 }
 
 function journalInputDigests(

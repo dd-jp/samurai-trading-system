@@ -94,6 +94,7 @@ const APPEND_ONLY_TRIGGERS = [
   'v2_cash_in_lieu_no_delete',
   'v2_cash_in_lieu_adjustments_no_delete',
   'v2_split_clears_no_delete',
+  'v2_decision_outcomes_no_delete',
 ] as const;
 
 const SIGNAL_REWIND_SQL = [
@@ -223,13 +224,13 @@ export function earlierRunsThatActed(db: StoreHandle, tradingDate: string): stri
   return rows.map((row) => row.run_id);
 }
 
-const UNREAD_BY_THE_CYCLE = ['llm_call_log', 'llm_spend'] as const;
+const UNREAD_BY_THE_CYCLE = ['llm_call_log', 'llm_spend', 'v2_decision_outcomes'] as const;
 
 export function rewoundCopy(db: StoreHandle, tradingDate: string, startedAt: string): StoreHandle {
   const copy = inMemoryCopyOf(db);
+  for (const trigger of APPEND_ONLY_TRIGGERS) copy.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
   for (const table of UNREAD_BY_THE_CYCLE) copy.exec(`DELETE FROM ${table}`);
   copy.exec('VACUUM');
-  for (const trigger of APPEND_ONLY_TRIGGERS) copy.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
   const reopened = reopenedSql('>=');
   copy.transaction(() => {
     copy
