@@ -679,11 +679,26 @@ describe('runArm2UkPoolTrialAgainst', () => {
           startCapitalGbp: 10_000,
           ukStockCfdOpen: true,
           cfdCatalogues: [{ asOf: window.to, sha256: today.sha256 }],
-          benchmark: { id: 'arm2', config: { benchmark: 'arm2', universe: 'lse_etf_only' } },
+          benchmark: {
+            id: 'arm2',
+            config: { benchmark: 'arm2', universe: 'lse_etf_only', reserved_lse_slots: 4 },
+          },
         },
       });
-      const { verdict, stressed } = report;
+      const { verdict, stressed, passRule } = report;
       expect(verdict).toMatchObject({ trial: 1, trialsCounted: 1, from: window.from });
+      for (const pass of [verdict, stressed]) {
+        expect(pass).toMatchObject({ ukPoolStartGbp: 3_000, etfOnlyStartGbp: 3_000 });
+      }
+      expect(passRule.afterHaircut.ukPoolSharpeOutOfSample).toBe(verdict.ukPool.sharpeOutOfSample);
+      expect(passRule.atDoubledCost.etfOnlySharpeOutOfSample).toBe(
+        stressed.etfOnly.sharpeOutOfSample,
+      );
+      expect(passRule.pass).toBe(
+        [passRule.afterHaircut, passRule.atDoubledCost].every(
+          (leg) => leg.beatsBeforeHaircut && leg.beatsAfterHaircut,
+        ),
+      );
       expect(verdict.outOfSampleFrom).toBe('2023-01-02');
       expect(verdict.sessionsInSample + verdict.sessionsOutOfSample).toBe(ARM2_DATES.length - 220);
       expect(verdict.ukPool.totalReturn).not.toBe(verdict.etfOnly.totalReturn);
@@ -866,7 +881,7 @@ describe('candidate trial hashes', () => {
         ),
       1,
     );
-    expect(hashes, NEW_TRIAL).toEqual(['207125ce41d2c2e8']);
+    expect(hashes, NEW_TRIAL).toEqual(['3b15b48d72057993']);
   });
 
   it('#2105: makes an archived CFD catalogue inside the window a new vol-target trial', async () => {

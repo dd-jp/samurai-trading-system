@@ -92,9 +92,10 @@ function assertCfdFillsPriced(
 function cfdCarryRatesFor(options: CycleCompositionOptions): CfdCarryRates | undefined {
   const costs = options.cfdCosts;
   if (costs === undefined) return undefined;
+  const multiple = options.costMultiple ?? 1;
   return {
-    financing: costs.financing,
-    borrow: costs.borrow,
+    financing: { dailyRate: (venue, side) => costs.financing.dailyRate(venue, side) * multiple },
+    borrow: { dailyRate: (venue, quoted) => costs.borrow.dailyRate(venue, quoted) * multiple },
     quotedBorrowPerDay: options.quotedCfdBorrowPerDay ?? (() => undefined),
   };
 }

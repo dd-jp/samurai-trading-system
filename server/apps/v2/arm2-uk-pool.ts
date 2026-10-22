@@ -5,7 +5,12 @@ import {
   VOL_TARGET_TRIAL_START_CAPITAL_GBP,
 } from './arm2-backtest.js';
 import type { BacktestTrial } from './backtest.js';
-import { type BookSeries, deflatedSharpeOfReturns, type TrialSeries } from './backtest-verdict.js';
+import {
+  type BookSeries,
+  deflatedSharpeOfReturns,
+  SHARPE_HAIRCUT_MULTIPLIER,
+  type TrialSeries,
+} from './backtest-verdict.js';
 import {
   type BarsSource,
   type CfdCatalogue,
@@ -26,6 +31,7 @@ import {
   CFD_SHORT_MAX_BORROW_RATE_PER_YEAR,
   coveredHistory,
   isSet,
+  LSE_ETF_ONLY_RESERVED_SLOTS,
   LSE_RESERVED_SLOTS,
   type Parameter,
   requireSet,
@@ -44,7 +50,8 @@ export const ARM2_UK_POOL_OUT_OF_SAMPLE_FROM = '2024-01-01';
 // #2143 (a): "today's surviving names" are the first snapshot holding UK stock rows, pinned so the
 // name list, and with it the trial hash, does not move with each daily snapshot
 export const ARM2_UK_POOL_NAMES_AS_OF = '2026-10-15';
-// Build choice awaiting David (#2143): the vol-target trial's paper start capital (#1860)
+// David 2026-10-19 (#2143): both arms' books start at £3,000, arm 2's 30% share of this £10,000
+// paper book, the vol-target trial's
 export const ARM2_UK_POOL_START_CAPITAL_GBP = VOL_TARGET_TRIAL_START_CAPITAL_GBP;
 // David 2026-10-15 (#2143 ruling of the short window): 20-session ADV and price from bars
 export const UK_POOL_ADV_SESSIONS = 20;
@@ -178,6 +185,7 @@ export function arm2UkPoolArms(deps: Arm2UkPoolDeps): Arm2UkPoolArms {
       config: {
         benchmark: ARM2_SLEEVE_ID,
         universe: 'lse_etf_only',
+        reserved_lse_slots: LSE_ETF_ONLY_RESERVED_SLOTS,
         cfd_routes_before_archive: routesBeforeArchive,
       },
       sleeve: arm2BacktestSleeve(shared, ARM2_SLEEVE_ID),
@@ -194,7 +202,6 @@ export interface Arm2UkPoolVerdictInput {
   readonly lossCapGbp: number;
 }
 
-// #2143 sets arm 2 paper's band; no pass rule is ruled, so the verdict reports and never passes
 export interface Arm2UkPoolVerdict {
   readonly from: string;
   readonly to: string;
@@ -203,6 +210,8 @@ export interface Arm2UkPoolVerdict {
   readonly sessionsOutOfSample: number;
   readonly trial: number;
   readonly trialsCounted: number;
+  readonly ukPoolStartGbp: number;
+  readonly etfOnlyStartGbp: number;
   readonly ukPool: ArmSummary;
   readonly etfOnly: ArmSummary;
   readonly deflatedSharpe: number;
@@ -229,8 +238,57 @@ export function arm2UkPoolVerdict(input: Arm2UkPoolVerdictInput): Arm2UkPoolVerd
     sessionsOutOfSample: length - split,
     trial: input.trial.trial,
     trialsCounted: input.trialsCounted,
+    ukPoolStartGbp: input.trial.equity[0] as number,
+    etfOnlyStartGbp: input.baseline.equity[0] as number,
     ukPool: armSummary(input.trial, input.dates, split, input.lossCapGbp),
     etfOnly: armSummary(input.baseline, input.dates, split, input.lossCapGbp),
     deflatedSharpe: deflatedSharpeOfReturns(input.trial.returns, input.trialsCounted),
+  };
+}
+
+export interface Arm2UkPoolLeg {
+  readonly ukPoolSharpeOutOfSample: number;
+  readonly ukPoolSharpeAfterHaircut: number;
+  readonly etfOnlySharpeOutOfSample: number;
+  readonly beatsBeforeHaircut: boolean;
+  readonly beatsAfterHaircut: boolean;
+}
+
+export interface Arm2UkPoolPassRule {
+  readonly afterHaircut: Arm2UkPoolLeg;
+  readonly atDoubledCost: Arm2UkPoolLeg;
+  readonly pass: boolean;
+}
+
+function passRuleLeg(verdict: Arm2UkPoolVerdict): Arm2UkPoolLeg {
+  const ukPool = verdict.ukPool.sharpeOutOfSample;
+  const etfOnly = verdict.etfOnly.sharpeOutOfSample;
+  const haircut = ukPool * SHARPE_HAIRCUT_MULTIPLIER;
+  return {
+    ukPoolSharpeOutOfSample: ukPool,
+    ukPoolSharpeAfterHaircut: haircut,
+    etfOnlySharpeOutOfSample: etfOnly,
+    beatsBeforeHaircut: ukPool > etfOnly,
+    beatsAfterHaircut: haircut > etfOnly,
+  };
+}
+
+// David 2026-10-20 (#2143): beat ETF-only arm 2 after the 40% haircut, and still beat it with both
+// arms at 2x modelled cost. One trial has no fold selection, so its walk-forward Sharpe is the
+// out-of-sample Sharpe past the pinned split, as the vol-target trial's verdict reads it. The
+// haircut shrinks a negative Sharpe towards zero, so each leg must beat both before and after it
+// (David 2026-10-22, #2143)
+export function arm2UkPoolPassRule(
+  base: Arm2UkPoolVerdict,
+  stressed: Arm2UkPoolVerdict,
+): Arm2UkPoolPassRule {
+  const afterHaircut = passRuleLeg(base);
+  const atDoubledCost = passRuleLeg(stressed);
+  return {
+    afterHaircut,
+    atDoubledCost,
+    pass: [afterHaircut, atDoubledCost].every(
+      (leg) => leg.beatsBeforeHaircut && leg.beatsAfterHaircut,
+    ),
   };
 }

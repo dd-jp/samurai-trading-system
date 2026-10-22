@@ -25,8 +25,10 @@ import {
   ARM2_UK_POOL_START_CAPITAL_GBP,
   ARM2_UK_POOL_TO,
   type Arm2UkPoolArms,
+  type Arm2UkPoolPassRule,
   type Arm2UkPoolVerdict,
   arm2UkPoolArms,
+  arm2UkPoolPassRule,
   arm2UkPoolVerdict,
   assertArm2UkPoolRunReady,
   assertUkBarsReach,
@@ -582,6 +584,7 @@ export function runVolTargetTrial(
 export interface Arm2UkPoolTrialReport {
   readonly verdict: Arm2UkPoolVerdict;
   readonly stressed: Arm2UkPoolVerdict;
+  readonly passRule: Arm2UkPoolPassRule;
   readonly minbtlLimit: number;
   readonly windowYears: number;
   readonly dataSanity: DataSanityReport;
@@ -661,7 +664,9 @@ function arm2UkPoolSanity(
 }
 
 // David 2026-10-15 (#2143 (f)): arm 2's own counted trial over the UK pool and 6 slots, beside
-// the ETF-only arm 2 it replaces as paper's band. Doc 67's 2x cost rerun runs on the same hash
+// the ETF-only arm 2 it replaces as paper's band. That baseline is the run's benchmark, never a
+// counted trial but pinned in the trial's hash, as the vol-target trial's is. Doc 67's 2x cost
+// rerun runs on the same hash
 export async function runArm2UkPoolTrialAgainst(
   market: MarketData,
   bars: BarsSource,
@@ -691,6 +696,7 @@ export async function runArm2UkPoolTrialAgainst(
   return {
     verdict: base.verdict,
     stressed: stressed.verdict,
+    passRule: arm2UkPoolPassRule(base.verdict, stressed.verdict),
     ...windowLength(window),
     dataSanity: arm2UkPoolSanity(market, bars, pool, window, base.dates),
   };

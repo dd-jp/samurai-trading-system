@@ -8,6 +8,7 @@ import {
   ARM2_UK_POOL_OUT_OF_SAMPLE_FROM,
   ARM2_UK_POOL_TO,
   arm2UkPoolArms,
+  arm2UkPoolPassRule,
   arm2UkPoolVerdict,
   assertArm2UkPoolRunReady,
   assertUkBarsReach,
@@ -313,6 +314,7 @@ describe('arm2UkPoolArms (#2143)', () => {
     expect(arms.baseline.config).toEqual({
       benchmark: 'arm2',
       universe: 'lse_etf_only',
+      reserved_lse_slots: 4,
       cfd_routes_before_archive: routes,
     });
     expect(CFD_SLEEVE_IDS).toContain(ARM2_UK_POOL_SLEEVE_ID);
@@ -390,8 +392,11 @@ describe('arm2UkPoolVerdict (#2143)', () => {
     lossCapGbp: 450,
   };
 
-  it('reports both arms on each side of the split, and no pass', () => {
-    const verdict = arm2UkPoolVerdict(input);
+  it('reports both arms on each side of the split, each from its own start', () => {
+    const verdict = arm2UkPoolVerdict({
+      ...input,
+      baseline: { ...flat, equity: [90, 90, 90, 90, 90] },
+    });
     expect(verdict).toMatchObject({
       from: '2022-12-29',
       to: '2023-01-04',
@@ -400,6 +405,8 @@ describe('arm2UkPoolVerdict (#2143)', () => {
       sessionsOutOfSample: 2,
       trial: 3,
       trialsCounted: 3,
+      ukPoolStartGbp: 100,
+      etfOnlyStartGbp: 90,
     });
     expect(verdict.ukPool.totalReturn).toBeCloseTo(0.04, 10);
     expect(verdict.etfOnly.totalReturn).toBe(0);
@@ -417,4 +424,72 @@ describe('arm2UkPoolVerdict (#2143)', () => {
       /fewer than 2 sessions/,
     );
   });
+});
+
+describe('arm2UkPoolPassRule (#2143)', () => {
+  const dates = ['2022-12-29', '2022-12-30', '2023-01-03', '2023-01-04'];
+  const flat = { equity: [100, 100, 100, 100, 100], returns: [0, 0, 0, 0] };
+  const reported = arm2UkPoolVerdict({
+    dates,
+    trial: { ...flat, trial: 1 },
+    baseline: flat,
+    outOfSampleFrom: '2023-01-01',
+    trialsCounted: 1,
+    lossCapGbp: 450,
+  });
+  const verdictAt = (ukPool: number, etfOnly: number) => ({
+    ...reported,
+    ukPool: { ...reported.ukPool, sharpeOutOfSample: ukPool },
+    etfOnly: { ...reported.etfOnly, sharpeOutOfSample: etfOnly },
+  });
+
+  it('passes only when the UK pool beats ETF-only after the haircut at 1x and at 2x cost', () => {
+    const rule = arm2UkPoolPassRule(verdictAt(1, 0.5), verdictAt(0.9, 0.5));
+    expect(rule.afterHaircut).toEqual({
+      ukPoolSharpeOutOfSample: 1,
+      ukPoolSharpeAfterHaircut: 0.6,
+      etfOnlySharpeOutOfSample: 0.5,
+      beatsBeforeHaircut: true,
+      beatsAfterHaircut: true,
+    });
+    expect(rule.atDoubledCost.ukPoolSharpeAfterHaircut).toBeCloseTo(0.54, 12);
+    expect(rule.pass).toBe(true);
+  });
+
+  it('fails when either leg fails alone', () => {
+    const failsAt1x = arm2UkPoolPassRule(verdictAt(0.8, 0.5), verdictAt(1, 0.5));
+    expect(failsAt1x.afterHaircut).toMatchObject({
+      beatsBeforeHaircut: true,
+      beatsAfterHaircut: false,
+    });
+    expect(failsAt1x.atDoubledCost.beatsAfterHaircut).toBe(true);
+    expect(failsAt1x.pass).toBe(false);
+    const failsAt2x = arm2UkPoolPassRule(verdictAt(1, 0.5), verdictAt(0.8, 0.5));
+    expect(failsAt2x.atDoubledCost).toMatchObject({
+      beatsBeforeHaircut: true,
+      beatsAfterHaircut: false,
+    });
+    expect(failsAt2x.pass).toBe(false);
+  });
+
+  it('does not pass on a tie after the haircut', () => {
+    const rule = arm2UkPoolPassRule(verdictAt(1, 0.6), verdictAt(1, 0.6));
+    expect(rule.afterHaircut.ukPoolSharpeAfterHaircut).toBe(0.6);
+    expect(rule.afterHaircut.beatsAfterHaircut).toBe(false);
+    expect(rule.pass).toBe(false);
+  });
+
+  it.each([
+    { leg: 'at 1x', base: verdictAt(-0.5, -0.4), stressed: verdictAt(1, 0.5) },
+    { leg: 'at 2x', base: verdictAt(1, 0.5), stressed: verdictAt(-0.5, -0.4) },
+  ])(
+    'does not pass a negative Sharpe that beats only after the haircut $leg',
+    ({ base, stressed }) => {
+      const rule = arm2UkPoolPassRule(base, stressed);
+      const losing =
+        rule.afterHaircut.ukPoolSharpeOutOfSample < 0 ? rule.afterHaircut : rule.atDoubledCost;
+      expect(losing).toMatchObject({ beatsBeforeHaircut: false, beatsAfterHaircut: true });
+      expect(rule.pass).toBe(false);
+    },
+  );
 });

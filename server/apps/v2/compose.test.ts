@@ -341,33 +341,41 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     expect(cfd - cash).toBeCloseTo((100 * (30 - 5)) / 10_000, 9);
   });
 
-  it('wires CFD financing and the catalogue borrow quote into the daily mark', () => {
-    const composed = composeCycle(
-      options({
-        cfdCosts: {
-          ...cfdCosts(() => 0),
-          financing: { dailyRate: () => 0.001 },
-          borrow: { dailyRate: (_venue, quoted) => quoted ?? 1 },
-        },
-        quotedCfdBorrowPerDay: (instrument) => (instrument === 'AAPL' ? 0.0002 : undefined),
-      }),
-    );
-    composed.books.applyFill('debate/primary', {
-      instrument: 'AAPL',
-      venue: 'saxo_cfd_usd',
-      side: 'sell',
-      leg: 'entry',
-      qty: 2,
-      priceGbp: 50,
-      feeGbp: 0,
-      clientOrderId: 'short-1',
-      tradingDate: '2026-09-25',
-    });
-    composed.books.markDay('debate/primary', '2026-09-25', () => 50, 2);
-    const row = composed.books.lastDay('debate/primary');
-    expect(row?.cfdFinancingAccrualGbp).toBeCloseTo(100 * 0.001 * 2, 12);
-    expect(row?.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.0002 * 2, 12);
-  });
+  it.each([
+    { costMultiple: 1, scale: 1 },
+    { costMultiple: 2, scale: 2 },
+    { costMultiple: undefined, scale: 1 },
+  ])(
+    'wires CFD financing and the catalogue borrow quote into the daily mark, scaled by costMultiple $costMultiple (#2143)',
+    ({ costMultiple, scale }) => {
+      const composed = composeCycle(
+        options({
+          cfdCosts: {
+            ...cfdCosts(() => 0),
+            financing: { dailyRate: () => 0.001 },
+            borrow: { dailyRate: (_venue, quoted) => quoted ?? 1 },
+          },
+          quotedCfdBorrowPerDay: (instrument) => (instrument === 'AAPL' ? 0.0002 : undefined),
+          costMultiple,
+        }),
+      );
+      composed.books.applyFill('debate/primary', {
+        instrument: 'AAPL',
+        venue: 'saxo_cfd_usd',
+        side: 'sell',
+        leg: 'entry',
+        qty: 2,
+        priceGbp: 50,
+        feeGbp: 0,
+        clientOrderId: 'short-1',
+        tradingDate: '2026-09-25',
+      });
+      composed.books.markDay('debate/primary', '2026-09-25', () => 50, 2);
+      const row = composed.books.lastDay('debate/primary');
+      expect(row?.cfdFinancingAccrualGbp).toBeCloseTo(100 * 0.001 * 2 * scale, 12);
+      expect(row?.cfdBorrowAccrualGbp).toBeCloseTo(100 * 0.0002 * 2 * scale, 12);
+    },
+  );
 
   it('hands the borrow model no quote when no catalogue source is wired, so its fallback prices it', () => {
     const composed = composeCycle(
