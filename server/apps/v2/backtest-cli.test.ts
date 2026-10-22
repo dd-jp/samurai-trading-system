@@ -695,7 +695,9 @@ describe('runArm2UkPoolTrialAgainst', () => {
         stressed.etfOnly.sharpeOutOfSample,
       );
       expect(passRule.pass).toBe(
-        passRule.afterHaircut.beatsAfterHaircut && passRule.atDoubledCost.beatsAfterHaircut,
+        [passRule.afterHaircut, passRule.atDoubledCost].every(
+          (leg) => leg.beatsBeforeHaircut && leg.beatsAfterHaircut,
+        ),
       );
       expect(verdict.outOfSampleFrom).toBe('2023-01-02');
       expect(verdict.sessionsInSample + verdict.sessionsOutOfSample).toBe(ARM2_DATES.length - 220);
