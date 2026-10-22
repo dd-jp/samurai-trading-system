@@ -1,7 +1,7 @@
 export type { AlpacaDataCredentials } from './alpaca-splits.js';
 export { AlpacaSplitsClient, AlpacaSplitsError } from './alpaca-splits.js';
 export type { DataSanityReport } from './bar-sanity.js';
-export { dataSanity } from './bar-sanity.js';
+export { dataSanity, venueDataSanity } from './bar-sanity.js';
 export type { BarsSource } from './bars.js';
 export {
   barsBefore,
@@ -74,11 +74,17 @@ export {
   inUkStockBarPool,
   inUkStockUniversePool,
   isUkStock,
+  PENCE_PER_POUND,
   ukStockKey,
   ukStockScreenCounts,
 } from './uk-stocks.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
-export { CLOSED_VENUE_ROUTER, createDatedVenueRouter, createVenueRouter } from './venue-routes.js';
+export {
+  CLOSED_VENUE_ROUTER,
+  createAssumedBeforeArchiveRouter,
+  createDatedVenueRouter,
+  createVenueRouter,
+} from './venue-routes.js';
 export type { SitOutCode, VenueSessionGate } from './venue-sessions.js';
 export {
   bothVenuesClosed,

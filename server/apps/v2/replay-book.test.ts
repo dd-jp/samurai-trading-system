@@ -492,6 +492,101 @@ describe('rebuildBooks', () => {
   });
 });
 
+describe('replay of cash in lieu book-cash corrections (#2001)', () => {
+  const clock = new SimulatedClock(new Date('2026-10-05T07:30:00.000Z'));
+  const DAY = '2026-10-05';
+  const MARKED = `${DAY}T21:00:00.000Z`;
+  const KEY = '1|debate/primary|est|alpaca:cil-1:0';
+
+  function journalWith(corrections: readonly [string, number][]): BetterSqlite3.Database {
+    const db = migratedMemoryStore();
+    new CapitalConfigStore(db, clock).setYear(2026, 2_000, 1_500);
+    db.prepare(
+      `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+       VALUES ('debate/primary', 'debate', 'primary', 600, 600, 'now')`,
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO v2_cash_in_lieu_adjustments (book_id, estimate_fill_id, venue, instrument,
+         activity_id, activity_key, amount_native, amount_gbp, fx_quote_per_gbp, fx_source,
+         estimate_fill_seq, broker_mode, fills_before, trading_date, recorded_at)
+       VALUES ('debate/primary', 'est', 'alpaca', 'NVDA', 'cil-1', ?, ?, ?, 1.25, 'read-day', 1,
+         'live', 0, ?, ?)`,
+    );
+    for (const [index, [date, gbp]] of corrections.entries()) {
+      insert.run(`alpaca:cil-1:${index}`, gbp * 1.25, gbp, date, `${date}T07:31:00.000Z`);
+    }
+    db.prepare("UPDATE schema_migrations SET applied_at = '2026-01-01T00:00:00.000Z'").run();
+    return db;
+  }
+
+  it('rebuilds book cash from the corrections journalled before the day, never a later one', () => {
+    const db = journalWith([
+      ['2026-10-02', 0.75],
+      [DAY, 5],
+    ]);
+    const copy = rewoundCopy(db, DAY, `${DAY}T07:30:00.000Z`);
+    db.close();
+    const books = new PaperBooks(copy, clock, new CapitalConfigStore(copy, clock), DAY, [
+      { id: 'debate', spec: DEBATE_SLEEVE_SPEC },
+    ]);
+    rebuildBooks({
+      copy,
+      books,
+      market: {
+        lastBarBefore: () => undefined,
+        barsBefore: () => [],
+        gbpUsdAtYearStart: () => 1.25,
+      },
+      venueSessions: OPEN_EVERY_DAY,
+    });
+    expect(books.cash('debate/primary')).toBe(600.75);
+    copy.close();
+  });
+
+  it('holds a day to each correction row it journalled', () => {
+    const journal = journalWith([[DAY, 0.75]]);
+    const compare = (replayed: BetterSqlite3.Database) => {
+      const { divergences } = tradingDivergences({
+        journal,
+        replayed,
+        tradingDate: DAY,
+        markedAt: MARKED,
+        startedAt: `${DAY}T07:30:00.000Z`,
+      });
+      replayed.close();
+      return divergences;
+    };
+    expect(compare(journalWith([[DAY, 0.75]]))).toEqual([]);
+    expect(compare(journalWith([[DAY, 0.8]]))).toEqual([
+      {
+        kind: 'row_field',
+        stage: 'cash_in_lieu_corrections',
+        key: KEY,
+        field: 'amount_native',
+        journalled: 0.9375,
+        replayed: 1,
+      },
+    ]);
+    journal.close();
+  });
+
+  it('names a correction the journal holds but the replay did not write', () => {
+    const journal = journalWith([[DAY, 0.75]]);
+    const replayed = journalWith([]);
+    expect(
+      tradingDivergences({
+        journal,
+        replayed,
+        tradingDate: DAY,
+        markedAt: MARKED,
+        startedAt: `${DAY}T07:30:00.000Z`,
+      }).divergences,
+    ).toEqual([{ kind: 'row_missing', stage: 'cash_in_lieu_corrections', key: KEY }]);
+    journal.close();
+    replayed.close();
+  });
+});
+
 describe('journalledDay', () => {
   it('takes the mode from the day orders, and from the rest of the store on a day with none', () => {
     const db = migratedMemoryStore();

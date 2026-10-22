@@ -14,6 +14,7 @@ export type {
 } from './saxo-api.js';
 export {
   openSaxoLiveSession,
+  SAXO_CHART_PAGE,
   SaxoReadOnlyApi,
   samplesToBars,
 } from './saxo-api.js';

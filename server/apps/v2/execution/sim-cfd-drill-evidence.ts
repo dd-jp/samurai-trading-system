@@ -15,6 +15,22 @@ export interface AmendAttempt {
 
 export type DrillSide = 'short' | 'long';
 
+export type DrillExit = 'stop' | 'target';
+
+export type DrillMode = DrillExit | 'kill-place' | 'kill-resume';
+
+export interface DrivenLeg {
+  orderId?: string;
+  rest?: OpenOrder & { readonly observedAt: string };
+  amendAttempts?: AmendAttempt[];
+}
+
+export interface SiblingCancel {
+  readonly orderId: string;
+  readonly goneBeforeCleanup: boolean;
+  readonly statuses: readonly string[];
+}
+
 export interface InstrumentEvidence {
   readonly symbol: string;
   readonly assetType: DrillAssetType;
@@ -34,16 +50,20 @@ export interface InstrumentEvidence {
     fillPrice?: number | undefined;
     filledAt?: string;
   };
-  stop?: {
+  stop?: DrivenLeg & {
     readonly placedPrice: number;
-    orderId?: string;
-    rest?: OpenOrder & { readonly observedAt: string };
-    amendAttempts?: AmendAttempt[];
     triggeredAt?: string;
     triggerStatus?: string;
     triggerFillPrice?: number | undefined;
   };
   targetPrice?: number;
+  target?: DrivenLeg & {
+    filledAt?: string;
+    fillStatus?: string;
+    fillPrice?: number | undefined;
+  };
+  sibling?: SiblingCancel;
+  stopWorkingAfterExit?: boolean;
   positionClosedAfterTrigger?: boolean;
 }
 
@@ -55,6 +75,8 @@ export interface AccountFlatness {
 
 export interface DrillEvidence {
   readonly drill: 'sim-cfd-stop-drill';
+  readonly mode: DrillMode;
+  resumedFrom?: string;
   readonly refs: readonly string[];
   readonly gateway: string;
   readonly startedAt: string;
@@ -90,7 +112,7 @@ export function drillPassed(evidence: DrillEvidence): boolean {
   return (
     evidence.failure === undefined &&
     evidence.cleanup.errors.length === 0 &&
-    isFlat(evidence.flatAfter) &&
+    (evidence.mode === 'kill-place' || isFlat(evidence.flatAfter)) &&
     ran.length > 0 &&
     ran.every((record) => record.outcome === 'passed')
   );
@@ -119,6 +141,30 @@ function instrumentRow(record: InstrumentEvidence): string {
     .join(' | ')} |`;
 }
 
+function yesNo(value: boolean | undefined): string {
+  return value === undefined ? 'not read' : value ? 'yes' : 'no';
+}
+
+function exitLines(record: InstrumentEvidence): string[] {
+  const lines: string[] = [];
+  if (record.target?.fillStatus !== undefined) {
+    lines.push(
+      `- ${record.symbol}: target ${cell(record.target.orderId)} ${record.target.fillStatus} at ${cell(record.target.fillPrice)}`,
+    );
+  }
+  if (record.sibling !== undefined) {
+    lines.push(
+      `- ${record.symbol}: sibling ${record.sibling.orderId} gone before the drill cancelled anything: ${yesNo(record.sibling.goneBeforeCleanup)} (activity: ${record.sibling.statuses.join(', ') || 'none'})`,
+    );
+  }
+  if (record.stopWorkingAfterExit !== undefined) {
+    lines.push(
+      `- ${record.symbol}: stop ${cell(record.stop?.orderId)} still Working in a fresh process after the placing process exited: ${yesNo(record.stopWorkingAfterExit)}`,
+    );
+  }
+  return lines;
+}
+
 function flatLine(label: string, flatness: AccountFlatness | undefined): string {
   if (flatness === undefined) return `- ${label}: not read`;
   return `- ${label} (${flatness.at}): ${flatness.netPositions} net positions, ${flatness.openOrders} open orders`;
@@ -128,7 +174,8 @@ export function renderSummary(evidence: DrillEvidence, jsonName: string): string
   return [
     `# Saxo SIM CFD resting-stop drill, ${evidence.startedAt.slice(0, 10)}`,
     '',
-    `Refs ${evidence.refs.join(' ')}. Verdict: **${evidence.passed ? 'PASSED' : 'FAILED'}**.`,
+    `Refs ${evidence.refs.join(' ')}. Mode: ${evidence.mode}. Verdict: **${evidence.passed ? 'PASSED' : 'FAILED'}**.`,
+    ...(evidence.resumedFrom === undefined ? [] : ['', `Resumes ${evidence.resumedFrom}.`]),
     '',
     `Gateway ${evidence.gateway}, Saxo trial account (${cell(evidence.account?.currency)}). ` +
       `Run ${evidence.startedAt} to ${cell(evidence.finishedAt)}. Full record: ${jsonName}.`,
@@ -139,6 +186,7 @@ export function renderSummary(evidence: DrillEvidence, jsonName: string): string
     '|---|---|---|---|---|---|---|---|---|---|',
     ...evidence.instruments.map(instrumentRow),
     '',
+    ...evidence.instruments.flatMap(exitLines),
     flatLine('Flat before', evidence.flatBefore),
     flatLine('Flat after', evidence.flatAfter),
     `- Cleanup: ${evidence.cleanup.cancelled.length} orders cancelled, ${evidence.cleanup.flattened.length} positions flattened, ${evidence.cleanup.errors.length} errors`,

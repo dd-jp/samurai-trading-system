@@ -344,6 +344,7 @@ export type SyncThrowEvent =
   | 'v2_fill_sweep_threw'
   | 'v2_split_rescale_threw'
   | 'v2_entry_cancel_threw'
+  | 'v2_cash_in_lieu_correction_threw'
   | 'v2_reconcile_threw';
 
 export interface ThrowFailure {

@@ -30,7 +30,7 @@ export type UkStockScreenOutcome =
   | 'adv'
   | 'spread';
 
-const PENCE_PER_POUND = 100;
+export const PENCE_PER_POUND = 100;
 
 function quoteOf(instrument: CfdInstrument) {
   const { bid, ask, averageVolume30Days } = instrument;

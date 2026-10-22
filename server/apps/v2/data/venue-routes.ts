@@ -1,6 +1,6 @@
 import type { Venue } from '../../../../contracts/index.js';
-import type { CfdAssetType, CfdCatalogue, CfdInstrument } from './cfd-catalogue.js';
-import { borrowCostPerYear } from './cfd-catalogue.js';
+import type { CfdAssetType, CfdInstrument } from './cfd-catalogue.js';
+import { borrowCostPerYear, CFD_DAY_COUNT, CfdCatalogue } from './cfd-catalogue.js';
 import type { CfdCatalogueArchive } from './cfd-catalogue-archive.js';
 import { isUkStock } from './uk-stocks.js';
 import { isCfdVenue, quoteCurrencyOf } from './venues.js';
@@ -123,6 +123,36 @@ export function createDatedVenueRouter(
       const catalogue = archive.inForceOn(tradingDate);
       const router =
         catalogue === undefined ? CLOSED_VENUE_ROUTER : createVenueRouter({ ...deps, catalogue });
+      return router.route(symbol, home, side, tradingDate);
+    },
+  };
+}
+
+// David 2026-10-15 (#2143 (c)), the UK-pool arm 2 rerun only: Saxo's past CFD offering is
+// unknown, so a date before the first snapshot routes by today's list with every borrow at the
+// ceiling, a recorded bias. The carry side still reads no quote there and accrues the ceiling
+export function createAssumedBeforeArchiveRouter(
+  archive: Pick<CfdCatalogueArchive, 'inForceOn' | 'firstAsOf'>,
+  today: CfdCatalogue,
+  deps: Omit<VenueRouterDeps, 'catalogue'>,
+): VenueRouter {
+  const dated = createDatedVenueRouter(archive, deps);
+  const instruments = today.instruments.map((instrument) => ({
+    ...instrument,
+    borrowCostPerDay: deps.maxBorrowRatePerYear / CFD_DAY_COUNT[instrument.currency],
+  }));
+  let assumed: { readonly tradingDate: string; readonly router: VenueRouter } | undefined;
+  const assumedOn = (tradingDate: string): VenueRouter => {
+    if (assumed?.tradingDate !== tradingDate) {
+      const catalogue = new CfdCatalogue({ asOf: tradingDate, instruments }, today.sha256);
+      assumed = { tradingDate, router: createVenueRouter({ ...deps, catalogue }) };
+    }
+    return assumed.router;
+  };
+  return {
+    route(symbol, home, side, tradingDate) {
+      const first = archive.firstAsOf;
+      const router = first !== undefined && tradingDate >= first ? dated : assumedOn(tradingDate);
       return router.route(symbol, home, side, tradingDate);
     },
   };

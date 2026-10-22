@@ -12,6 +12,7 @@ import {
   isSpliced,
   LSE_MOMENTUM_LINES,
   openSaxoLiveSession,
+  SAXO_CHART_PAGE,
   type SaxoLine,
   type SaxoReadOnlyApi,
   samplesToBars,
@@ -48,9 +49,12 @@ const HISTORY_RESCALE_TOLERANCE = 0.05;
 // Between the 2026-09-25 pull (data/bars/saxo-aux/raw) and the 2026-09-30 store, 0 of 85,175
 // overlapping completed closes changed; the largest gap, 1.29%, was the partial fetch-day bar
 // hygiene drops, so any revision is unexplained; 0.5% only leaves room above 4-decimal rounding;
-// it holds only while Saxo closes stay price-only (doc 70's ISF/CUKX check): a distribution
-// back-adjustment would revise every close before an ex-date and refuse the line
+// it holds only while Saxo closes stay price-only (doc 70's ISF/CUKX check): a back-adjustment
+// revising the closes before an ex-date inside the overlap refuses the line (see alignedOlder)
 const MAX_CLOSE_REVISION = 0.005;
+// #2143's "0.05% floor"; with prices rounded to 4 decimals it sits above one rounding tick only
+// from £0.20 up (the UK pool screens at 100p), and a re-pull of unchanged closes measures exactly 1
+const UNIFORM_SHIFT_RESCALE_FLOOR = 0.0005;
 const SAXO_VENUE = 'saxo';
 
 export type SaxoBarsApi = Pick<SaxoReadOnlyApi, 'instrumentDetails' | 'dailyHistory'>;
@@ -69,7 +73,7 @@ export interface SaxoBarRefreshOptions extends BarLineContext {
 
 export interface BarLine {
   readonly tidm: string;
-  readonly windowed: boolean;
+  readonly pageStartMoves: boolean;
   readonly pull: () => Promise<DailyBar[]>;
 }
 
@@ -143,8 +147,8 @@ function revisedCloses(existing: BarSeries, next: readonly DailyBar[]): string |
   return `revises stored close(s) by more than ${MAX_CLOSE_REVISION * 100}%: ${listed(shown)}`;
 }
 
-// A windowed line's page start moves every day, so its first pulled bar can be one hygiene
-// dropped from the stored copy; only a fixed-start line treats an earlier start as a conflict
+// A moving page's first pulled bar can be one hygiene dropped from the stored copy; only a
+// fixed-start line treats an earlier start as a conflict
 function assertHistoryConsistent(
   line: BarLine,
   existing: BarSeries,
@@ -152,7 +156,7 @@ function assertHistoryConsistent(
 ): void {
   const symbol = line.tidm;
   const conflict =
-    (line.windowed ? undefined : earlierStart(existing, next)) ??
+    (line.pageStartMoves ? undefined : earlierStart(existing, next)) ??
     interiorGap(existing, next) ??
     revisedCloses(existing, next);
   if (conflict === undefined) return;
@@ -184,37 +188,99 @@ async function pullBars(line: SaxoLine, api: SaxoBarsApi): Promise<DailyBar[]> {
 }
 
 function lseBarLine(line: SaxoLine, api: SaxoBarsApi): BarLine {
-  return { tidm: line.tidm, windowed: false, pull: () => pullBars(line, api) };
+  return { tidm: line.tidm, pageStartMoves: false, pull: () => pullBars(line, api) };
 }
 
-// A truncated page (an outage, a paused response) must not replace a full window; the slack
-// covers the few bars hygiene drops differently from one day's pull to the next
-const WINDOW_SHRINK_SLACK_BARS = 5;
+// A short page that starts late shares too few bars with the stored copy for the overlap guards
+// to see a truncation or a rewrite; the slack covers the few samples a page varies by day to day
+export const PAGE_SHRINK_SLACK_BARS = 5;
 
-function storedWithinWindow(
+interface StoredHistory {
+  readonly older: readonly DailyBar[];
+  readonly overlap: BarSeries | undefined;
+}
+
+const NO_STORED_HISTORY: StoredHistory = { older: [], overlap: undefined };
+
+function refuseMovingPage(tidm: string, reason: string): never {
+  throw new Error(
+    `${tidm}: the Saxo page ${reason}; refusing to write, the stored bars stand until the line ` +
+      'is checked and re-seeded',
+  );
+}
+
+function assertFullPage(tidm: string, existing: BarSeries, pageSamples: number): void {
+  const expected = Math.min(existing.bars.length, SAXO_CHART_PAGE);
+  if (pageSamples + PAGE_SHRINK_SLACK_BARS >= expected) return;
+  refuseMovingPage(tidm, `is truncated (${pageSamples} samples where ${expected} were expected)`);
+}
+
+// Older bars keep the stored scale, so a page Saxo rewrote (split, unit break) would leave a step
+// at the page's first date that no later refresh sees
+function splitAtPageStart(
   tidm: string,
   existing: BarSeries,
+  pageSamples: number,
   pulled: readonly DailyBar[],
-): BarSeries | undefined {
-  if (pulled.length + WINDOW_SHRINK_SLACK_BARS < existing.bars.length) {
-    throw new Error(
-      `${tidm}: refresh would shrink the window (had ${existing.bars.length} bars, got ${pulled.length}) — refusing to overwrite`,
-    );
-  }
+): StoredHistory {
+  assertFullPage(tidm, existing, pageSamples);
   const first = pulled[0]?.date ?? '';
-  const bars = existing.bars.filter((bar) => bar.date >= first);
-  return bars.length === 0 ? undefined : { ...existing, bars };
+  const older = existing.bars.filter((bar) => bar.date < first);
+  const overlap = { ...existing, bars: existing.bars.filter((bar) => bar.date >= first) };
+  if (overlap.bars.length === 0)
+    refuseMovingPage(tidm, `starts at ${first}, after every stored bar`);
+  const factor = historyRescaleFactor(overlap, pulled);
+  if (older.length > 0 && factor !== undefined) {
+    refuseMovingPage(tidm, `rewrites the stored bars by ${Number(factor.toPrecision(4))}x`);
+  }
+  return { older, overlap };
+}
+
+function rescaledBar(bar: DailyBar, multiplier: number): DailyBar {
+  return {
+    ...bar,
+    open: bar.open * multiplier,
+    high: bar.high * multiplier,
+    low: bar.low * multiplier,
+    close: bar.close * multiplier,
+    rawClose: bar.rawClose * multiplier,
+  };
+}
+
+// A uniform shift under HISTORY_RESCALE_TOLERANCE (a dividend back-adjust with the ex-date on
+// the newest bar) passes revisedCloses, and the older bars must follow it or the seam carries
+// a step no later refresh sees; volume stays, as on the overlap
+function alignedOlder(
+  tidm: string,
+  older: readonly DailyBar[],
+  overlap: BarSeries | undefined,
+  pulled: readonly DailyBar[],
+  logger: Logger,
+): readonly DailyBar[] {
+  if (older.length === 0 || overlap === undefined) return older;
+  const shift = median(closeRatios(overlap, pulled).map(({ ratio }) => ratio)) ?? 1;
+  if (Math.abs(shift - 1) <= UNIFORM_SHIFT_RESCALE_FLOOR) return older;
+  const multiplier = 1 / shift;
+  logRefresh(
+    logger,
+    'warn',
+    'v2_saxo_history_rescaled',
+    `${tidm}: Saxo shifted every close from ${pulled[0]?.date} by ${Number(multiplier.toPrecision(6))}x; ` +
+      `the ${older.length} older stored bar(s) are multiplied by the same factor so no step stands at the seam`,
+  );
+  return roundPrices(older.map((bar) => rescaledBar(bar, multiplier)));
 }
 
 function guardedStored(
   line: BarLine,
   existing: BarSeries | undefined,
+  pageSamples: number,
   pulled: readonly DailyBar[],
-): BarSeries | undefined {
-  if (existing === undefined) return undefined;
-  if (line.windowed) return storedWithinWindow(line.tidm, existing, pulled);
+): StoredHistory {
+  if (existing === undefined) return NO_STORED_HISTORY;
+  if (line.pageStartMoves) return splitAtPageStart(line.tidm, existing, pageSamples, pulled);
   assertNoShrink(line.tidm, existing, pulled);
-  return existing;
+  return { older: [], overlap: existing };
 }
 
 function assertFresh(tidm: string, bars: readonly DailyBar[], tradingDate: string): void {
@@ -379,17 +445,17 @@ async function refreshLine(
   existing: BarSeries | undefined,
   options: BarLineContext,
 ): Promise<BarRefreshSymbolResult> {
-  const hygiene = applyBarHygiene(line.tidm, await line.pull(), {
-    fetchDate: options.tradingDate,
-  });
+  const page = await line.pull();
+  const hygiene = applyBarHygiene(line.tidm, page, { fetchDate: options.tradingDate });
   if (hygiene.bars.length === 0) throw new Error(`${line.tidm}: Saxo returned no bars`);
   const repaired = repairBarShape(hygiene.bars);
   if (repaired.bars.length === 0) throw new Error(`${line.tidm}: no bars left after shape repair`);
   assertNoRecentRepair(line.tidm, hygiene.bars, repaired.report);
   const pulled = roundPrices(repaired.bars);
-  const stored = guardedStored(line, existing, pulled);
-  if (stored !== undefined) assertHistoryConsistent(line, stored, pulled);
-  const rounded = withSplitStep(stored, pulled, hygiene.report, options.logger);
+  const { older, overlap } = guardedStored(line, existing, page.length, pulled);
+  if (overlap !== undefined) assertHistoryConsistent(line, overlap, pulled);
+  const kept = alignedOlder(line.tidm, older, overlap, pulled, options.logger);
+  const rounded = [...kept, ...withSplitStep(overlap, pulled, hygiene.report, options.logger)];
   await (options.limit ?? UNLIMITED).atomic(() =>
     options.store.write(SAXO_VENUE, [{ symbol: line.tidm, bars: rounded }]),
   );
@@ -468,7 +534,7 @@ async function refreshStep(
   buckets: Buckets,
 ): Promise<SymbolOutcome | undefined> {
   if (aborted(options)) return undefined;
-  if (!line.windowed) warnIfUnguarded(line.tidm, existing, options.logger);
+  if (!line.pageStartMoves) warnIfUnguarded(line.tidm, existing, options.logger);
   const outcome = await refreshLineSafely(line, existing.get(line.tidm), options);
   if (aborted(options)) return undefined;
   recordOutcome(outcome, buckets, options.logger);

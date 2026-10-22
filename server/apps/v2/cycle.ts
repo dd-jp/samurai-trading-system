@@ -42,6 +42,7 @@ import type { Clock, Logger } from '../../shared/index.js';
 import { describeThrownSafely } from '../../shared/index.js';
 import { readBrokerCashActivities } from './cash-activities.js';
 import type { CashAnchorLedger } from './cash-anchor.js';
+import type { CashInLieuBookLedger, CashInLieuCorrection } from './cash-in-lieu-books.js';
 import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
   addDays,
@@ -116,6 +117,7 @@ export interface CycleDeps {
   readonly reconcileCashToleranceGbp: number | undefined;
   readonly cashAnchors?: CashAnchorLedger | undefined;
   readonly cashActivities?: BrokerCashActivityReader | undefined;
+  readonly cashInLieuBooks?: CashInLieuBookLedger | undefined;
   readonly controls: ControlReader;
   readonly market: MarketData;
   readonly clock: Clock;
@@ -904,8 +906,8 @@ class Cycle {
     });
   }
 
-  // The books keep the latest close, already in post-split units; only the tax log takes the
-  // broker's amount, once read after the cycle (#2001)
+  // The books take the latest close, already in post-split units, until the broker's amount is
+  // read after a cycle; the next cycle corrects book cash to it (#2001)
   floorHeld(
     bookId: string,
     instrument: string,
@@ -963,7 +965,7 @@ class Cycle {
     this.log(
       'warn',
       'v2_split_cash_in_lieu',
-      `${bookId} ${held.instrument}: ${qty} share left by the split disposed as cash in lieu at ${priceGbp} GBP, the latest close; the tax log takes the broker's amount once it is read`,
+      `${bookId} ${held.instrument}: ${qty} share left by the split disposed as cash in lieu at ${priceGbp} GBP, the latest close; the tax log and a broker-routed book's cash take the broker's amount once it is read`,
     );
   }
 
@@ -1150,6 +1152,40 @@ class Cycle {
     return this.deps.market
       .barsBefore(order.instrument, this.tradingDate, days)
       .filter((bar) => bar.date >= order.trading_date);
+  }
+
+  correctCashInLieu(): void {
+    const ledger = this.deps.cashInLieuBooks;
+    if (ledger === undefined) return;
+    const known = new Set(this.deps.books.ids());
+    this.atomically(() => {
+      for (const correction of ledger.pending(this.tradingDate)) {
+        if (known.has(correction.book_id)) this.bookCashInLieuCorrection(ledger, correction);
+        else this.logUnknownCashInLieuBook(correction);
+      }
+    });
+  }
+
+  bookCashInLieuCorrection(ledger: CashInLieuBookLedger, correction: CashInLieuCorrection): void {
+    ledger.record(correction);
+    this.deps.books.applyCashAdjustment(correction.book_id, correction.amount_gbp);
+    this.logCashInLieuCorrection(correction);
+  }
+
+  logUnknownCashInLieuBook(correction: CashInLieuCorrection): void {
+    this.log(
+      'warn',
+      'v2_cash_in_lieu_book_unknown',
+      `${correction.book_id} ${correction.instrument}: no such book, so its cash in lieu correction stays pending`,
+    );
+  }
+
+  logCashInLieuCorrection(correction: CashInLieuCorrection): void {
+    this.log(
+      'info',
+      'v2_cash_in_lieu_book_corrected',
+      `${correction.book_id} ${correction.instrument}: book cash corrected by ${correction.amount_gbp.toFixed(4)} GBP (${correction.amount_native.toFixed(4)} native) to the broker's cash in lieu ${correction.activity_key}`,
+    );
   }
 
   fillSimulatedExits(): void {
@@ -2489,6 +2525,11 @@ async function syncStepThrows(cycle: Cycle): Promise<StepThrow[]> {
   return thrown;
 }
 
+const CASH_IN_LIEU_CORRECTION_THREW: ThrowFailure = {
+  event: 'v2_cash_in_lieu_correction_threw',
+  what: 'cash in lieu book-cash correction',
+};
+
 async function syncBooksThenReconcile(
   deps: CycleDeps,
   cycle: Cycle,
@@ -2498,6 +2539,11 @@ async function syncBooksThenReconcile(
   const thrown = await syncStepThrows(cycle);
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
+  try {
+    cycle.correctCashInLieu();
+  } catch (error) {
+    thrown.push({ failure: CASH_IN_LIEU_CORRECTION_THREW, error });
+  }
   await readBrokerCashActivities(deps, tradingDate);
   if (thrown.length === 0) return reconcileOrBlockEntries(deps, tradingDate);
   return blockEntriesOnThrows(deps, tradingDate, thrown);

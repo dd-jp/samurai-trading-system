@@ -37,6 +37,7 @@ import {
 import type { StoreHandle } from '../../shared/store/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
+import { SqliteCashInLieuBooks } from './cash-in-lieu-books.js';
 import * as cycleModule from './cycle.js';
 import {
   budgetChanges,
@@ -365,6 +366,7 @@ function harness(
     brokerMode: 'paper',
     reconcileCashToleranceGbp: MIRROR_CASH_TOLERANCE_GBP,
     cashAnchors: new SqliteCashAnchors(db, clock),
+    cashInLieuBooks: new SqliteCashInLieuBooks(db, clock),
     risk: new V2RiskGate({
       books,
       capital,
@@ -4254,6 +4256,182 @@ describe('runCycle: positions held across a split (#1865)', () => {
         qty: 0.5,
         price_gbp: expect.closeTo(40 / 3 / FX, 9),
       },
+    ]);
+  });
+
+  function brokerRoutedSeed(deps: Harness): void {
+    deps.journal.recordOrder({
+      client_order_id: 'seed',
+      decision_id: null,
+      book_id: 'debate/primary',
+      trading_date: '2026-09-25',
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      leg: 'entry',
+      side: 'buy',
+      dry_run: false,
+      outcome: 'submitted',
+      payload: {},
+    });
+  }
+
+  function brokerPaid(deps: Harness, amount: number, readOn: string): void {
+    (deps.journal as Journal).recordCashInLieu({
+      venue: 'alpaca',
+      activity_id: 'cil-1',
+      instrument: 'AAPL',
+      activity_date: '2026-09-30',
+      qty: 0.5,
+      amount_native: amount,
+      currency: 'USD',
+      status: 'executed',
+      fx_quote_per_gbp: FX,
+      fx_source: 'read-day',
+      trading_date: readOn,
+    });
+  }
+
+  function corrections(deps: CycleDeps) {
+    const db = (deps.journal as unknown as { db: StoreHandle }).db;
+    return db
+      .prepare(
+        `SELECT book_id, estimate_fill_id, activity_key, amount_native, amount_gbp, fills_before,
+           trading_date FROM v2_cash_in_lieu_adjustments ORDER BY adjustment_id`,
+      )
+      .all();
+  }
+
+  it("corrects a broker-routed book's cash to the broker's cash in lieu at the next cycle, before its mark (#2001)", async () => {
+    const deps = harness([], true);
+    brokerRoutedSeed(deps);
+    hold(deps, 101);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    const estimated = deps.books.cash('debate/primary');
+    brokerPaid(deps, 7, '2026-09-29');
+    const logs: LogEntry[] = [];
+    const next = await runCycle(
+      { ...withMarket(deps, threeForTwo), logger: { log: (entry: LogEntry) => logs.push(entry) } },
+      '2026-09-30',
+    );
+    const correctionGbp = 7 / FX - (0.5 * 40) / 3 / FX;
+    expect(logs.filter((entry) => entry.event?.startsWith('v2_cash_in_lieu_book'))).toEqual([
+      {
+        trace_id: 'v2-2026-09-30',
+        stage: 'v2',
+        level: 'info',
+        event: 'v2_cash_in_lieu_book_corrected',
+        message: `debate/primary AAPL: book cash corrected by ${correctionGbp.toFixed(4)} GBP (${(7 - 20 / 3).toFixed(4)} native) to the broker's cash in lieu alpaca:cil-1:executed`,
+      },
+    ]);
+    expect(corrections(deps)).toEqual([
+      {
+        book_id: 'debate/primary',
+        estimate_fill_id: CASH_IN_LIEU_PRIMARY,
+        activity_key: 'alpaca:cil-1:executed',
+        amount_native: expect.closeTo(7 - 20 / 3, 9),
+        amount_gbp: expect.closeTo(correctionGbp, 9),
+        fills_before: 0,
+        trading_date: '2026-09-30',
+      },
+    ]);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(estimated + correctionGbp, 9);
+    expect(next.books[0]?.cash_gbp).toBeCloseTo(estimated + correctionGbp, 9);
+    expect(deps.books.lastDay('debate/primary')?.cashGbp).toBeCloseTo(estimated + correctionGbp, 9);
+    await runCycle(withMarket(deps, threeForTwo), '2026-10-01');
+    expect(corrections(deps)).toHaveLength(1);
+    expect(deps.books.cash('debate/primary')).toBeCloseTo(estimated + correctionGbp, 9);
+  });
+
+  it('leaves the cash of a book whose estimate never reached a broker at the latest close (#2001)', async () => {
+    const deps = harness([], true);
+    hold(deps, 101);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    const estimated = deps.books.cash('debate/primary');
+    brokerPaid(deps, 7, '2026-09-29');
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-30');
+    expect(corrections(deps)).toEqual([]);
+    expect(deps.books.cash('debate/primary')).toBe(estimated);
+  });
+
+  it('blocks entries and still marks the day when the correction throws (#2001)', async () => {
+    const deps = harness([], true);
+    brokerRoutedSeed(deps);
+    hold(deps, 101);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    brokerPaid(deps, 7, '2026-09-29');
+    const failing: CycleDeps = {
+      ...withMarket(deps, threeForTwo),
+      cashInLieuBooks: {
+        pending: () => {
+          throw new Error('disk full');
+        },
+        record: () => {},
+      },
+    };
+    const logs: LogEntry[] = [];
+    const report = await runCycle(
+      { ...failing, logger: { log: (entry: LogEntry) => logs.push(entry) } },
+      '2026-09-30',
+    );
+    expect(report.refusals).toContainEqual(
+      expect.stringContaining('cash in lieu book-cash correction threw: disk full'),
+    );
+    expect(logs.map((entry) => entry.event)).toContain('v2_cash_in_lieu_correction_threw');
+    expect(deps.books.lastDay('debate/primary')?.tradingDate).toBe('2026-09-30');
+    expect(corrections(deps)).toEqual([]);
+  });
+
+  it('runs the cycle unblocked with no book-cash ledger wired (#2001)', async () => {
+    const deps = harness([], true);
+    brokerRoutedSeed(deps);
+    hold(deps, 101);
+    await runCycle(withMarket(deps, threeForTwo), '2026-09-29');
+    brokerPaid(deps, 7, '2026-09-29');
+    const report = await runCycle(
+      { ...withMarket(deps, threeForTwo), cashInLieuBooks: undefined },
+      '2026-09-30',
+    );
+    expect(report.refusals).not.toContainEqual(expect.stringContaining('cash in lieu'));
+    expect(corrections(deps)).toEqual([]);
+  });
+
+  it('warns and records nothing for a correction naming a book the cycle does not hold (#2001)', async () => {
+    const deps = harness([], true);
+    const record = vi.fn();
+    const logs: LogEntry[] = [];
+    await runCycle(
+      {
+        ...withMarket(deps, threeForTwo),
+        logger: { log: (entry: LogEntry) => logs.push(entry) },
+        cashInLieuBooks: {
+          pending: () => [
+            {
+              book_id: 'ghost/primary',
+              estimate_fill_id: 'est',
+              venue: 'alpaca',
+              instrument: 'AAPL',
+              activity_id: 'cil-1',
+              activity_key: 'alpaca:cil-1:executed',
+              amount_native: 1,
+              amount_gbp: 0.8,
+              fx_quote_per_gbp: FX,
+              fx_source: 'read-day',
+              estimate_fill_seq: 1,
+              broker_mode: 'paper',
+              trading_date: '2026-09-30',
+            },
+          ],
+          record,
+        },
+      },
+      '2026-09-30',
+    );
+    expect(record).not.toHaveBeenCalled();
+    expect(logs.filter((entry) => entry.event === 'v2_cash_in_lieu_book_unknown')).toEqual([
+      expect.objectContaining({
+        level: 'warn',
+        message: 'ghost/primary AAPL: no such book, so its cash in lieu correction stays pending',
+      }),
     ]);
   });
 

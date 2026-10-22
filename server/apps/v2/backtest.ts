@@ -92,6 +92,7 @@ export interface BacktestInput {
   // #2105: must be the archive the trial sleeves route by, or a short is carried at another
   // snapshot's borrow than the one that admitted it
   readonly cfdCatalogues?: CfdCatalogueArchive | undefined;
+  readonly ukStockCfdOpen?: boolean | undefined;
   // The input's trials, in their order, one bar later (doc 66, 2026-10-07 rulings on #1747)
   readonly shiftCanary?: ShiftCanaryInput | undefined;
   readonly randomCanary?: RandomCanaryInput | undefined;
@@ -314,6 +315,15 @@ export function datedCfdBorrowPerDay(
   return (instrument) => archive?.inForceOn(today())?.lookup(instrument)?.borrowCostPerDay;
 }
 
+// #2143: unset, it is omitted so every trial recorded before the UK-pool rerun keeps its hash
+export function ukStockCfdIdentity(input: Pick<BacktestInput, 'ukStockCfdOpen'>): {
+  ukStockCfdOpen?: true;
+} {
+  return input.ukStockCfdOpen === true ? { ukStockCfdOpen: true } : {};
+}
+
+export const UK_STOCK_CFD_OPEN = (): undefined => undefined;
+
 function volTargetOf(input: BacktestInput): VolTargetSizing | undefined {
   return input.volTarget ?? declaredVolTarget();
 }
@@ -333,6 +343,7 @@ function trialConfigs(
     ...entryOffsetIdentity(ENTRY_LIMIT_OFFSET),
     ...volTargetIdentity(volTargetOf(input)),
     ...cfdCatalogueIdentity(input),
+    ...ukStockCfdIdentity(input),
     benchmark: { id: benchmark.id, spec: benchmark.spec, config: input.benchmark.config },
   };
   return input.trials.map((trial, index) => ({
@@ -390,6 +401,7 @@ async function simulate(
       quotedCfdBorrowPerDay: datedCfdBorrowPerDay(input.cfdCatalogues, () => today.current),
       costMultiple: input.costMultiple,
       volTarget: volTargetOf(input),
+      ukStockCfdRefusal: input.ukStockCfdOpen === true ? UK_STOCK_CFD_OPEN : undefined,
     });
     const marks = await replay(cycle, clock, sleeves, dates, today);
     const books = sleeves.map((sleeve) => `${sleeve.id}/primary`);

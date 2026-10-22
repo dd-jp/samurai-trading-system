@@ -57,13 +57,16 @@ const MOVE_SIGN: Readonly<Record<CashMoveKind, 1 | -1>> = { deposit: 1, withdraw
 const GO_LIVE_REFERENCE = 'go-live';
 
 // Shadow and control books never trade at a broker, so only fills of broker-routed orders move the
-// venue's cash (the tax log's BROKER_FILLS rule); a paper account's fills never move a live one's
+// venue's cash (the tax log's BROKER_FILLS rule), and a paper account's fills never move a live one's;
+// a cash-in-lieu correction counts with its estimate, so a broker payment closes the gap once
 const STORE_FLOW = `
   SELECT SUM(f.price_native IS NULL OR f.fee_native IS NULL) AS unpriced,
     COALESCE(SUM(CASE f.side WHEN 'sell' THEN 1 ELSE -1 END * f.qty * f.price_native
-      - f.fee_native), 0) AS flow
+      - f.fee_native), 0)
+    + (SELECT COALESCE(SUM(c.amount_native), 0) FROM v2_cash_in_lieu_adjustments c
+        WHERE c.venue = @venue AND c.broker_mode = @mode AND c.estimate_fill_seq > @seq) AS flow
   FROM v2_fills f JOIN v2_orders o ON o.client_order_id = f.client_order_id
-  WHERE f.venue = ? AND f.broker_mode = ? AND f.fill_seq > ?
+  WHERE f.venue = @venue AND f.broker_mode = @mode AND f.fill_seq > @seq
     AND o.outcome NOT IN ('simulated', 'refused_dry_run')`;
 
 export class SqliteCashAnchors implements CashAnchorLedger {
@@ -186,7 +189,9 @@ export class SqliteCashAnchors implements CashAnchorLedger {
   }
 
   storeFlowSince(anchor: Pick<CashAnchor, 'brokerMode' | 'fillSeq'>, venue: Venue): StoreFlow {
-    const row = this.db.prepare(STORE_FLOW).get(venue, anchor.brokerMode, anchor.fillSeq) as {
+    const row = this.db
+      .prepare(STORE_FLOW)
+      .get({ venue, mode: anchor.brokerMode, seq: anchor.fillSeq }) as {
       unpriced: number | null;
       flow: number;
     };

@@ -99,7 +99,7 @@ export function yearsInsideLossCap(
   return inside / years;
 }
 
-function summary(
+export function armSummary(
   series: BookSeries,
   dates: readonly string[],
   split: number,
@@ -134,8 +134,8 @@ function pairPbo(input: VolTargetVerdictInput): number {
 export function volTargetVerdict(input: VolTargetVerdictInput): VolTargetVerdict {
   const split = input.dates.findIndex((date) => date >= input.outOfSampleFrom);
   assertSplit(input, split);
-  const scaled = summary(input.trial, input.dates, split, input.lossCapGbp);
-  const baseline = summary(input.baseline, input.dates, split, input.lossCapGbp);
+  const scaled = armSummary(input.trial, input.dates, split, input.lossCapGbp);
+  const baseline = armSummary(input.baseline, input.dates, split, input.lossCapGbp);
   const haircut = scaled.sharpeOutOfSample * SHARPE_HAIRCUT_MULTIPLIER;
   const delta = scaled.sharpeOutOfSample - baseline.sharpeOutOfSample;
   const dsr = deflatedSharpeOfReturns(input.trial.returns, input.trialsCounted);
