@@ -30,7 +30,9 @@ const HALF_SPREAD_BPS: Readonly<Record<QuoteCurrency, number>> = { USD: 4.48, GB
 // Saxo infoprices PaidCfdInterest, 2026-09-30: US CfdOnStock 7.2%, ISF 7.04%. Saxo's
 // financing page (home.saxo/en-gb/rates-and-conditions/cfds/financing, read 2026-09-30) charges
 // longs at offer + markup and credits shorts at bid - markdown; the short credit
-// (ReceivedCfdInterest 0.75% / 0.58%) is not modelled, so a short pays no financing
+// (ReceivedCfdInterest 0.75% / 0.58%) is not modelled, so a short pays no financing. The page's
+// one markup row covers "Index CFDs and Single Stock CFD's" (read again 2026-10-22, #2143), so a
+// UK stock CFD long pays ISF's GBP rate
 const LONG_FINANCING_PER_YEAR: Readonly<Record<QuoteCurrency, number>> = {
   USD: 0.072,
   GBP: 0.0704,
