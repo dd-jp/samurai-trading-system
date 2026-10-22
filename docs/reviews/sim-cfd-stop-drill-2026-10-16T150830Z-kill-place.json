@@ -1,0 +1,171 @@
+{
+  "drill": "sim-cfd-stop-drill",
+  "mode": "kill-place",
+  "refs": ["#1400", "#1916", "#1914", "#2107"],
+  "gateway": "https://gateway.saxobank.com/sim/openapi",
+  "startedAt": "2026-10-16T15:08:30.672Z",
+  "instruments": [
+    {
+      "symbol": "AAPL:xnas",
+      "assetType": "CfdOnStock",
+      "outcome": "passed",
+      "uic": 211,
+      "supportedOrderTypes": [
+        "StopLimit",
+        "StopIfTraded",
+        "TrailingStopIfTraded",
+        "Limit",
+        "Market"
+      ],
+      "orderDistances": {
+        "EntryDefaultDistance": 2,
+        "EntryDefaultDistanceType": "Percentage",
+        "LimitDefaultDistance": 0,
+        "LimitDefaultDistanceType": "Percentage",
+        "StopLimitDefaultDistance": 5,
+        "StopLimitDefaultDistanceType": "Pips",
+        "StopLossDefaultDistance": 2,
+        "StopLossDefaultDistanceType": "Percentage",
+        "StopLossDefaultEnabled": false,
+        "StopLossDefaultOrderType": "Stop",
+        "TakeProfitDefaultDistance": 2,
+        "TakeProfitDefaultDistanceType": "Percentage",
+        "TakeProfitDefaultEnabled": false
+      },
+      "quote": {
+        "bid": 344.95,
+        "ask": 345,
+        "isMarketOpen": true,
+        "shortTradeDisabled": false,
+        "delayedByMinutes": 15
+      },
+      "amount": 1,
+      "stop": {
+        "placedPrice": 379.5,
+        "orderId": "5040931361",
+        "rest": {
+          "orderId": "5040931361",
+          "uic": 211,
+          "assetType": "CfdOnStock",
+          "openOrderType": "StopIfTraded",
+          "status": "Working",
+          "buySell": "Buy",
+          "amount": 1,
+          "price": 379.5,
+          "orderRelation": "Oco",
+          "observedAt": "2026-10-16T15:08:32.298Z"
+        }
+      },
+      "targetPrice": 310.45,
+      "entry": {
+        "orderId": "5040931359",
+        "externalReference": "drill-1792163310672-211",
+        "placedAt": "2026-10-16T15:08:32.011Z",
+        "relatedOrderIds": ["5040931360", "5040931361"],
+        "fillPrice": 346.18,
+        "filledAt": "2026-10-16T15:08:32.105Z"
+      },
+      "target": {
+        "orderId": "5040931360",
+        "rest": {
+          "orderId": "5040931360",
+          "uic": 211,
+          "assetType": "CfdOnStock",
+          "openOrderType": "Limit",
+          "status": "Working",
+          "buySell": "Buy",
+          "amount": 1,
+          "price": 310.45,
+          "orderRelation": "Oco",
+          "observedAt": "2026-10-16T15:08:32.516Z"
+        }
+      }
+    }
+  ],
+  "cleanup": {
+    "cancelled": [],
+    "flattened": [],
+    "errors": []
+  },
+  "steps": [
+    {
+      "at": "2026-10-16T15:08:30.861Z",
+      "code": "drill_trial_account_confirmed"
+    },
+    {
+      "at": "2026-10-16T15:08:30.994Z",
+      "code": "drill_instrument_started",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "assetType": "CfdOnStock"
+      }
+    },
+    {
+      "at": "2026-10-16T15:08:32.011Z",
+      "code": "drill_entry_placed",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "status": 200,
+        "body": {
+          "ExternalReference": "drill-1792163310672-211",
+          "OrderId": "5040931359",
+          "Orders": [
+            {
+              "ExternalReference": "drill-1792163310672-211:target",
+              "OrderId": "5040931360"
+            },
+            {
+              "ExternalReference": "drill-1792163310672-211:stop",
+              "OrderId": "5040931361"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": "2026-10-16T15:08:32.105Z",
+      "code": "drill_entry_filled",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 346.18
+      }
+    },
+    {
+      "at": "2026-10-16T15:08:32.298Z",
+      "code": "drill_stop_resting",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "order": {
+          "orderId": "5040931361",
+          "uic": 211,
+          "assetType": "CfdOnStock",
+          "openOrderType": "StopIfTraded",
+          "status": "Working",
+          "buySell": "Buy",
+          "amount": 1,
+          "price": 379.5,
+          "orderRelation": "Oco"
+        }
+      }
+    },
+    {
+      "at": "2026-10-16T15:08:32.516Z",
+      "code": "drill_instrument_passed",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "phase": "place"
+      }
+    }
+  ],
+  "passed": true,
+  "account": {
+    "isTrialAccount": true,
+    "currency": "EUR"
+  },
+  "flatBefore": {
+    "at": "2026-10-16T15:08:30.861Z",
+    "netPositions": 0,
+    "openOrders": 0
+  },
+  "finishedAt": "2026-10-16T15:08:32.516Z"
+}

@@ -1,0 +1,59 @@
+{
+  "drill": "sim-cfd-stop-drill",
+  "mode": "kill-resume",
+  "refs": ["#1400", "#1916", "#1914", "#2107"],
+  "gateway": "https://gateway.saxobank.com/sim/openapi",
+  "startedAt": "2026-10-16T15:08:36.344Z",
+  "instruments": [
+    {
+      "symbol": "AAPL:xnas",
+      "assetType": "CfdOnStock",
+      "outcome": "passed",
+      "uic": 211,
+      "amount": 1,
+      "stop": {
+        "placedPrice": 379.5,
+        "orderId": "5040931361"
+      },
+      "stopWorkingAfterExit": true
+    }
+  ],
+  "cleanup": {
+    "cancelled": ["5040931361", "5040931360"],
+    "flattened": ["CfdOnStock:211"],
+    "errors": []
+  },
+  "steps": [
+    {
+      "at": "2026-10-16T15:08:36.474Z",
+      "code": "drill_trial_account_confirmed"
+    },
+    {
+      "at": "2026-10-16T15:08:36.569Z",
+      "code": "drill_stop_survival_checked",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "survived": true
+      }
+    },
+    {
+      "at": "2026-10-16T15:08:36.569Z",
+      "code": "drill_cleanup_started",
+      "detail": {
+        "instruments": 1
+      }
+    }
+  ],
+  "passed": true,
+  "resumedFrom": "sim-cfd-stop-drill-2026-10-16T150830Z-kill-place.json",
+  "account": {
+    "isTrialAccount": true,
+    "currency": "EUR"
+  },
+  "flatAfter": {
+    "at": "2026-10-16T15:08:38.991Z",
+    "netPositions": 0,
+    "openOrders": 0
+  },
+  "finishedAt": "2026-10-16T15:08:39.106Z"
+}

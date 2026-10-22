@@ -1,0 +1,520 @@
+{
+  "drill": "sim-cfd-stop-drill",
+  "mode": "target",
+  "refs": ["#1400", "#1916", "#1914", "#2107"],
+  "gateway": "https://gateway.saxobank.com/sim/openapi",
+  "startedAt": "2026-10-16T14:57:45.770Z",
+  "instruments": [
+    {
+      "symbol": "AAPL:xnas",
+      "assetType": "CfdOnStock",
+      "outcome": "failed",
+      "uic": 211,
+      "supportedOrderTypes": [
+        "StopLimit",
+        "StopIfTraded",
+        "TrailingStopIfTraded",
+        "Limit",
+        "Market"
+      ],
+      "orderDistances": {
+        "EntryDefaultDistance": 2,
+        "EntryDefaultDistanceType": "Percentage",
+        "LimitDefaultDistance": 0,
+        "LimitDefaultDistanceType": "Percentage",
+        "StopLimitDefaultDistance": 5,
+        "StopLimitDefaultDistanceType": "Pips",
+        "StopLossDefaultDistance": 2,
+        "StopLossDefaultDistanceType": "Percentage",
+        "StopLossDefaultEnabled": false,
+        "StopLossDefaultOrderType": "Stop",
+        "TakeProfitDefaultDistance": 2,
+        "TakeProfitDefaultDistanceType": "Percentage",
+        "TakeProfitDefaultEnabled": false
+      },
+      "quote": {
+        "bid": 344.58,
+        "ask": 344.62,
+        "isMarketOpen": true,
+        "shortTradeDisabled": false,
+        "delayedByMinutes": 15
+      },
+      "amount": 1,
+      "stop": {
+        "placedPrice": 379.09,
+        "orderId": "5040931091",
+        "rest": {
+          "orderId": "5040931091",
+          "uic": 211,
+          "assetType": "CfdOnStock",
+          "openOrderType": "StopIfTraded",
+          "status": "Working",
+          "buySell": "Buy",
+          "amount": 1,
+          "price": 379.09,
+          "orderRelation": "Oco",
+          "observedAt": "2026-10-16T14:57:46.676Z"
+        }
+      },
+      "targetPrice": 310.12,
+      "entry": {
+        "orderId": "5040931089",
+        "externalReference": "drill-1792162665770-211",
+        "placedAt": "2026-10-16T14:57:46.546Z",
+        "relatedOrderIds": ["5040931090", "5040931091"],
+        "fillPrice": 345.47,
+        "filledAt": "2026-10-16T14:57:46.614Z"
+      },
+      "target": {
+        "orderId": "5040931090",
+        "rest": {
+          "orderId": "5040931090",
+          "uic": 211,
+          "assetType": "CfdOnStock",
+          "openOrderType": "Limit",
+          "status": "Working",
+          "buySell": "Buy",
+          "amount": 1,
+          "price": 310.12,
+          "orderRelation": "Oco",
+          "observedAt": "2026-10-16T14:57:46.752Z"
+        },
+        "amendAttempts": [
+          {
+            "price": 347.2,
+            "status": 400,
+            "body": {
+              "ErrorInfo": {
+                "ErrorCode": "OnWrongSideOfMarket",
+                "Message": "Price is on wrong side of market"
+              },
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 328.66,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 337.93,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 342.56,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 344.88,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 346.04,
+            "status": 400,
+            "body": {
+              "ErrorInfo": {
+                "ErrorCode": "OnWrongSideOfMarket",
+                "Message": "Price is on wrong side of market"
+              },
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.46,
+            "status": 400,
+            "body": {
+              "ErrorInfo": {
+                "ErrorCode": "OnWrongSideOfMarket",
+                "Message": "Price is on wrong side of market"
+              },
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.17,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.31,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.38,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.42,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.44,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.45,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.63,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.98,
+            "status": 400,
+            "body": {
+              "ErrorInfo": {
+                "ErrorCode": "OnWrongSideOfMarket",
+                "Message": "Price is on wrong side of market"
+              },
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.8,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.89,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.93,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.95,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          },
+          {
+            "price": 345.96,
+            "status": 200,
+            "body": {
+              "OrderId": "5040931090"
+            }
+          }
+        ]
+      },
+      "reason": "drill_target_not_filled"
+    }
+  ],
+  "cleanup": {
+    "cancelled": ["5040931091", "5040931090"],
+    "flattened": ["CfdOnStock:211"],
+    "errors": []
+  },
+  "steps": [
+    {
+      "at": "2026-10-16T14:57:45.987Z",
+      "code": "drill_trial_account_confirmed"
+    },
+    {
+      "at": "2026-10-16T14:57:46.076Z",
+      "code": "drill_instrument_started",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "assetType": "CfdOnStock"
+      }
+    },
+    {
+      "at": "2026-10-16T14:57:46.545Z",
+      "code": "drill_entry_placed",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "status": 200,
+        "body": {
+          "ExternalReference": "drill-1792162665770-211",
+          "OrderId": "5040931089",
+          "Orders": [
+            {
+              "ExternalReference": "drill-1792162665770-211:target",
+              "OrderId": "5040931090"
+            },
+            {
+              "ExternalReference": "drill-1792162665770-211:stop",
+              "OrderId": "5040931091"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": "2026-10-16T14:57:46.614Z",
+      "code": "drill_entry_filled",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.47
+      }
+    },
+    {
+      "at": "2026-10-16T14:57:46.676Z",
+      "code": "drill_stop_resting",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "order": {
+          "orderId": "5040931091",
+          "uic": 211,
+          "assetType": "CfdOnStock",
+          "openOrderType": "StopIfTraded",
+          "status": "Working",
+          "buySell": "Buy",
+          "amount": 1,
+          "price": 379.09,
+          "orderRelation": "Oco"
+        }
+      }
+    },
+    {
+      "at": "2026-10-16T14:57:47.690Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 347.2,
+        "status": 400
+      }
+    },
+    {
+      "at": "2026-10-16T14:58:19.283Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 328.66,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T14:58:50.033Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 337.93,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T14:59:20.980Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 342.56,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T14:59:52.868Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 344.88,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:00:23.490Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 346.04,
+        "status": 400
+      }
+    },
+    {
+      "at": "2026-10-16T15:00:53.830Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.46,
+        "status": 400
+      }
+    },
+    {
+      "at": "2026-10-16T15:01:24.303Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.17,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:01:56.593Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.31,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:02:26.919Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.38,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:02:58.191Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.42,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:03:28.680Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.44,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:03:59.216Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.45,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:04:29.553Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.63,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:04:59.745Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.98,
+        "status": 400
+      }
+    },
+    {
+      "at": "2026-10-16T15:05:30.653Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.8,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:06:01.460Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.89,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:06:31.989Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.93,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:07:03.201Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.95,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:07:34.108Z",
+      "code": "drill_target_amended",
+      "detail": {
+        "symbol": "AAPL:xnas",
+        "price": 345.96,
+        "status": 200
+      }
+    },
+    {
+      "at": "2026-10-16T15:07:49.414Z",
+      "code": "drill_instrument_failed",
+      "detail": "drill_target_not_filled: AAPL:xnas"
+    },
+    {
+      "at": "2026-10-16T15:07:49.414Z",
+      "code": "drill_cleanup_started",
+      "detail": {
+        "instruments": 1
+      }
+    }
+  ],
+  "passed": false,
+  "account": {
+    "isTrialAccount": true,
+    "currency": "EUR"
+  },
+  "flatBefore": {
+    "at": "2026-10-16T14:57:45.987Z",
+    "netPositions": 0,
+    "openOrders": 0
+  },
+  "failure": "drill_target_not_filled: AAPL:xnas",
+  "flatAfter": {
+    "at": "2026-10-16T15:07:51.953Z",
+    "netPositions": 0,
+    "openOrders": 0
+  },
+  "finishedAt": "2026-10-16T15:07:52.424Z"
+}
