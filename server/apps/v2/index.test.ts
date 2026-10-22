@@ -1295,6 +1295,74 @@ describe('composeV2Root', () => {
     }
   });
 
+  it('settles a closed trade into the outcome ledger after the cycle, and ledgers a failed write (#2146)', async () => {
+    const fixtures = await writeFixtures();
+    directory = fixtures.directory;
+    const storePath = join(fixtures.directory, 'outcomes.sqlite');
+    const seeded = seededStore(storePath);
+    seeded.exec(
+      `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+         VALUES ('debate/retired', 'debate', 'retired', 300, 300, 'x');
+       INSERT INTO v2_decisions (decision_id, book_id, trading_date, instrument, venue, inputs_hash,
+           direction, confidence, action, reason, size_shares, stop_price, payload, recorded_at)
+         VALUES ('d-old', 'debate/retired', '2026-09-01', 'OLD', 'alpaca', 'h', 'long', 0.6,
+           'enter', 'r', 1, 18, '{}', 'x');
+       INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+           leg, side, dry_run, outcome, payload, recorded_at)
+         VALUES ('old-entry', 'd-old', 'debate/retired', '2026-09-01', 'OLD', 'alpaca', 'entry',
+           'buy', 1, 'submitted', '{"stop":18,"target":23}', 'x');
+       INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+           side, qty, price_gbp, fee_gbp, recorded_at, broker_mode, price_native, fill_date)
+         VALUES ('old-1', 'old-entry', 'debate/retired', '2026-09-02', 'OLD', 'alpaca', 'entry',
+           'buy', 1, 16, 0, 'x', 'paper', 20, '2026-09-02'),
+                ('old-2', 'old-entry', 'debate/retired', '2026-09-08', 'OLD', 'alpaca', 'target',
+           'sell', 1, 18.4, 0, 'x', 'paper', 23, '2026-09-08');`,
+    );
+    seeded.close();
+    const open = (path: string) =>
+      composeV2Root({
+        ...fixtures,
+        tradingDate: ENTRY_DATE,
+        dryRun: true,
+        storePath: path,
+        clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
+        logger: { log: () => {} },
+      });
+    const root = open(storePath);
+    try {
+      await root.run();
+      expect(root.faults.faultsOn(ENTRY_DATE)).toEqual([]);
+      expect(
+        root.db
+          .prepare('SELECT decision_id, exit_reason, realised_pnl_gbp FROM v2_decision_outcomes')
+          .all(),
+      ).toEqual([
+        { decision_id: 'd-old', exit_reason: 'target', realised_pnl_gbp: expect.closeTo(2.4) },
+      ]);
+    } finally {
+      root.close();
+    }
+
+    const failing = join(fixtures.directory, 'outcomes-fail.sqlite');
+    const store = seededStore(failing);
+    store.exec('DROP TABLE v2_decision_outcomes');
+    store.close();
+    const broken = open(failing);
+    try {
+      const report = await broken.run();
+      expect(report).toMatchObject({ trading_date: ENTRY_DATE, skipped: false });
+      expect(broken.faults.faultsOn(ENTRY_DATE)).toEqual([
+        expect.objectContaining({
+          kind: 'refused_cycle',
+          code: 'v2_decision_outcomes_failed',
+          detail: expect.stringContaining('v2_decision_outcomes'),
+        }),
+      ]);
+    } finally {
+      broken.close();
+    }
+  });
+
   it('keeps the cycle report when the digest write fails, and journals the failure as a fault (#2028)', async () => {
     const fixtures = await writeFixtures();
     directory = fixtures.directory;

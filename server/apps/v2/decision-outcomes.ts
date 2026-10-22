@@ -7,7 +7,7 @@ import { CLOSE_LEGS_SQL, entryColumnOfClose, entryOffsetOfPayload } from './entr
 const SCHEMA_VERSION = 1;
 
 // David ruled 2026-10-22 on #2146: each trade is scored against its venue's home index
-export const BENCHMARK_OF_VENUE: Readonly<Record<Venue, string>> = {
+const BENCHMARK_OF_VENUE: Readonly<Record<Venue, string>> = {
   alpaca: 'SPY',
   saxo_cfd_usd: 'SPY',
   saxo: 'ISF',
