@@ -37,7 +37,6 @@ export {
   SAXO_CFD_SPREAD,
   saxoCfdBorrow,
 } from './cfd-tariff.js';
-export type { DividendReadPurpose } from './dividend-reads.js';
 export { SqliteDividendReads } from './dividend-reads.js';
 export type {
   DividendsRead,

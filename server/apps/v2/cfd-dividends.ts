@@ -23,12 +23,12 @@ export const CFD_DIVIDEND_LONG_WITHHOLDING: Readonly<Record<EodhdExchange, numbe
 
 const MS_PER_DAY = 86_400_000;
 
-export function cfdDividendWithholding(exchange: EodhdExchange, qty: number): number {
+function cfdDividendWithholding(exchange: EodhdExchange, qty: number): number {
   return qty > 0 ? CFD_DIVIDEND_LONG_WITHHOLDING[exchange] : 0;
 }
 
 // Signed by qty: a long is credited, a short debited
-export function cfdDividendCashGbp(
+function cfdDividendCashGbp(
   qty: number,
   perShareNative: number,
   withholding: number,

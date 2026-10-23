@@ -1,5 +1,5 @@
 import type { DividendsRead, EodhdDividend } from './eodhd-client.js';
-import { covers, firstUncovered } from './eodhd-splits.js';
+import { covers, datesWithin, firstUncovered } from './eodhd-splits.js';
 import { addDays } from './macro-calendar.js';
 
 export type DividendsAcross =
@@ -23,11 +23,6 @@ function agreedOn(reads: readonly DividendsRead[], date: string): EodhdDividend[
   return listings[0];
 }
 
-function listedDates(reads: readonly DividendsRead[], after: string, through: string): string[] {
-  const dates = new Set(reads.flatMap((read) => read.dividends.map((dividend) => dividend.exDate)));
-  return [...dates].filter((date) => date > after && date <= through).sort();
-}
-
 function assertInputs(reads: readonly DividendsRead[], after: string, through: string): void {
   if (new Set(reads.map((read) => read.symbol)).size > 1) {
     throw new Error('dividendsAcross: reads for more than one symbol');
@@ -44,7 +39,8 @@ export function dividendsAcross(
   const uncovered = firstUncovered(reads, addDays(after, 1));
   if (uncovered <= through) return { kind: 'uncovered', from: uncovered };
   const dividends: EodhdDividend[] = [];
-  for (const date of listedDates(reads, after, through)) {
+  const listed = reads.flatMap((read) => read.dividends.map((dividend) => dividend.exDate));
+  for (const date of datesWithin(listed, after, through)) {
     const agreed = agreedOn(reads, date);
     if (agreed === undefined) return { kind: 'conflict', date };
     dividends.push(...agreed);

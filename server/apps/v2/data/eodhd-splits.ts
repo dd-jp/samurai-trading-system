@@ -42,9 +42,8 @@ function ratioOn(reads: readonly SplitsRead[], date: string): number | undefined
   return ratios.size === 1 ? [...ratios][0] : CONFLICT;
 }
 
-function listedDates(reads: readonly SplitsRead[], after: string, through: string): string[] {
-  const dates = new Set(reads.flatMap((read) => read.splits.map((split) => split.date)));
-  return [...dates].filter((date) => date > after && date <= through).sort();
+export function datesWithin(dates: readonly string[], after: string, through: string): string[] {
+  return [...new Set(dates)].filter((date) => date > after && date <= through).sort();
 }
 
 function assertInputs(reads: readonly SplitsRead[], after: string, through: string): void {
@@ -63,7 +62,8 @@ export function splitsAcross(
   const uncovered = firstUncovered(reads, addDays(after, 1));
   if (uncovered <= through) return { kind: 'uncovered', from: uncovered };
   const splits: EodhdSplit[] = [];
-  for (const date of listedDates(reads, after, through)) {
+  const listed = reads.flatMap((read) => read.splits.map((split) => split.date));
+  for (const date of datesWithin(listed, after, through)) {
     const ratio = ratioOn(reads, date);
     if (ratio === CONFLICT) return { kind: 'conflict', date };
     if (ratio !== undefined) splits.push({ date, ratio });
