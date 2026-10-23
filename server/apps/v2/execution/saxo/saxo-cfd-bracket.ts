@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { isOrderNotFound } from './saxo-broker-errors.js';
 import type {
   SaxoCfdAssetType,
@@ -8,9 +7,7 @@ import type {
   SaxoOrderPlacement,
   SaxoOrderRequest,
 } from './saxo-client.js';
-
-// Saxo caps ExternalReference at 50 characters: 40 hex plus ':target' leaves room
-const REFERENCE_HEX_CHARS = 40;
+import { saxoWireReference } from './saxo-wire-reference.js';
 
 type CfdLeg = 'stop' | 'target';
 
@@ -44,10 +41,6 @@ export class CfdBracketError extends Error {
   }
 }
 
-export function cfdWireReference(clientOrderId: string): string {
-  return createHash('sha256').update(clientOrderId).digest('hex').slice(0, REFERENCE_HEX_CHARS);
-}
-
 function isPositivePrice(price: number): boolean {
   return Number.isFinite(price) && price > 0;
 }
@@ -69,7 +62,7 @@ function assertShortBracket(bracket: CfdShortBracket): void {
 // settleCfdShortBracket cancels the survivor. Never verified against Saxo (#1916).
 export function cfdShortBracketRequest(bracket: CfdShortBracket): SaxoOrderRequest {
   assertShortBracket(bracket);
-  const reference = cfdWireReference(bracket.clientOrderId);
+  const reference = saxoWireReference(bracket.clientOrderId);
   const leg = (OrderType: 'StopIfTraded' | 'Limit', OrderPrice: number, suffix: CfdLeg) => ({
     OrderType,
     OrderPrice,

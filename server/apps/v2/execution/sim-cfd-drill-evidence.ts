@@ -1,4 +1,6 @@
+import type { LossBudgetState } from '../../../../contracts/index.js';
 import { redactEvidence } from './evidence-redaction.js';
+import type { SaxoOrderActivity } from './saxo/saxo-client.js';
 import type { DrillAssetType, OpenOrder } from './sim-cfd-drill-reads.js';
 
 export interface DrillStep {
@@ -29,6 +31,29 @@ export interface SiblingCancel {
   readonly orderId: string;
   readonly goneBeforeCleanup: boolean;
   readonly statuses: readonly string[];
+}
+
+export interface GateCheck {
+  readonly size: number;
+  readonly refusal: string | undefined;
+  readonly book: LossBudgetState;
+}
+
+export interface CashEtfEvidence {
+  isComplex?: unknown;
+  priceToContractFactor?: number;
+  priceCurrency?: string | undefined;
+  fillPriceBand?: number;
+  gate?: {
+    readonly tradingDate: string;
+    readonly control: GateCheck;
+    readonly breached: GateCheck;
+    readonly tradeRequestsDuringBreach: number;
+    readonly newActivitiesDuringBreach: number;
+  };
+  entryFill?: SaxoOrderActivity;
+  exitFill?: SaxoOrderActivity;
+  unmatchedActivities?: readonly SaxoOrderActivity[];
 }
 
 export interface InstrumentEvidence {
@@ -65,6 +90,7 @@ export interface InstrumentEvidence {
   sibling?: SiblingCancel;
   stopWorkingAfterExit?: boolean;
   positionClosedAfterTrigger?: boolean;
+  cash?: CashEtfEvidence;
 }
 
 export interface AccountFlatness {
@@ -165,6 +191,36 @@ function exitLines(record: InstrumentEvidence): string[] {
   return lines;
 }
 
+type CashGate = NonNullable<CashEtfEvidence['gate']>;
+
+function gateLine(symbol: string, gate: CashGate): string {
+  const { control, breached } = gate;
+  return (
+    `- ${symbol}: risk gate on ${gate.tradingDate}: unbreached book approved ${control.size} (refusal ${cell(control.refusal)}); ` +
+    `book past its loss cap (halted ${yesNo(breached.book.halted)}, YTD loss £${breached.book.ytdLossGbp}) refused with ${cell(breached.refusal)}; ` +
+    `SIM trade requests during the refused check: ${gate.tradeRequestsDuringBreach}, new order activities: ${gate.newActivitiesDuringBreach}`
+  );
+}
+
+function fillLine(symbol: string, label: string, fill: SaxoOrderActivity | undefined): string[] {
+  if (fill === undefined) return [];
+  const price = fill.AveragePrice ?? fill.Price;
+  return [
+    `- ${symbol}: ${label} ${fill.BuySell} ${cell(fill.FillAmount)}/${fill.Amount} ${fill.Status} at ${cell(price)} (order ${fill.OrderId}, ExternalReference ${cell(fill.ExternalReference)})`,
+  ];
+}
+
+function cashLines(record: InstrumentEvidence): string[] {
+  const cash = record.cash;
+  if (cash === undefined) return [];
+  return [
+    `- ${record.symbol}: IsComplex read ${cell(cash.isComplex)}; price unit ${cell(cash.priceCurrency)} × ${cell(cash.priceToContractFactor)}`,
+    ...(cash.gate === undefined ? [] : [gateLine(record.symbol, cash.gate)]),
+    ...fillLine(record.symbol, 'entry', cash.entryFill),
+    ...fillLine(record.symbol, 'flatten', cash.exitFill),
+  ];
+}
+
 function flatLine(label: string, flatness: AccountFlatness | undefined): string {
   if (flatness === undefined) return `- ${label}: not read`;
   return `- ${label} (${flatness.at}): ${flatness.netPositions} net positions, ${flatness.openOrders} open orders`;
@@ -187,6 +243,7 @@ export function renderSummary(evidence: DrillEvidence, jsonName: string): string
     ...evidence.instruments.map(instrumentRow),
     '',
     ...evidence.instruments.flatMap(exitLines),
+    ...evidence.instruments.flatMap(cashLines),
     flatLine('Flat before', evidence.flatBefore),
     flatLine('Flat after', evidence.flatAfter),
     `- Cleanup: ${evidence.cleanup.cancelled.length} orders cancelled, ${evidence.cleanup.flattened.length} positions flattened, ${evidence.cleanup.errors.length} errors`,

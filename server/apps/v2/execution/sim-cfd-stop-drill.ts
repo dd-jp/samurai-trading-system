@@ -1,4 +1,5 @@
 import { SAXO_SIM_GATEWAY, type SaxoSimGateway } from './saxo-sim-gateway.js';
+import { type CashEtfBroker, type CashEtfLeg, drillCashEtf } from './sim-cash-etf-drill.js';
 import {
   type AccountFlatness,
   type DrillEvidence,
@@ -88,6 +89,7 @@ interface Drill {
   readonly evidence: DrillEvidence;
   readonly account: SimAccount;
   readonly interrupt: AbortSignal;
+  readonly cashBroker?: ((account: SimAccount) => CashEtfBroker) | undefined;
 }
 
 const FILLED_STATUSES = new Set(['FinalFill', 'Filled']);
@@ -625,11 +627,30 @@ async function exitThroughMarket(
   await checkSibling(drill, record, drive, since);
 }
 
+function cashLegOf(drill: Drill, record: InstrumentEvidence): CashEtfLeg {
+  if (drill.cashBroker === undefined) fail(record, 'cash_etf_broker_missing');
+  return {
+    gateway: drill.gateway,
+    broker: drill.cashBroker(drill.account),
+    runId: drill.options.runId,
+    fillTimeoutMs: drill.options.fillTimeoutMs,
+    now: drill.clock.now,
+    note: (code, detail) => note(drill, code, detail),
+    poll: (timeoutMs, probe) => poll(drill, timeoutMs, probe),
+    fail: (reason) => fail(record, reason),
+  };
+}
+
 async function drillInstrument(drill: Drill, target: DrillTarget): Promise<void> {
   stopIfInterrupted(drill);
   const record: InstrumentEvidence = { ...target, outcome: 'running' };
   drill.evidence.instruments.push(record);
   note(drill, 'drill_instrument_started', target);
+  if (record.assetType === 'Etf') await drillCashEtf(cashLegOf(drill, record), record);
+  else await drillCfd(drill, record);
+}
+
+async function drillCfd(drill: Drill, record: InstrumentEvidence): Promise<void> {
   const prepared = await prepare(drill, record);
   if (prepared === undefined) {
     note(drill, 'drill_instrument_skipped', { symbol: record.symbol, reason: record.reason });
@@ -796,10 +817,11 @@ export async function runSimCfdStopDrill(
   options: DrillOptions,
   clock: DrillClock,
   interrupt: AbortSignal = new AbortController().signal,
+  cashBroker?: (account: SimAccount) => CashEtfBroker,
 ): Promise<{ evidence: DrillEvidence; account: SimAccount | undefined }> {
   const evidence = newEvidence(clock, modeOf(options));
   const account = await onTrialAccount(gateway, clock, evidence, (trial) =>
-    runDrill({ gateway, options, clock, evidence, account: trial, interrupt }),
+    runDrill({ gateway, options, clock, evidence, account: trial, interrupt, cashBroker }),
   );
   return { evidence, account };
 }

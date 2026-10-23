@@ -3,6 +3,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from '../../../shared/index.js';
 import { exitCodeOrOne, flagPairs, isMainModule } from '../../../tools/cli-entrypoint.js';
+import { SaxoHttpBrokerClient } from './saxo/saxo-http-client.js';
 import { type FetchLike, resolveSaxoOAuthConfig } from './saxo/saxo-oauth.js';
 import { readTokenFile, tokenFilePath } from './saxo/saxo-token-file.js';
 import {
@@ -16,12 +17,14 @@ import {
   SaxoSimGateway,
   SimOnlyRefusal,
 } from './saxo-sim-gateway.js';
+import type { CashEtfBroker } from './sim-cash-etf-drill.js';
 import {
   type DrillEvidence,
   type DrillExit,
   redact,
   renderSummary,
 } from './sim-cfd-drill-evidence.js';
+import type { SimAccount } from './sim-cfd-drill-reads.js';
 import {
   DEFAULT_DRILL_OPTIONS,
   DEFAULT_ETF_SHORT,
@@ -36,7 +39,7 @@ import {
 } from './sim-cfd-stop-drill.js';
 
 export const DRILL_USAGE =
-  'usage: v2:sim-cfd-stop-drill [--stock SYMBOL|none] [--etf SYMBOL|none] [--uk-long SYMBOL|none] [--exit stop|target] [--phase full|place] [--resume PLACE_RECORD.json] [--out-dir DIR]';
+  'usage: v2:sim-cfd-stop-drill [--stock SYMBOL|none] [--etf SYMBOL|none] [--uk-long SYMBOL|none] [--cash-etf TIDM|none] [--exit stop|target] [--phase full|place] [--resume PLACE_RECORD.json] [--out-dir DIR]';
 
 const DEFAULT_OUT_DIR = fileURLToPath(new URL('../../../../docs/reviews/', import.meta.url));
 
@@ -60,17 +63,29 @@ function oneOf<T extends string>(
 
 function resumeOf(values: ReadonlyMap<string, string>): string | undefined {
   const resume = values.get('resume');
-  const ignored = ['exit', 'phase', 'stock', 'etf', 'uk-long'].filter((flag) => values.has(flag));
+  const ignored = ['exit', 'phase', 'stock', 'etf', 'uk-long', 'cash-etf'].filter((flag) =>
+    values.has(flag),
+  );
   if (resume !== undefined && ignored.length > 0) {
     throw new Error(`--resume takes no --${ignored.join(', --')}\n${DRILL_USAGE}`);
   }
   return resume === undefined ? undefined : resolve(resume);
 }
 
+// The cash leg sells flat inside its own run, so a place-only run would leave the ETF held
+function cashEtfOf(values: ReadonlyMap<string, string>): DrillTarget[] {
+  const tidm = values.get('cash-etf') ?? 'none';
+  if (tidm === 'none') return [];
+  if (values.get('phase') === 'place') {
+    throw new Error(`--cash-etf takes no --phase place\n${DRILL_USAGE}`);
+  }
+  return [{ symbol: `${tidm}:xlon`, assetType: 'Etf', side: 'long' }];
+}
+
 export function parseDrillArgs(argv: readonly string[]): DrillArgs {
   const values = flagPairs(
     argv,
-    ['--stock', '--etf', '--uk-long', '--exit', '--phase', '--resume', '--out-dir'],
+    ['--stock', '--etf', '--uk-long', '--cash-etf', '--exit', '--phase', '--resume', '--out-dir'],
     DRILL_USAGE,
   );
   const chosen = (
@@ -83,6 +98,7 @@ export function parseDrillArgs(argv: readonly string[]): DrillArgs {
     const symbol = values.get(flag) ?? target.symbol;
     return symbol === 'none' ? [] : [{ ...target, symbol }];
   });
+  chosen.push(...cashEtfOf(values));
   if (chosen.length === 0) throw new Error(`nothing to drill\n${DRILL_USAGE}`);
   return {
     targets: chosen,
@@ -144,8 +160,9 @@ export function writeEvidence(
   evidence: DrillEvidence,
   outDir: string,
   secrets: readonly string[],
+  label = '',
 ): { json: string; markdown: string } {
-  const suffix = evidence.mode === 'stop' ? '' : `-${evidence.mode}`;
+  const suffix = `${evidence.mode === 'stop' ? '' : `-${evidence.mode}`}${label}`;
   const base = `sim-cfd-stop-drill-${evidence.startedAt.slice(0, 19).replaceAll(':', '')}Z${suffix}`;
   const json = join(outDir, `${base}.json`);
   const markdown = join(outDir, `${base}.md`);
@@ -165,6 +182,21 @@ export interface DrillDeps {
   readonly logger: Logger;
   readonly tokens: (env: NodeJS.ProcessEnv, logger: Logger) => SimTokenChoice;
   readonly onInterrupt: (handler: () => void) => () => void;
+  readonly simBroker: (options: SimBrokerOptions) => CashEtfBroker;
+}
+
+export interface SimBrokerOptions {
+  readonly baseUrl: string;
+  readonly tokenSource: SaxoTokenSource;
+  readonly accountKey: string;
+  readonly logger: Logger;
+}
+
+function simHttpBroker(options: SimBrokerOptions): CashEtfBroker {
+  assertSimGateway(options.baseUrl);
+  const client = new SaxoHttpBrokerClient({ ...options, environment: 'sim' });
+  assertSimGateway(client.baseUrl);
+  return client;
 }
 
 const STDERR_LOGGER: Logger = {
@@ -185,6 +217,7 @@ const DEFAULT_DEPS: DrillDeps = {
     process.once('SIGINT', handler);
     return () => process.off('SIGINT', handler);
   },
+  simBroker: simHttpBroker,
 };
 
 function log(logger: Logger, event: string, message: string, payload?: unknown): void {
@@ -232,20 +265,40 @@ export async function main(
     phase: args.phase,
     runId: String(deps.clock.now().getTime()),
   };
+  const cashBroker = (account: SimAccount) =>
+    deps.simBroker({
+      baseUrl,
+      tokenSource: tokens.source,
+      accountKey: account.accountKey,
+      logger: deps.logger,
+    });
   const run =
     placed === undefined
-      ? runSimCfdStopDrill(gateway, options, deps.clock, interrupt.signal)
+      ? runSimCfdStopDrill(gateway, options, deps.clock, interrupt.signal, cashBroker)
       : resumeSimCfdDrill(gateway, placed, options, deps.clock, interrupt.signal);
-  const { evidence, account } = await run.finally(release);
+  return settle(deps.logger, args, tokens, await run.finally(release));
+}
+
+function cashLabelOf(targets: readonly DrillTarget[]): string {
+  return targets.some((target) => target.assetType === 'Etf') ? '-cash-etf' : '';
+}
+
+async function settle(
+  logger: Logger,
+  args: DrillArgs,
+  tokens: SimTokenChoice,
+  { evidence, account }: { evidence: DrillEvidence; account: SimAccount | undefined },
+): Promise<number> {
   const secrets = await tokens.secrets().catch(() => []);
   await tokens.source.stop();
-  const written = writeEvidence(evidence, args.outDir, [
-    ...secrets,
-    account?.accountKey ?? '',
-    account?.clientKey ?? '',
-  ]);
+  const written = writeEvidence(
+    evidence,
+    args.outDir,
+    [...secrets, account?.accountKey ?? '', account?.clientKey ?? ''],
+    cashLabelOf(args.targets),
+  );
   log(
-    deps.logger,
+    logger,
     evidence.passed ? 'sim_cfd_drill_passed' : 'sim_cfd_drill_failed',
     `evidence at ${written.json}`,
     { failure: evidence.failure },
