@@ -1,10 +1,11 @@
-import type { MarketData, Sleeve } from '../../../contracts/index.js';
+import type { MarketData } from '../../../contracts/index.js';
 import { addDays, type EodhdExchange } from './data/index.js';
 import type { CfdDividendFeed } from './dividend-feed.js';
 
 export interface BacktestDividends {
   readonly feed: CfdDividendFeed;
-  readonly cfdExchangeOf: (instrument: string) => EodhdExchange | undefined;
+  // Every CFD name the run can hold; the caller owns that it is a superset
+  readonly names: ReadonlyMap<string, EodhdExchange>;
 }
 
 export interface DividendCoverageInput {
@@ -14,39 +15,19 @@ export interface DividendCoverageInput {
   readonly dividends: BacktestDividends;
 }
 
-// Every name a sleeve can enter on any session that has a CFD line; a broader list costs one
-// more history read, a missed one fails a cycle after the trial is already counted
-export function cfdNamesInUniverse(
-  sleeves: readonly Sleeve[],
-  dates: readonly string[],
-  today: { current: string },
-  cfdExchangeOf: BacktestDividends['cfdExchangeOf'],
-): ReadonlyMap<string, EodhdExchange> {
-  const names = new Map<string, EodhdExchange>();
-  const opening = today.current;
-  for (const tradingDate of dates) {
-    today.current = tradingDate;
-    for (const sleeve of sleeves) {
-      const context = { tradingDate, macroDay: false, dryRun: true };
-      for (const instrument of sleeve.universe(context).instruments) {
-        const exchange = cfdExchangeOf(instrument);
-        if (exchange !== undefined) names.set(instrument, exchange);
-      }
-    }
-  }
-  today.current = opening;
-  return names;
+export function coverageAfter(
+  market: Pick<MarketData, 'lastBarBefore'>,
+  instrument: string,
+  from: string,
+): string {
+  return market.lastBarBefore(instrument, from)?.date ?? addDays(from, -1);
 }
 
 // postmortem §2: the first cycle books the ex-dates after the bar before the window opens, the
 // last books none past the window's end
-export function assertDividendHistoryCovers(
-  input: DividendCoverageInput,
-  names: ReadonlyMap<string, EodhdExchange>,
-): void {
-  const gaps = [...names].flatMap(([instrument, exchange]) => {
-    const after =
-      input.market.lastBarBefore(instrument, input.from)?.date ?? addDays(input.from, -1);
+export function assertDividendHistoryCovers(input: DividendCoverageInput): void {
+  const gaps = [...input.dividends.names].flatMap(([instrument, exchange]) => {
+    const after = coverageAfter(input.market, instrument, input.from);
     const across = input.dividends.feed.across(instrument, exchange, { after, through: input.to });
     if (across.kind === 'covered') return [];
     return [

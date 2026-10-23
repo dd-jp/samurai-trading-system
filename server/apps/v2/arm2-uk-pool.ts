@@ -12,6 +12,7 @@ import {
   SHARPE_HAIRCUT_MULTIPLIER,
   type TrialSeries,
 } from './backtest-verdict.js';
+import { CFD_DIVIDEND_LONG_WITHHOLDING } from './cfd-dividends.js';
 import { type CostStress, costStress, type SignedOutcome } from './cost-stress.js';
 import {
   type BarsSource,
@@ -19,6 +20,7 @@ import {
   type CfdCatalogueArchive,
   type CfdInstrument,
   calendarReferenceFor,
+  type EodhdExchange,
   isUkStock,
   PENCE_PER_POUND,
   sessionsBefore,
@@ -35,6 +37,7 @@ import {
   coveredHistory,
   isSet,
   LSE_ETF_ONLY_RESERVED_SLOTS,
+  LSE_LINES,
   LSE_RESERVED_SLOTS,
   type Parameter,
   requireSet,
@@ -135,6 +138,54 @@ export function assertArm2UkPoolRunReady(parameter: Parameter<boolean>): void {
   );
 }
 
+// Doc 66 ruling (e) and David 2026-10-23 (#2143): the trial books the dividend cash, so how is
+// part of what was tested
+export const ARM2_UK_POOL_CFD_DIVIDENDS = {
+  source: 'eodhd',
+  long_withholding: CFD_DIVIDEND_LONG_WITHHOLDING,
+  short: 'gross',
+  booked: 'ex_date_on_ex_date_minus_1_holding',
+} as const;
+
+const DIVIDEND_EXCHANGE: Readonly<Record<CfdInstrument['currency'], EodhdExchange>> = {
+  GBP: 'LSE',
+  USD: 'US',
+};
+
+export interface Arm2UkPoolDividendScope {
+  readonly archive: CfdCatalogueArchive;
+  readonly today: CfdCatalogue;
+  readonly window: { readonly from: string; readonly to: string };
+  readonly constituentsFor: (tradingDate: string) => readonly string[];
+  readonly dates: readonly string[];
+}
+
+// A superset of what either arm can enter, without screening each session: pooledUniverse draws
+// only from the constituents, LSE_LINES and today's pool, and selection only narrows it. A name
+// missed here fails a cycle after the trial is counted
+export function arm2UkPoolCfdNames(
+  scope: Arm2UkPoolDividendScope,
+): ReadonlyMap<string, EodhdExchange> {
+  const { archive, window } = scope;
+  const snapshots = [
+    scope.today,
+    ...archive
+      .inForceWithin(window.from, window.to)
+      .flatMap(({ asOf }) => archive.inForceOn(asOf) ?? []),
+  ];
+  const candidates = new Set([
+    ...scope.dates.flatMap((tradingDate) => scope.constituentsFor(tradingDate)),
+    ...LSE_LINES.map((line) => line.tidm),
+    ...poolNames(scope.today),
+  ]);
+  const names = new Map<string, EodhdExchange>();
+  for (const symbol of candidates) {
+    const listed = snapshots.map((snapshot) => snapshot.lookup(symbol)).find(Boolean);
+    if (listed !== undefined) names.set(symbol, DIVIDEND_EXCHANGE[listed.currency]);
+  }
+  return names;
+}
+
 export interface Arm2UkPoolDeps
   extends Omit<Arm2BacktestDeps, 'ukStocks' | 'assumedBeforeArchive'> {
   readonly today: CfdCatalogue;
@@ -179,7 +230,7 @@ export function arm2UkPoolArms(deps: Arm2UkPoolDeps): Arm2UkPoolArms {
           },
         },
         cfd_routes_before_archive: routesBeforeArchive,
-        cfd_dividends: 'not_modelled',
+        cfd_dividends: ARM2_UK_POOL_CFD_DIVIDENDS,
         out_of_sample_from: outOfSampleFrom,
       },
       sleeve: arm2BacktestSleeve({ ...shared, ukStocks }, ARM2_UK_POOL_SLEEVE_ID),

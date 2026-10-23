@@ -8,11 +8,7 @@ import type {
 import type { Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
-import {
-  assertDividendHistoryCovers,
-  type BacktestDividends,
-  cfdNamesInUniverse,
-} from './backtest-dividends.js';
+import { assertDividendHistoryCovers, type BacktestDividends } from './backtest-dividends.js';
 import {
   type BacktestVerdict,
   type BookSeries,
@@ -614,16 +610,9 @@ function logRandom(
   log.record({ ...row, kind: 'random_band', seed: undefined, result: { ...band } });
 }
 
-function assertDividendsCover(
-  input: BacktestInput,
-  sleeves: readonly Sleeve[],
-  today: { current: string },
-  dates: readonly string[],
-): void {
+function assertDividendsCover(input: BacktestInput): void {
   const dividends = input.cfdDividends;
-  if (dividends === undefined) return;
-  const names = cfdNamesInUniverse(sleeves, dates, today, dividends.cfdExchangeOf);
-  assertDividendHistoryCovers({ ...input, dividends }, names);
+  if (dividends !== undefined) assertDividendHistoryCovers({ ...input, dividends });
 }
 
 interface RecordedSimulation extends BacktestSimulation {
@@ -646,7 +635,7 @@ async function simulateRecorded(input: BacktestInput): Promise<RecordedSimulatio
     input.calendarReference ?? CALENDAR_REFERENCE,
   );
   const configs = trialConfigs(input, trialSleeves, benchmarkSleeve);
-  assertDividendsCover(input, sleeves, view.today, dates);
+  assertDividendsCover(input);
   const trialNumbers = configs.map((config) => input.ledger.record(input.candidate, config));
   const simulation = await simulate(input, sleeves, view.today, dates);
   const books = seriesOf(simulation, sleeves);

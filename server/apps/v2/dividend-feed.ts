@@ -30,7 +30,7 @@ export function dividendSymbol(instrument: string, exchange: EodhdExchange): str
   return eodhdSymbol(ukStockTidm(instrument), exchange);
 }
 
-function reasonOf(error: unknown): string {
+export function dividendReadFailure(error: unknown): string {
   return error instanceof EodhdRequestError ? error.reason : 'unexpected_error';
 }
 
@@ -68,7 +68,7 @@ export function liveDividendFeed(deps: LiveDividendFeedDeps, tradingDate: string
       const read = await deps.eodhd.dividends(symbol, window);
       deps.reads.recordRead('cycle', tradingDate, read, deps.clock.now());
     } catch (error) {
-      const failed = { symbol, ...window, reason: reasonOf(error) };
+      const failed = { symbol, ...window, reason: dividendReadFailure(error) };
       deps.reads.recordFailure('cycle', tradingDate, failed, deps.clock.now());
     }
   };

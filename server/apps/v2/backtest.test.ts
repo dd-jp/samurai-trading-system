@@ -1110,18 +1110,20 @@ describe('CFD dividend history in the backtest (#2143)', { timeout: 120_000 }, (
     const reads = new SqliteDividendReads(migratedMemoryStore());
     const read = { from: '2023-01-01', to, asOf: addDays(to, 1), dividends: [] };
     reads.recordRead('history', to, { ...read, symbol: 'UP.US' }, new Date(0));
-    reads.recordRead('history', to, { ...read, symbol: 'FLAT.US', to: '2030-01-01' }, new Date(0));
     return historyDividendFeed(reads);
   }
-  const cfdExchangeOf = (instrument: string) =>
-    instrument === 'FLAT' ? undefined : ('US' as const);
+  function simulation(overrides: Partial<BacktestInput>): SimulationInput {
+    const { shiftCanary: _shift, randomCanary: _random, ...plain } = input(overrides);
+    return plain;
+  }
+  const names = new Map([['UP', 'US' as const]]);
 
   it('refuses a run whose stored history misses a CFD name before it counts any trial', async () => {
     const shared = ledger();
     const seeded = shared.count();
-    const short = input({
+    const short = simulation({
       ledger: shared,
-      cfdDividends: { feed: history(addDays(DATES.at(-1) as string, -3)), cfdExchangeOf },
+      cfdDividends: { feed: history(addDays(DATES.at(-1) as string, -3)), names },
     });
     await expect(simulateBacktest(short)).rejects.toThrow(
       /dividend history does not cover .* for UP from /,
@@ -1132,9 +1134,9 @@ describe('CFD dividend history in the backtest (#2143)', { timeout: 120_000 }, (
   it('runs on a covering history and counts the same trials as a run without one', async () => {
     const shared = ledger();
     const covered = await simulateBacktest(
-      input({ ledger: shared, cfdDividends: { feed: history('2030-01-01'), cfdExchangeOf } }),
+      simulation({ ledger: shared, cfdDividends: { feed: history('2030-01-01'), names } }),
     );
-    const plain = await simulateBacktest(input({ ledger: shared }));
+    const plain = await simulateBacktest(simulation({ ledger: shared }));
     expect(covered.trials.map((trial) => trial.trial)).toEqual(
       plain.trials.map((trial) => trial.trial),
     );

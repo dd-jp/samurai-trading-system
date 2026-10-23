@@ -8,6 +8,8 @@ import { SimulatedClock } from '../../shared/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { VOL_TARGET_TRIAL_SIZING } from './arm2-backtest.js';
 import {
+  fillArm2UkPoolDividendHistory,
+  fillArm2UkPoolDividendHistoryAgainst,
   resolveCliOptions,
   runArm2UkPoolTrial,
   runArm2UkPoolTrialAgainst,
@@ -22,10 +24,12 @@ import { CanaryLog } from './canary-log.js';
 import type { CycleCompositionOptions } from './compose.js';
 import { baselinePicksAt, candidateOutcome, costStress } from './cost-stress.js';
 import {
+  addDays,
   BarsMarketData,
   CfdCatalogue,
   CfdCatalogueArchive,
   parseBoeGbpUsdCsv,
+  SqliteDividendReads,
 } from './data/index.js';
 import { CONSTITUENTS_PATH, FX_PATH, SAXO_SPREADS_PATH, SPREADS_PATH } from './index.js';
 import {
@@ -104,6 +108,17 @@ describe('resolveCliOptions', () => {
 });
 
 describe('the candidate runners', () => {
+  it('#2143: refuses the dividend history fill before opening anything when no EODHD key is set', async () => {
+    vi.stubEnv('EODHD_API_KEY', ' ');
+    try {
+      await expect(
+        fillArm2UkPoolDividendHistory({ barStoreRoot: '/nonexistent/bars' }),
+      ).rejects.toThrow('backtest-cli: EODHD_API_KEY is unset; the fill reads EODHD');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('restore a deleted FX file from its snapshot before reading it (#2000)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'v2-backtest-fx-'));
     try {
@@ -639,6 +654,12 @@ describe('runArm2UkPoolTrialAgainst', () => {
     });
     const archive = new CfdCatalogueArchive([today]);
     const db = migratedMemoryStore();
+    const dividendReads = new SqliteDividendReads(migratedMemoryStore());
+    for (const symbol of ['UP.LSE', 'DN.LSE']) {
+      const asOf = addDays(window.to, 1);
+      const read = { symbol, from: ARM2_DATES[0] as string, to: window.to, asOf, dividends: [] };
+      dividendReads.recordRead('history', asOf, read, new Date(0));
+    }
     try {
       const ledger = new TrialLedger(db, new SimulatedClock(new Date('2026-10-16T00:00:00.000Z')), {
         entries: [],
@@ -652,6 +673,7 @@ describe('runArm2UkPoolTrialAgainst', () => {
           ledger,
           { log: () => undefined },
           archive,
+          dividendReads,
           window,
           RUN_READY,
         );
@@ -671,7 +693,12 @@ describe('runArm2UkPoolTrialAgainst', () => {
         entries: 'arm2',
         universe: { reserved_lse_slots: 6, uk_stock_pool: { spread_screen: false } },
         cfd_routes_before_archive: { catalogue: { asOf: window.to, sha256: today.sha256 } },
-        cfd_dividends: 'not_modelled',
+        cfd_dividends: {
+          source: 'eodhd',
+          long_withholding: { LSE: 0, US: 0.3 },
+          short: 'gross',
+          booked: 'ex_date_on_ex_date_minus_1_holding',
+        },
         out_of_sample_from: '2023-01-01',
         run: {
           from: window.from,
@@ -717,6 +744,42 @@ describe('runArm2UkPoolTrialAgainst', () => {
     }
   });
 
+  it('#2143: fills the dividend history for each CFD-listed name in either universe, once', async () => {
+    const base = arm2BarsSource();
+    const uk = new Map<string, BarSeries>([
+      ['ISF', arm2Series('ISF', 0.0003)],
+      ['UP_XLON', arm2Series('UP_XLON', 0.002)],
+    ]);
+    const barsSource = { load: (symbol: string) => uk.get(symbol) ?? base.load(symbol) };
+    const market = marketOver(barsSource);
+    const window = {
+      from: ARM2_DATES[220] as string,
+      to: ARM2_DATES.at(-1) as string,
+      outOfSampleFrom: '2023-01-01',
+    };
+    const reads = new SqliteDividendReads(migratedMemoryStore());
+    const asked: string[] = [];
+    const eodhd = {
+      dividends: (symbol: string, span: { from: string; to: string }) => {
+        asked.push(symbol);
+        return Promise.resolve({ symbol, ...span, asOf: span.to, dividends: [] });
+      },
+    };
+    const fill = () =>
+      fillArm2UkPoolDividendHistoryAgainst(
+        eodhd,
+        market,
+        barsSource,
+        () => ARM2_SYMBOLS,
+        archiveOf(window.to),
+        reads,
+        window,
+      );
+    expect(await fill()).toEqual({ fetched: ['UP.LSE'], held: [], failed: [] });
+    expect(await fill()).toEqual({ fetched: [], held: ['UP.LSE'], failed: [] });
+    expect(asked).toEqual(['UP.LSE']);
+  });
+
   it('#2143: refuses to run once the stored UK bars stop before the pinned end', async () => {
     const base = arm2BarsSource();
     const ended = arm2Series('UP_XLON', 0.002);
@@ -734,6 +797,7 @@ describe('runArm2UkPoolTrialAgainst', () => {
         ledger,
         { log: () => undefined },
         archiveOf(to),
+        new SqliteDividendReads(migratedMemoryStore()),
         { from: ARM2_DATES[0] as string, to, outOfSampleFrom: '2023-01-01' },
         RUN_READY,
       ),
@@ -754,6 +818,7 @@ describe('runArm2UkPoolTrialAgainst', () => {
         ledger,
         { log: () => undefined },
         archiveOf(to),
+        new SqliteDividendReads(migratedMemoryStore()),
       ),
     );
     expect(refusal).toMatch(/ARM2_UK_POOL_RUN_READY is unset/);
@@ -869,6 +934,9 @@ describe('candidate trial hashes', () => {
     const archive = new CfdCatalogueArchive([
       new CfdCatalogue({ asOf: '2026-10-15', instruments: [ukRow('RR_XLON')] }),
     ]);
+    const dividendReads = new SqliteDividendReads(migratedMemoryStore());
+    const rr = { symbol: 'RR.LSE', from: '2000-01-01', to: '2025-09-24', asOf: '2025-09-25' };
+    dividendReads.recordRead('history', rr.asOf, { ...rr, dividends: [] }, new Date(0));
     const hashes = await recordedHashes(
       (market, bars, research) =>
         runArm2UkPoolTrialAgainst(
@@ -879,12 +947,13 @@ describe('candidate trial hashes', () => {
           research.ledger,
           quiet,
           archive,
+          dividendReads,
           undefined,
           RUN_READY,
         ),
       1,
     );
-    expect(hashes, NEW_TRIAL).toEqual(['3b15b48d72057993']);
+    expect(hashes, NEW_TRIAL).toEqual(['39aa361d6c7dd67e']);
   });
 
   it('#2105: makes an archived CFD catalogue inside the window a new vol-target trial', async () => {

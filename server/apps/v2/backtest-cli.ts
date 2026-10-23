@@ -1,9 +1,14 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import type { MarketData } from '../../../contracts/index.js';
 import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import type { LogEntry, Logger } from '../../shared/index.js';
 import { readSeededFile, SystemClock } from '../../shared/index.js';
-import { openSharedStore } from '../../shared/store/index.js';
+import {
+  guardedStore,
+  openReadOnlyStore,
+  openSharedStore,
+  type StoreHandle,
+} from '../../shared/store/index.js';
 import { errorStack, runWhenInvoked } from '../../tools/cli-entrypoint.js';
 import {
   VOL_TARGET_TRIAL_CANDIDATE_ID,
@@ -28,6 +33,7 @@ import {
   type Arm2UkPoolPassRule,
   type Arm2UkPoolVerdict,
   arm2UkPoolArms,
+  arm2UkPoolCfdNames,
   arm2UkPoolPassRule,
   arm2UkPoolVerdict,
   assertArm2UkPoolRunReady,
@@ -43,6 +49,7 @@ import {
   runBacktest,
   simulateBacktest,
 } from './backtest.js';
+import type { BacktestDividends } from './backtest-dividends.js';
 import {
   type OneBarDelay,
   type RandomEntries,
@@ -65,15 +72,20 @@ import {
   CALENDAR_REFERENCE,
   CfdCatalogueArchive,
   calendarReferenceFor,
+  cfdCatalogueArchiveOf,
   currentConstituents,
   type DataSanityReport,
   dataSanity,
+  EodhdClient,
   loadCfdCatalogueArchive,
   MultiVenueBarsSource,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
+  SqliteDividendReads,
   venueDataSanity,
 } from './data/index.js';
+import { type DividendsReader, historyDividendFeed } from './dividend-feed.js';
+import { type DividendHistoryReport, fillDividendHistory } from './dividend-history.js';
 import { minbtl, type RegimeSplit } from './evidence/index.js';
 import {
   CONSTITUENTS_PATH,
@@ -613,6 +625,7 @@ interface Arm2UkPoolRun {
   readonly logger: Logger;
   readonly window: VolTargetTrialWindow;
   readonly cfdCatalogues: CfdCatalogueArchive;
+  readonly cfdDividends: BacktestDividends;
 }
 
 async function arm2UkPoolPass(
@@ -636,6 +649,7 @@ async function arm2UkPoolPass(
     costMultiple,
     cfdCatalogues: run.cfdCatalogues,
     ukStockCfdOpen: arms.ukStockCfdOpen,
+    cfdDividends: run.cfdDividends,
   });
   const verdict = arm2UkPoolVerdict(pairVerdictInput(simulation, window, ledger));
   return { dates: simulation.dates, verdict };
@@ -677,21 +691,20 @@ export async function runArm2UkPoolTrialAgainst(
   ledger: TrialLedger,
   logger: Logger,
   cfdCatalogues: CfdCatalogueArchive,
+  dividendReads: SqliteDividendReads,
   window: VolTargetTrialWindow = ARM2_UK_POOL_WINDOW,
   runReady: Parameter<boolean> = ARM2_UK_POOL_RUN_READY,
 ): Promise<Arm2UkPoolTrialReport> {
   assertArm2UkPoolRunReady(runReady);
-  const today = ukPoolCatalogue(cfdCatalogues, ARM2_UK_POOL_NAMES_AS_OF);
-  assertUkBarsReach(bars, today, window);
-  const arms = arm2UkPoolArms({
+  const { arms, cfdDividends } = arm2UkPoolSetup(
+    market,
     bars,
-    constituents: constituentsFor,
+    constituentsFor,
     cfdCatalogues,
-    today,
-    screens: requireSet(UK_STOCK_SCREENS),
-    outOfSampleFrom: window.outOfSampleFrom,
-  });
-  const run = { arms, market, halfSpreadBps, ledger, logger, window, cfdCatalogues };
+    dividendReads,
+    window,
+  );
+  const run = { arms, market, halfSpreadBps, ledger, logger, window, cfdCatalogues, cfdDividends };
   const base = await arm2UkPoolPass(run, 1);
   const stressed = await arm2UkPoolPass(run, COST_STRESS_MULTIPLE);
   const pool = { bars, constituents: constituentsFor, ukStocks: arms.ukStocks };
@@ -704,24 +717,115 @@ export async function runArm2UkPoolTrialAgainst(
   };
 }
 
+interface Arm2UkPoolSetup {
+  readonly arms: Arm2UkPoolArms;
+  readonly cfdDividends: BacktestDividends;
+}
+
+function arm2UkPoolSetup(
+  market: MarketData,
+  bars: BarsSource,
+  constituentsFor: (tradingDate: string) => readonly string[],
+  cfdCatalogues: CfdCatalogueArchive,
+  dividendReads: SqliteDividendReads,
+  window: VolTargetTrialWindow,
+): Arm2UkPoolSetup {
+  const today = ukPoolCatalogue(cfdCatalogues, ARM2_UK_POOL_NAMES_AS_OF);
+  assertUkBarsReach(bars, today, window);
+  const arms = arm2UkPoolArms({
+    bars,
+    constituents: constituentsFor,
+    cfdCatalogues,
+    today,
+    screens: requireSet(UK_STOCK_SCREENS),
+    outOfSampleFrom: window.outOfSampleFrom,
+  });
+  const names = arm2UkPoolCfdNames({
+    archive: cfdCatalogues,
+    today,
+    window,
+    constituentsFor,
+    dates: backtestSessions(market, window.from, window.to, CALENDAR_REFERENCE),
+  });
+  return { arms, cfdDividends: { feed: historyDividendFeed(dividendReads), names } };
+}
+
+export async function fillArm2UkPoolDividendHistoryAgainst(
+  eodhd: DividendsReader,
+  market: MarketData,
+  bars: BarsSource,
+  constituentsFor: (tradingDate: string) => readonly string[],
+  cfdCatalogues: CfdCatalogueArchive,
+  reads: SqliteDividendReads,
+  window: VolTargetTrialWindow = ARM2_UK_POOL_WINDOW,
+): Promise<DividendHistoryReport> {
+  const { cfdDividends } = arm2UkPoolSetup(
+    market,
+    bars,
+    constituentsFor,
+    cfdCatalogues,
+    reads,
+    window,
+  );
+  const deps = { eodhd, reads, clock: new SystemClock(), market };
+  return fillDividendHistory(deps, cfdDividends.names, window);
+}
+
+export async function fillArm2UkPoolDividendHistory(
+  cliOptions: BacktestCliOptions,
+): Promise<DividendHistoryReport> {
+  const apiKey = process.env.EODHD_API_KEY?.trim() ?? '';
+  if (apiKey === '') throw new Error('backtest-cli: EODHD_API_KEY is unset; the fill reads EODHD');
+  const eodhd = new EodhdClient(apiKey, fetch, () => new Date());
+  const options = resolveCliOptions(cliOptions);
+  const { market, bars } = await openMultiVenueMarket(options);
+  const db = openSharedStore(cliOptions.cfdSnapshotStorePath ?? V2_STORE_PATH);
+  try {
+    return await fillArm2UkPoolDividendHistoryAgainst(
+      eodhd,
+      market,
+      bars,
+      constituentsReader(options.constituentsPath),
+      cfdCatalogueArchiveOf(db),
+      new SqliteDividendReads(guardedStore(db, 'v2')),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function storedDividendReads(path: string): { reads: SqliteDividendReads; db: StoreHandle } {
+  const db = existsSync(path) ? openReadOnlyStore(path) : openSharedStore(':memory:');
+  return { reads: new SqliteDividendReads(guardedStore(db, 'v2')), db };
+}
+
 export async function runArm2UkPoolTrial(
   cliOptions: BacktestCliOptions = {},
   runReady: Parameter<boolean> = ARM2_UK_POOL_RUN_READY,
 ): Promise<Arm2UkPoolTrialReport> {
   assertArm2UkPoolRunReady(runReady);
-  return withResearchLedger(cliOptions, ({ market, bars, halfSpreadBps, research, options }) =>
-    runArm2UkPoolTrialAgainst(
-      market,
-      bars,
-      constituentsReader(options.constituentsPath),
-      halfSpreadBps,
-      research.ledger,
-      options.logger,
-      loadCfdCatalogueArchive(cliOptions.cfdSnapshotStorePath ?? V2_STORE_PATH),
-      ARM2_UK_POOL_WINDOW,
-      runReady,
-    ),
-  );
+  const v2StorePath = cliOptions.cfdSnapshotStorePath ?? V2_STORE_PATH;
+  const stored = storedDividendReads(v2StorePath);
+  try {
+    return await withResearchLedger(
+      cliOptions,
+      ({ market, bars, halfSpreadBps, research, options }) =>
+        runArm2UkPoolTrialAgainst(
+          market,
+          bars,
+          constituentsReader(options.constituentsPath),
+          halfSpreadBps,
+          research.ledger,
+          options.logger,
+          loadCfdCatalogueArchive(v2StorePath),
+          stored.reads,
+          ARM2_UK_POOL_WINDOW,
+          runReady,
+        ),
+    );
+  } finally {
+    stored.db.close();
+  }
 }
 
 const CANDIDATE_RUNNERS: Record<string, (options: BacktestCliOptions) => Promise<unknown>> = {
@@ -730,6 +834,7 @@ const CANDIDATE_RUNNERS: Record<string, (options: BacktestCliOptions) => Promise
   [VOL_TARGET_INDEX_CANDIDATE_ID]: runVolTargetIndexCandidate,
   [VOL_TARGET_TRIAL_CANDIDATE_ID]: runVolTargetTrial,
   [ARM2_UK_POOL_CANDIDATE_ID]: runArm2UkPoolTrial,
+  [`${ARM2_UK_POOL_CANDIDATE_ID}-dividend-history`]: fillArm2UkPoolDividendHistory,
 };
 
 async function runNamedCandidate(candidateArg: string): Promise<number> {
