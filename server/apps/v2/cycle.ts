@@ -684,9 +684,6 @@ class Cycle {
     this.log('error', 'v2_crossing_fill', message);
   }
 
-  // A position whose rescale threw keeps its pre-split qty and levels: an exit on them trades the
-  // wrong qty at the wrong levels and a mark persists a loss-budget row the next cycle sizes from,
-  // so both wait for a cycle whose rescale succeeds
   async bookCfdDividends(): Promise<void> {
     const ledger = this.deps.dividendLedger;
     if (ledger === undefined) return;
@@ -752,6 +749,9 @@ class Cycle {
     );
   }
 
+  // A position whose rescale threw keeps its pre-split qty and levels: an exit on them trades the
+  // wrong qty at the wrong levels and a mark persists a loss-budget row the next cycle sizes from,
+  // so both wait for a cycle whose rescale succeeds
   rescaleSplitPositions(): void {
     const thrown: unknown[] = [];
     for (const sleeveId of this.deps.registry.ids()) {

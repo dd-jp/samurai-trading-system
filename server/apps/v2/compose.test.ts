@@ -11,6 +11,9 @@ import type {
 import { SimulatedClock } from '../../shared/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { type CycleCompositionOptions, composeCycle } from './compose.js';
+import { runCycle } from './cycle.js';
+import { addDays } from './data/index.js';
+import type { CfdDividendFeed } from './dividend-feed.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { CapitalConfigStore } from './risk/index.js';
 import { declaredCfdCosts } from './signal/index.js';
@@ -401,6 +404,51 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
     expect(day.cfdFinancingAccrualGbp).toBe(0);
     expect(day.cfdBorrowAccrualGbp).toBeCloseTo(50 * 0.003, 12);
   });
+
+  it.each([1, 2])(
+    'books CFD dividend cash unscaled at costMultiple %d: a dividend is a cash flow, not a modelled cost (#2143)',
+    async (costMultiple) => {
+      const bars: MarketData = {
+        ...market,
+        lastBarBefore: (_instrument, date) => ({
+          date: addDays(date, -1),
+          open: 50,
+          high: 50,
+          low: 50,
+          close: 50,
+          volume: 1_000_000,
+          rawClose: 50,
+        }),
+      };
+      const dividendFeed: CfdDividendFeed = {
+        refresh: () => Promise.resolve(),
+        across: () => ({ kind: 'covered', dividends: [{ exDate: '2026-09-26', perShare: 0.4 }] }),
+      };
+      const composed = composeCycle(
+        options({
+          cfdCosts: cfdCosts(() => 0),
+          market: bars,
+          dividendFeed,
+          costMultiple,
+          tradingDate: () => '2026-09-27',
+        }),
+      );
+      composed.books.applyFill('debate/primary', {
+        instrument: 'ISF',
+        venue: 'saxo_cfd_gbp',
+        side: 'sell',
+        leg: 'entry',
+        qty: 3,
+        priceGbp: 50,
+        feeGbp: 0,
+        clientOrderId: 'short-1',
+        tradingDate: '2026-09-26',
+      });
+      const before = composed.books.cash('debate/primary');
+      await runCycle(composed, '2026-09-27');
+      expect(composed.books.cash('debate/primary') - before).toBeCloseTo(-3 * 0.4, 12);
+    },
+  );
 
   it('throws when a CFD fill is priced with no model rather than fee-free', () => {
     const composed = composeCycle(
