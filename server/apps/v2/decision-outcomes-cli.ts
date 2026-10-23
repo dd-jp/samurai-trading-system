@@ -2,23 +2,13 @@ import { DEFAULT_BAR_STORE_ROOT } from '../../providers/bar-store/index.js';
 import { guardedStore, openSharedStore } from '../../shared/store/index.js';
 import { setExitCodeWhenInvoked, writeOrFail } from '../../tools/cli-entrypoint.js';
 import type { BarsSource } from './data/index.js';
-import { type OutcomeRebuild, rebuildDecisionOutcomes } from './decision-outcomes.js';
+import { formatOutcomeRebuild, rebuildDecisionOutcomes } from './decision-outcomes.js';
 import { barsSourceFor, V2_STORE_PATH } from './index.js';
 
 async function primedBars(barStoreRoot: string): Promise<BarsSource> {
   const { bars, prime } = barsSourceFor({ barStoreRoot }, { log: () => {} });
   await prime();
   return bars;
-}
-
-export function formatOutcomeRebuild(rebuild: OutcomeRebuild): string {
-  return [
-    `settled ${rebuild.settled} closed trades (${rebuild.written} new)`,
-    ...rebuild.pending.map(
-      (row) => `pending ${row.bookId} ${row.instrument} ${row.exitOrderId}: ${row.reason}`,
-    ),
-    ...rebuild.unmatched.map((key) => `unmatched ${key}: no entry decision in the journal`),
-  ].join('\n');
 }
 
 export async function settleOutcomes(

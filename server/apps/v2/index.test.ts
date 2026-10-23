@@ -1319,6 +1319,7 @@ describe('composeV2Root', () => {
            'sell', 1, 18.4, 0, 'x', 'paper', 23, '2026-09-08');`,
     );
     seeded.close();
+    const logs: LogEntry[] = [];
     const open = (path: string) =>
       composeV2Root({
         ...fixtures,
@@ -1326,12 +1327,15 @@ describe('composeV2Root', () => {
         dryRun: true,
         storePath: path,
         clock: new SimulatedClock(new Date(`${ENTRY_DATE}T07:00:00.000Z`)),
-        logger: { log: () => {} },
+        logger: { log: (entry) => logs.push(entry) },
       });
     const root = open(storePath);
     try {
       await root.run();
       expect(root.faults.faultsOn(ENTRY_DATE)).toEqual([]);
+      expect(logs.filter((entry) => entry.event === 'v2_decision_outcomes')).toEqual([
+        expect.objectContaining({ level: 'info', message: 'settled 1 closed trades (1 new)' }),
+      ]);
       expect(
         root.db
           .prepare('SELECT decision_id, exit_reason, realised_pnl_gbp FROM v2_decision_outcomes')

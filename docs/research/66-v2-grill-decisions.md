@@ -1066,7 +1066,13 @@ David ruled two design questions for the ledger G11's loop reads, in chat on 202
 1. **Writer ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6344726410)):** "(b) Post-cycle rebuild". A step after the cycle rebuilds `v2_decision_outcomes` from the journal, so `cycle.ts` is not touched (#1942); the backfill runs the same code.
 2. **Benchmark ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6345327251)):** "Index by venue". SPY for `alpaca` and `saxo_cfd_usd`, ISF for `saxo` and `saxo_cfd_gbp`, from the entry bar's open to the exit bar's close; the excess return is net of the trade's direction.
 
-*Built 2026-10-22 (#2146).* Build notes (not rulings): `docs/specs/debate-sleeve-spec.md` §9 describes the table, its finality rule and the fault code. On the 2026-10-22 paper snapshot the rebuild settled 17 closed trades and left 4 pending on the next index bar, the 21 the evidence panel counts; a second run wrote nothing, and two independent rebuilds wrote identical rows. R is null for entries journalled before migration 0085, which carry no native price.
+3. **Simulated fill bar ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6360828584), 2026-10-23):** "Re-run simulator". A simulated fill journals no date, so the ledger dates it by the bar the cycle priced it on. A limit entry with more than one bar between its order and the fill cycle (missed cycles) is re-run through the cycle's own `simulateLimitEntry` to find its bar. `cycle.ts` stays unchanged, and the row stays pending if a split falls in the window.
+4. **Fill times ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6360841294), 2026-10-23):** "Dates + broker times". `settled_at` stays the close's cycle date, so a rebuild stays deterministic. Nullable `entry_filled_at` and `exit_filled_at` carry the broker's fill time where there is one.
+
+*Built 2026-10-22 (#2146).* Build notes (not rulings): `docs/specs/debate-sleeve-spec.md` §9 describes the table, its finality rule and the fault code. Results on the 2026-10-23 paper snapshot:
+- The rebuild settled all 29 closed trades the evidence panel counts, book by book (arm 2 11, no-macro-gate 12, primary 6), with none pending and none unmatched.
+- A second run wrote nothing.
+- Two independent rebuilds wrote identical rows. R is null for entries journalled before migration 0085, which carry no native price.
 
 ## Still open
 

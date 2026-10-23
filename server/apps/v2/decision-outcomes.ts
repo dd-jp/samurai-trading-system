@@ -3,6 +3,7 @@ import type { BarSeries, DailyBar } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import type { BarsSource } from './data/index.js';
 import { CLOSE_LEGS_SQL, entryColumnOfClose, entryOffsetOfPayload } from './entry-offset.js';
+import { quoted, simulateLimitEntry } from './simulated-entry.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -25,6 +26,7 @@ export interface OutcomeFill {
   readonly price_native: number | null;
   readonly fee_gbp: number;
   readonly fill_date: string | null;
+  readonly filled_at: string | null;
   readonly trading_date: string;
 }
 
@@ -32,9 +34,14 @@ export interface OutcomeEntry {
   readonly entry_order_id: string;
   readonly decision_id: string;
   readonly decision_date: string;
+  readonly order_date: string;
   readonly sleeve_id: string;
   readonly venue: Venue;
   readonly side: 'buy' | 'sell';
+  readonly limit: number | null;
+  readonly trigger: number | null;
+  readonly quoted: 0 | 1;
+  readonly quote_fill: number | null;
   readonly stop: number | null;
   readonly target: number | null;
   readonly pin_digest: string | null;
@@ -43,6 +50,7 @@ export interface OutcomeEntry {
 
 export interface OutcomeExit {
   readonly leg: string;
+  readonly order_date: string;
   readonly reason: string | null;
   readonly detail: string | null;
   readonly trigger: number | null;
@@ -63,6 +71,12 @@ export interface ClosedTrade {
   readonly exitShare: number;
   readonly carryGbp: number;
   readonly rescaled: boolean;
+  readonly splitBlocked: boolean;
+}
+
+export interface FillBars {
+  readonly entry: string;
+  readonly exit: string;
 }
 
 export interface DecisionOutcome {
@@ -79,6 +93,8 @@ export interface DecisionOutcome {
   readonly exit_reason: string;
   readonly entry_date: string;
   readonly exit_date: string;
+  readonly entry_filled_at: string | null;
+  readonly exit_filled_at: string | null;
   readonly holding_days: number;
   readonly entry_qty: number;
   readonly exit_qty: number;
@@ -100,7 +116,7 @@ export interface DecisionOutcome {
   readonly schema_version: number;
 }
 
-export type PendingReason = 'position_open' | 'benchmark_bars';
+export type PendingReason = 'position_open' | 'fill_bar' | 'benchmark_bars';
 
 export interface PendingOutcome {
   readonly bookId: string;
@@ -167,30 +183,78 @@ export function exitReasonOf(trade: ClosedTrade, sign: number): string {
   return DETAIL_REASONS[detail ?? ''] ?? 'unclassified';
 }
 
-// A simulated exit is priced on the last bar before its cycle date (cycle.ts simulatedExit) and
-// journals no fill date. The window needs a bar on or after the anchor date, so a later rebuild
-// over newer bars cannot move the exit bar and rewrite the row it already wrote
-function exitBarIndex(bars: readonly DailyBar[], exitFill: OutcomeFill): number {
-  const { fill_date: filled, trading_date: cycleDate } = exitFill;
-  return filled === null
-    ? bars.findLastIndex((bar) => bar.date < cycleDate)
-    : bars.findLastIndex((bar) => bar.date <= filled);
+function barsBetween(bars: readonly DailyBar[], from: string, before: string): readonly DailyBar[] {
+  return bars.filter((bar) => bar.date >= from && bar.date < before);
 }
 
+// A simulated entry journals no fill date. The cycle walks the bars from the order to its own
+// date and fills on the first that crosses (cycle.ts fillSimulatedEntry); with one bar there is
+// nothing to replay, and across a split the cycle's bars were rescaled in ways the store does not keep
+function entryBarOf(trade: ClosedTrade, bars: readonly DailyBar[]): string | undefined {
+  const { entry } = trade;
+  const [fill] = trade.entryFills;
+  if (fill.fill_date !== null) return fill.fill_date;
+  const window = barsBetween(bars, entry.order_date, fill.trading_date);
+  if (window.length === 1) return window[0]?.date;
+  if (trade.rescaled || entry.limit === null) return undefined;
+  const outcome = simulateLimitEntry(
+    {
+      side: entry.side,
+      limit: entry.limit,
+      stop: undefined,
+      trigger: entry.trigger ?? undefined,
+      quoteFill: entry.quoted === 1 ? entry.quote_fill : undefined,
+    },
+    window,
+  );
+  return outcome.kind === 'filled' ? outcome.bar.date : undefined;
+}
+
+// Mirrors the cycle's simulated exits: a stop on the fill bar exits on the entry bar; a flatten
+// fills at the open of the first bar after its order, or the latest bar when a split block froze
+// it (cycle.ts exitBars); a bracket leg or an ended series, journalled on the cycle that fills it,
+// prices on the last bar before that cycle
+function exitBarOf(
+  trade: ClosedTrade,
+  entryBar: string,
+  bars: readonly DailyBar[],
+): string | undefined {
+  const [fill] = trade.exitFills;
+  if (fill.fill_date !== null) return fill.fill_date;
+  if (trade.exit.detail === 'stop_on_entry_bar') return entryBar;
+  const window = barsBetween(bars, trade.exit.order_date, fill.trading_date);
+  const priced = trade.splitBlocked ? window.at(-1) : window[0];
+  return (priced ?? bars.findLast((bar) => bar.date < fill.trading_date))?.date;
+}
+
+export function fillBarsOf(
+  trade: ClosedTrade,
+  series: BarSeries | undefined,
+): FillBars | undefined {
+  const bars = series?.bars ?? [];
+  const entry = entryBarOf(trade, bars);
+  const exit = entry === undefined ? undefined : exitBarOf(trade, entry, bars);
+  return entry === undefined || exit === undefined ? undefined : { entry, exit };
+}
+
+// Final once the index has a bar on or after the exit bar, so newer bars cannot move the window
 export function benchmarkWindowOf(
   series: BarSeries | undefined,
-  entryDate: string,
-  exitFill: OutcomeFill,
+  dates: FillBars,
 ): BenchmarkWindow | undefined {
   const bars = series?.bars ?? [];
-  const anchor = exitFill.fill_date ?? exitFill.trading_date;
-  if ((bars.at(-1)?.date ?? '') < anchor) return undefined;
-  const firstIndex = bars.findIndex((bar) => bar.date >= entryDate);
-  const lastIndex = exitBarIndex(bars, exitFill);
+  if ((bars.at(-1)?.date ?? '') < dates.exit) return undefined;
+  const firstIndex = bars.findIndex((bar) => bar.date >= dates.entry);
+  const lastIndex = bars.findLastIndex((bar) => bar.date <= dates.exit);
   const first = bars[firstIndex];
   const last = bars[lastIndex];
   if (first === undefined || last === undefined || lastIndex < firstIndex) return undefined;
   return { first, last, sessions: lastIndex - firstIndex };
+}
+
+// Trade prices carry no dividends, so the index is compared price-only too
+function priceReturnOf(window: BenchmarkWindow): number {
+  return window.last.rawClose / quoted(window.first).open - 1;
 }
 
 function rMultipleOf(trade: ClosedTrade, sign: number, entry: Totals, exit: Totals): number | null {
@@ -202,19 +266,12 @@ function rMultipleOf(trade: ClosedTrade, sign: number, entry: Totals, exit: Tota
   return risk === 0 ? null : (sign * (exitNative - entryNative)) / risk;
 }
 
-function earliestDate(fills: NonEmpty<OutcomeFill>): string {
-  return fills
-    .map((fill) => fill.fill_date ?? fill.trading_date)
-    .reduce((earliest, date) => (date < earliest ? date : earliest));
-}
-
 export function outcomeOf(
   trade: ClosedTrade,
+  dates: FillBars,
   benchmark: BarSeries | undefined,
 ): DecisionOutcome | undefined {
-  const [exitFill] = trade.exitFills;
-  const entryDate = earliestDate(trade.entryFills);
-  const window = benchmarkWindowOf(benchmark, entryDate, exitFill);
+  const window = benchmarkWindowOf(benchmark, dates);
   if (window === undefined) return undefined;
   const sign = trade.entry.side === 'buy' ? 1 : -1;
   const entry = totalsOf(trade.entryFills);
@@ -224,7 +281,7 @@ export function outcomeOf(
   const carry = trade.carryGbp * trade.exitShare;
   const realised = sign * (exit.valueGbp - entryValueGbp) - fees - carry;
   const tradeReturn = realised / entryValueGbp;
-  const benchmarkReturn = window.last.close / window.first.open - 1;
+  const benchmarkReturn = priceReturnOf(window);
   return {
     decision_id: trade.entry.decision_id,
     book_id: trade.bookId,
@@ -237,8 +294,10 @@ export function outcomeOf(
     exit_client_order_id: trade.exitOrderId,
     exit_leg: trade.exit.leg,
     exit_reason: exitReasonOf(trade, sign),
-    entry_date: entryDate,
-    exit_date: exitFill.fill_date ?? window.last.date,
+    entry_date: dates.entry,
+    exit_date: dates.exit,
+    entry_filled_at: trade.entryFills[0].filled_at,
+    exit_filled_at: trade.exitFills[0].filled_at,
     holding_days: window.sessions,
     entry_qty: entry.qty * trade.exitShare,
     exit_qty: exit.qty,
@@ -287,7 +346,12 @@ const CLOSES_SQL = `
     FROM closes c ORDER BY c.at`;
 
 const ENTRY_SQL = `
-  SELECT o.client_order_id AS entry_order_id, o.decision_id, d.trading_date AS decision_date, b.sleeve_id, o.venue, o.side,
+  SELECT o.client_order_id AS entry_order_id, o.decision_id, d.trading_date AS decision_date,
+         o.trading_date AS order_date, b.sleeve_id, o.venue, o.side,
+         COALESCE(json_extract(o.payload, '$.limit'), json_extract(o.payload, '$.price')) AS "limit",
+         json_extract(o.payload, '$.trigger') AS trigger,
+         json_extract(o.payload, '$.entry_quote') IS NOT NULL AS quoted,
+         json_extract(o.payload, '$.entry_quote.fill') AS quote_fill,
          json_extract(o.payload, '$.stop') AS stop, json_extract(o.payload, '$.target') AS target,
          json_extract(o.payload, '$.pin_digest') AS pin_digest,
          ${entryOffsetOfPayload('o.payload')} AS entry_offset_bps
@@ -296,7 +360,7 @@ const ENTRY_SQL = `
     JOIN v2_books b ON b.book_id = o.book_id
    WHERE o.client_order_id = ?`;
 
-const FILL_COLUMNS = 'qty, price_gbp, price_native, fee_gbp, fill_date, trading_date';
+const FILL_COLUMNS = 'qty, price_gbp, price_native, fee_gbp, fill_date, filled_at, trading_date';
 
 const ENTRY_FILLS_SQL = `SELECT ${FILL_COLUMNS} FROM v2_fills
   WHERE client_order_id = ? AND leg = 'entry' ORDER BY rowid`;
@@ -305,8 +369,8 @@ const EXIT_FILLS_SQL = `SELECT leg, ${FILL_COLUMNS} FROM v2_fills
   WHERE book_id = ? AND client_order_id = ? AND ${CLOSE_LEGS_SQL} ORDER BY rowid`;
 
 const EXIT_ORDER_SQL = `
-  SELECT json_extract(payload, '$.reason') AS reason, json_extract(payload, '$.detail') AS detail,
-         json_extract(payload, '$.price') AS trigger
+  SELECT trading_date AS order_date, json_extract(payload, '$.reason') AS reason,
+         json_extract(payload, '$.detail') AS detail, json_extract(payload, '$.price') AS trigger
     FROM v2_orders WHERE client_order_id = ? AND leg <> 'entry'`;
 
 const HOLDS_ENTRY_SQL = `SELECT 1 FROM v2_positions
@@ -317,6 +381,9 @@ const CARRY_SQL = `SELECT COALESCE(SUM(financing_gbp + borrow_gbp), 0) AS carry 
 
 const RESCALED_SQL = `SELECT 1 FROM v2_rescales
   WHERE book_id = ? AND instrument = ? AND ratio <> 1 AND trading_date BETWEEN ? AND ?`;
+
+const SPLIT_BLOCKED_SQL = `SELECT 1 FROM v2_split_checks
+  WHERE instrument = ? AND verdict = 'block' AND trading_date >= ? AND trading_date < ?`;
 
 const WRITTEN_SQL = 'SELECT book_id, exit_client_order_id FROM v2_decision_outcomes';
 
@@ -334,6 +401,8 @@ const OUTCOME_COLUMNS = [
   'exit_reason',
   'entry_date',
   'exit_date',
+  'entry_filled_at',
+  'exit_filled_at',
   'holding_days',
   'entry_qty',
   'exit_qty',
@@ -367,6 +436,12 @@ type Settlement =
   | { readonly kind: 'pending'; readonly reason: PendingReason }
   | { readonly kind: 'unmatched' };
 
+interface Quantities {
+  readonly entry: number;
+  readonly exit: number;
+  readonly rescaled: boolean;
+}
+
 function keyOf(bookId: string, exitOrderId: string): string {
   return `${bookId}|${exitOrderId}`;
 }
@@ -393,10 +468,10 @@ class JournalReader {
     const entry = this.entryOf(close.entry_order_id);
     if (entry === undefined) return { kind: 'unmatched' };
     if (this.holdsEntry(close, entry)) return { kind: 'pending', reason: 'position_open' };
-    const outcome = outcomeOf(
-      this.trade(close, entry),
-      this.bars.load(BENCHMARK_OF_VENUE[entry.venue]),
-    );
+    const trade = this.trade(close, entry);
+    const dates = fillBarsOf(trade, this.bars.load(close.instrument));
+    if (dates === undefined) return { kind: 'pending', reason: 'fill_bar' };
+    const outcome = outcomeOf(trade, dates, this.bars.load(BENCHMARK_OF_VENUE[entry.venue]));
     return outcome === undefined
       ? { kind: 'pending', reason: 'benchmark_bars' }
       : { kind: 'settled', outcome };
@@ -421,37 +496,90 @@ class JournalReader {
     return held !== undefined;
   }
 
+  private exitOf(close: CloseRow, exitFills: ExitFills): OutcomeExit {
+    const order = this.db.prepare(EXIT_ORDER_SQL).get(close.exit_order_id) as
+      | Omit<OutcomeExit, 'leg'>
+      | undefined;
+    return {
+      order_date: close.settled_at,
+      reason: null,
+      detail: null,
+      trigger: null,
+      ...order,
+      leg: exitFills[0].leg,
+    };
+  }
+
+  // Each close carries its share of the entry's own quantity, so a stray over-sell cannot spread
+  // the entry's cost past its shares; after a split the closes are in new units and only their
+  // sum matches the entry
+  private exitShareOf(close: CloseRow, entryOrderId: string, quantities: Quantities): number {
+    const closed = this.#closedQty.get(keyOf(close.book_id, entryOrderId)) as number;
+    return quantities.exit / (quantities.rescaled ? closed : quantities.entry);
+  }
+
+  private found(sql: string, ...params: string[]): boolean {
+    return this.db.prepare(sql).get(...params) !== undefined;
+  }
+
   private trade(close: CloseRow, entry: OutcomeEntry): ClosedTrade {
     const entryOrderId = entry.entry_order_id;
     const entryFills = this.db
       .prepare(ENTRY_FILLS_SQL)
       .all(entryOrderId) as unknown as NonEmpty<OutcomeFill>;
     const exitFills = this.exitFills(close);
-    const exitOrder = this.db.prepare(EXIT_ORDER_SQL).get(close.exit_order_id) as
-      | Omit<OutcomeExit, 'leg'>
-      | undefined;
+    const exit = this.exitOf(close, exitFills);
     const { carry } = this.db.prepare(CARRY_SQL).get(close.book_id, entryOrderId) as {
       carry: number;
     };
-    const rescale = this.db
-      .prepare(RESCALED_SQL)
-      .get(close.book_id, close.instrument, entryFills[0].trading_date, close.settled_at);
-    const exitQty = quantityOf(exitFills);
+    const { book_id: bookId, instrument } = close;
+    const rescaled = this.found(
+      RESCALED_SQL,
+      bookId,
+      instrument,
+      entryFills[0].trading_date,
+      close.settled_at,
+    );
     return {
-      bookId: close.book_id,
-      instrument: close.instrument,
+      bookId,
+      instrument,
       entryOrderId,
       exitOrderId: close.exit_order_id,
       settledAt: close.settled_at,
       entry,
-      exit: { reason: null, detail: null, trigger: null, ...exitOrder, leg: exitFills[0].leg },
+      exit,
       entryFills,
       exitFills,
-      exitShare: exitQty / (this.#closedQty.get(keyOf(close.book_id, entryOrderId)) ?? exitQty),
+      exitShare: this.exitShareOf(close, entryOrderId, {
+        entry: quantityOf(entryFills),
+        exit: quantityOf(exitFills),
+        rescaled,
+      }),
       carryGbp: carry,
-      rescaled: rescale !== undefined,
+      rescaled,
+      splitBlocked: this.found(
+        SPLIT_BLOCKED_SQL,
+        instrument,
+        exit.order_date,
+        exitFills[0].trading_date,
+      ),
     };
   }
+}
+
+export function formatOutcomeRebuild(rebuild: OutcomeRebuild): string {
+  return [
+    `settled ${rebuild.settled} closed trades (${rebuild.written} new)`,
+    ...rebuild.pending.map(
+      (row) => `pending ${row.bookId} ${row.instrument} ${row.exitOrderId}: ${row.reason}`,
+    ),
+    ...rebuild.unmatched.map((key) => `unmatched ${key}: no entry decision in the journal`),
+  ].join('\n');
+}
+
+// An open position or an index bar still to come settles by itself on a later cycle; the rest do not
+export function needsAttention(rebuild: OutcomeRebuild): boolean {
+  return rebuild.unmatched.length > 0 || rebuild.pending.some((row) => row.reason === 'fill_bar');
 }
 
 function writtenKeys(db: StoreHandle): Set<string> {
