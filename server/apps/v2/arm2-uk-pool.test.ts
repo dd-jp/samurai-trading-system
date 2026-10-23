@@ -7,6 +7,7 @@ import {
   ARM2_UK_POOL_NAMES_AS_OF,
   ARM2_UK_POOL_OUT_OF_SAMPLE_FROM,
   ARM2_UK_POOL_TO,
+  type Arm2UkPoolVerdict,
   arm2UkPoolArms,
   arm2UkPoolPassRule,
   arm2UkPoolVerdict,
@@ -37,6 +38,7 @@ import {
   UK_STOCK_SCREENS,
   ukStockCfdRefusal,
 } from './signal/index.js';
+import { pairPbo } from './vol-target-verdict.js';
 
 function weekdays(from: string, count: number): string[] {
   const dates: string[] = [];
@@ -379,10 +381,29 @@ describe('arm2UkPoolArms (#2143)', () => {
   });
 });
 
+const VERDICT_DATES = [
+  '2022-12-23',
+  '2022-12-28',
+  '2022-12-29',
+  '2022-12-30',
+  '2023-01-03',
+  '2023-01-04',
+  '2023-01-05',
+  '2023-01-06',
+];
+
+function bookAt(level: (index: number) => number): { equity: number[]; returns: number[] } {
+  const equity = [0, ...VERDICT_DATES].map((_, index) => level(index));
+  const returns = VERDICT_DATES.map(
+    (_, index) => (equity[index + 1] as number) / (equity[index] as number) - 1,
+  );
+  return { equity, returns };
+}
+
 describe('arm2UkPoolVerdict (#2143)', () => {
-  const dates = ['2022-12-29', '2022-12-30', '2023-01-03', '2023-01-04'];
-  const flat = { equity: [100, 100, 100, 100, 100], returns: [0, 0, 0, 0] };
-  const rising = { equity: [100, 101, 102, 103, 104], returns: [0.01, 0.0099, 0.0098, 0.0098] };
+  const dates = VERDICT_DATES;
+  const flat = bookAt(() => 100);
+  const rising = bookAt((index) => 100 + index);
   const input = {
     dates,
     trial: { ...rising, trial: 3, sleeve: ARM2_UK_POOL_SLEEVE_ID },
@@ -390,56 +411,81 @@ describe('arm2UkPoolVerdict (#2143)', () => {
     outOfSampleFrom: '2023-01-01',
     trialsCounted: 3,
     lossCapGbp: 450,
+    folds: 4,
   };
 
   it('reports both arms on each side of the split, each from its own start', () => {
     const verdict = arm2UkPoolVerdict({
       ...input,
-      baseline: { ...flat, equity: [90, 90, 90, 90, 90] },
+      baseline: bookAt(() => 90),
     });
     expect(verdict).toMatchObject({
-      from: '2022-12-29',
-      to: '2023-01-04',
+      from: '2022-12-23',
+      to: '2023-01-06',
       outOfSampleFrom: '2023-01-03',
-      sessionsInSample: 2,
-      sessionsOutOfSample: 2,
+      sessionsInSample: 4,
+      sessionsOutOfSample: 4,
       trial: 3,
       trialsCounted: 3,
       ukPoolStartGbp: 100,
       etfOnlyStartGbp: 90,
     });
-    expect(verdict.ukPool.totalReturn).toBeCloseTo(0.04, 10);
+    expect(verdict.ukPool.totalReturn).toBeCloseTo(0.08, 10);
     expect(verdict.etfOnly.totalReturn).toBe(0);
     expect(verdict).not.toHaveProperty('pass');
+  });
+
+  it('reports the pair PBO of the ETF-only baseline and the UK pool over the walk-forward folds', () => {
+    const leadsInEvenFolds = (index: number) =>
+      100 * 1.01 ** index * (Math.floor((index - 1) / 2) % 2 === 0 ? 1.002 : 0.999) ** index;
+    const swapping = {
+      ...input,
+      trial: { ...bookAt(leadsInEvenFolds), trial: 3, sleeve: ARM2_UK_POOL_SLEEVE_ID },
+      baseline: bookAt((index) => 100 * 1.01 ** index),
+    };
+    const verdict = arm2UkPoolVerdict(swapping);
+    expect(verdict.pbo).toBe(pairPbo(swapping));
+    expect(verdict.pbo).toBeGreaterThan(0);
+    expect(verdict.pbo).toBeLessThanOrEqual(1);
   });
 
   it('refuses series that do not cover the dates and a split leaving one side short', () => {
     expect(() => arm2UkPoolVerdict({ ...input, baseline: { equity: [100], returns: [] } })).toThrow(
       /same dates/,
     );
-    expect(() => arm2UkPoolVerdict({ ...input, outOfSampleFrom: '2023-01-04' })).toThrow(
+    expect(() => arm2UkPoolVerdict({ ...input, outOfSampleFrom: '2023-01-06' })).toThrow(
       /fewer than 2 sessions/,
     );
-    expect(() => arm2UkPoolVerdict({ ...input, outOfSampleFrom: '2022-12-30' })).toThrow(
+    expect(() => arm2UkPoolVerdict({ ...input, outOfSampleFrom: '2022-12-28' })).toThrow(
       /fewer than 2 sessions/,
     );
   });
 });
 
 describe('arm2UkPoolPassRule (#2143)', () => {
-  const dates = ['2022-12-29', '2022-12-30', '2023-01-03', '2023-01-04'];
-  const flat = { equity: [100, 100, 100, 100, 100], returns: [0, 0, 0, 0] };
+  const flat = bookAt(() => 100);
   const reported = arm2UkPoolVerdict({
-    dates,
+    dates: VERDICT_DATES,
     trial: { ...flat, trial: 1 },
     baseline: flat,
     outOfSampleFrom: '2023-01-01',
     trialsCounted: 1,
     lossCapGbp: 450,
+    folds: 4,
   });
-  const verdictAt = (ukPool: number, etfOnly: number) => ({
+  const verdictAt = (
+    ukPool: number,
+    etfOnly: number,
+    gates: { deflatedSharpe?: number; pbo?: number; totalReturn?: number } = {},
+  ): Arm2UkPoolVerdict => ({
     ...reported,
-    ukPool: { ...reported.ukPool, sharpeOutOfSample: ukPool },
+    deflatedSharpe: gates.deflatedSharpe ?? 0.99,
+    pbo: gates.pbo ?? 0,
+    ukPool: {
+      ...reported.ukPool,
+      sharpeOutOfSample: ukPool,
+      totalReturn: gates.totalReturn ?? 0,
+    },
     etfOnly: { ...reported.etfOnly, sharpeOutOfSample: etfOnly },
   });
 
@@ -492,4 +538,70 @@ describe('arm2UkPoolPassRule (#2143)', () => {
       expect(rule.pass).toBe(false);
     },
   );
+
+  it.each([
+    { gate: 'DSR 0.95', base: { deflatedSharpe: 0.95 }, pass: true },
+    { gate: 'DSR below 0.95', base: { deflatedSharpe: 0.9499 }, pass: false },
+    { gate: 'PBO 0.10', base: { pbo: 0.1 }, pass: true },
+    { gate: 'PBO above 0.10', base: { pbo: 0.1001 }, pass: false },
+  ])('binds the vol-target trial gates on the 1x run: $gate', ({ base, pass }) => {
+    const rule = arm2UkPoolPassRule(verdictAt(1, 0.5, base), verdictAt(0.9, 0.5));
+    expect(rule.afterHaircut.beatsAfterHaircut).toBe(true);
+    expect(rule.atDoubledCost.beatsAfterHaircut).toBe(true);
+    expect(rule.checks.deflatedSharpeAtLeast095).toBe((base.deflatedSharpe ?? 0.99) >= 0.95);
+    expect(rule.checks.pboAtMost010).toBe((base.pbo ?? 0) <= 0.1);
+    expect(rule.pass).toBe(pass);
+  });
+
+  it('reads the 2x gates off the 1x run, not the 2x one', () => {
+    const rule = arm2UkPoolPassRule(
+      verdictAt(1, 0.5),
+      verdictAt(0.9, 0.5, { deflatedSharpe: 0, pbo: 1 }),
+    );
+    expect(rule.checks).toMatchObject({ deflatedSharpeAtLeast095: true, pboAtMost010: true });
+    expect(rule.pass).toBe(true);
+  });
+
+  it.each([
+    {
+      measure: 'sharpeOutOfSample',
+      base: verdictAt(1, -0.5),
+      stressed: verdictAt(0, -0.5),
+    },
+    {
+      measure: 'totalReturn',
+      base: verdictAt(1, 0.5, { totalReturn: 0.1 }),
+      stressed: verdictAt(0.9, 0.5, { totalReturn: -0.01 }),
+    },
+  ])(
+    "fails when the UK pool's $measure turns non-positive at 2x cost while both legs beat",
+    ({ measure, base, stressed }) => {
+      const rule = arm2UkPoolPassRule(base, stressed);
+      expect(rule.afterHaircut).toMatchObject({
+        beatsBeforeHaircut: true,
+        beatsAfterHaircut: true,
+      });
+      expect(rule.atDoubledCost).toMatchObject({
+        beatsBeforeHaircut: true,
+        beatsAfterHaircut: true,
+      });
+      expect(rule.checks.holdsSignAtDoubledCost).toBe(false);
+      expect(rule.costStress.flipped).toEqual([
+        { picks: 'ownPicks', measure },
+        { picks: 'baselinePicks', measure },
+      ]);
+      expect(rule.pass).toBe(false);
+    },
+  );
+
+  it('holds the sign when a positive reading stays positive at 2x cost', () => {
+    const rule = arm2UkPoolPassRule(
+      verdictAt(1, 0.5, { totalReturn: 0.1 }),
+      verdictAt(0.9, 0.5, { totalReturn: 0.001 }),
+    );
+    expect(rule.costStress.base).toEqual({ sharpeOutOfSample: 1, totalReturn: 0.1 });
+    expect(rule.costStress.ownPicks).toEqual({ sharpeOutOfSample: 0.9, totalReturn: 0.001 });
+    expect(rule.checks.holdsSignAtDoubledCost).toBe(true);
+    expect(rule.pass).toBe(true);
+  });
 });

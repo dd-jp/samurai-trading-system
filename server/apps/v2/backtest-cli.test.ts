@@ -694,10 +694,13 @@ describe('runArm2UkPoolTrialAgainst', () => {
       expect(passRule.atDoubledCost.etfOnlySharpeOutOfSample).toBe(
         stressed.etfOnly.sharpeOutOfSample,
       );
+      expect(passRule.checks.deflatedSharpeAtLeast095).toBe(verdict.deflatedSharpe >= 0.95);
+      expect(passRule.checks.pboAtMost010).toBe(verdict.pbo <= 0.1);
+      expect(passRule.costStress.ownPicks.totalReturn).toBe(stressed.ukPool.totalReturn);
       expect(passRule.pass).toBe(
         [passRule.afterHaircut, passRule.atDoubledCost].every(
           (leg) => leg.beatsBeforeHaircut && leg.beatsAfterHaircut,
-        ),
+        ) && Object.values(passRule.checks).every(Boolean),
       );
       expect(verdict.outOfSampleFrom).toBe('2023-01-02');
       expect(verdict.sessionsInSample + verdict.sessionsOutOfSample).toBe(ARM2_DATES.length - 220);
