@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import type { BarsSource } from './data/index.js';
-import { formatOutcomeRebuild, main, settleOutcomes } from './decision-outcomes-cli.js';
+import { formatOutcomeRebuild } from './decision-outcomes.js';
+import { main, settleOutcomes } from './decision-outcomes-cli.js';
 
 const dirs: string[] = [];
 

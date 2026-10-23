@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS v2_decision_outcomes (
   exit_reason            TEXT NOT NULL,
   entry_date             TEXT NOT NULL,
   exit_date              TEXT NOT NULL,
+  entry_filled_at        TEXT,
+  exit_filled_at         TEXT,
   holding_days           INTEGER NOT NULL,
   entry_qty              REAL NOT NULL,
   exit_qty               REAL NOT NULL,

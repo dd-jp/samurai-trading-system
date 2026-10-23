@@ -8,6 +8,9 @@ import {
   benchmarkWindowOf,
   type ClosedTrade,
   exitReasonOf,
+  type FillBars,
+  fillBarsOf,
+  needsAttention,
   type OutcomeFill,
   outcomeOf,
   rebuildDecisionOutcomes,
@@ -43,6 +46,7 @@ function fill(overrides: Partial<OutcomeFill> = {}): OutcomeFill {
     price_native: 125,
     fee_gbp: 0,
     fill_date: '2026-10-06',
+    filled_at: null,
     trading_date: '2026-10-06',
     ...overrides,
   };
@@ -59,28 +63,48 @@ function trade(overrides: Partial<ClosedTrade> = {}): ClosedTrade {
       entry_order_id: 'entry-1',
       decision_id: 'd-1',
       decision_date: '2026-10-05',
+      order_date: '2026-10-05',
       sleeve_id: 'debate',
       venue: 'alpaca',
       side: 'buy',
+      limit: 125,
+      trigger: null,
+      quoted: 0,
+      quote_fill: null,
       stop: 120,
       target: 135,
       pin_digest: 'pin',
       entry_offset_bps: 50,
     },
-    exit: { leg: 'exit', reason: 'time_stop', detail: null, trigger: null },
+    exit: {
+      leg: 'exit',
+      order_date: '2026-10-07',
+      reason: 'time_stop',
+      detail: null,
+      trigger: null,
+    },
     entryFills: [fill()],
     exitFills: [fill({ price_gbp: 110, price_native: 137.5, fill_date: '2026-10-08' })],
     exitShare: 1,
     carryGbp: 0,
     rescaled: false,
+    splitBlocked: false,
     ...overrides,
   };
 }
 
+const DATES: FillBars = { entry: '2026-10-06', exit: '2026-10-08' };
+
 describe('outcomeOf', () => {
   it('scores a long against its venue index from the entry open to the exit close', () => {
-    expect(outcomeOf(trade(), SPY)).toMatchObject({
+    const broker = trade({
+      entryFills: [fill({ filled_at: '2026-10-06T14:30:00Z' })],
+      exitFills: [fill({ price_gbp: 110, price_native: 137.5, fill_date: '2026-10-08' })],
+    });
+    expect(outcomeOf(broker, DATES, SPY)).toMatchObject({
       direction: 'long',
+      entry_filled_at: '2026-10-06T14:30:00Z',
+      exit_filled_at: null,
       entry_date: '2026-10-06',
       exit_date: '2026-10-08',
       holding_days: 2,
@@ -108,6 +132,7 @@ describe('outcomeOf', () => {
         ],
         carryGbp: 2,
       }),
+      DATES,
       SPY,
     );
     expect(outcome).toMatchObject({
@@ -128,10 +153,10 @@ describe('outcomeOf', () => {
         exitShare: 0.25,
         carryGbp: 4,
       }),
+      DATES,
       SPY,
     );
     expect(outcome).toMatchObject({
-      entry_date: '2026-10-05',
       entry_qty: 1,
       exit_qty: 1,
       fees_gbp: 0.5,
@@ -142,50 +167,136 @@ describe('outcomeOf', () => {
 
   it('leaves R out when a native price, the stop or the risk is missing, or a split landed', () => {
     const noNative = trade({ entryFills: [fill({ price_native: null })] });
-    expect(outcomeOf(noNative, SPY)).toMatchObject({ r_multiple: null, entry_price_native: null });
+    expect(outcomeOf(noNative, DATES, SPY)).toMatchObject({
+      r_multiple: null,
+      entry_price_native: null,
+    });
     expect(
-      outcomeOf(trade({ exitFills: [fill({ price_native: null })] }), SPY)?.r_multiple,
+      outcomeOf(trade({ exitFills: [fill({ price_native: null })] }), DATES, SPY)?.r_multiple,
     ).toBeNull();
     expect(
-      outcomeOf(trade({ entry: { ...trade().entry, stop: null } }), SPY)?.r_multiple,
+      outcomeOf(trade({ entry: { ...trade().entry, stop: null } }), DATES, SPY)?.r_multiple,
     ).toBeNull();
     expect(
-      outcomeOf(trade({ entry: { ...trade().entry, stop: 125 } }), SPY)?.r_multiple,
+      outcomeOf(trade({ entry: { ...trade().entry, stop: 125 } }), DATES, SPY)?.r_multiple,
     ).toBeNull();
-    expect(outcomeOf(trade({ rescaled: true }), SPY)?.r_multiple).toBeNull();
+    expect(outcomeOf(trade({ rescaled: true }), DATES, SPY)?.r_multiple).toBeNull();
   });
 
-  it('dates a simulated exit by the last index bar before its cycle', () => {
-    const simulated = trade({ exitFills: [fill({ fill_date: null, trading_date: '2026-10-09' })] });
-    expect(outcomeOf(simulated, SPY)).toMatchObject({ exit_date: '2026-10-08', holding_days: 2 });
+  it('holds a stop on the entry bar for no session', () => {
+    const sameBar = { entry: '2026-10-06', exit: '2026-10-06' };
+    expect(outcomeOf(trade(), sameBar, SPY)).toMatchObject({
+      entry_date: '2026-10-06',
+      exit_date: '2026-10-06',
+      holding_days: 0,
+      benchmark_return: 102 / 101 - 1,
+    });
+  });
+
+  it('compares the index price-only, as the trade prices are', () => {
+    const adjusted: BarSeries = {
+      symbol: 'SPY',
+      bars: [{ ...bar('2026-10-06', 100, 100), rawClose: 50 }, bar('2026-10-08', 52, 55)],
+    };
+    expect(outcomeOf(trade(), DATES, adjusted)?.benchmark_return).toBeCloseTo(0.1);
   });
 
   it('waits while the index bars do not cover the window', () => {
-    expect(outcomeOf(trade(), undefined)).toBeUndefined();
+    expect(outcomeOf(trade(), DATES, undefined)).toBeUndefined();
+  });
+});
+
+describe('fillBarsOf', () => {
+  const AAPL: BarSeries = {
+    symbol: 'AAPL',
+    bars: [
+      bar('2026-10-05', 130, 131),
+      bar('2026-10-06', 129, 130),
+      bar('2026-10-07', 126, 124),
+      bar('2026-10-08', 124, 126),
+    ],
+  };
+  const simulatedEntry = (overrides: Partial<ClosedTrade['entry']> = {}, cycle = '2026-10-09') =>
+    trade({
+      entry: { ...trade().entry, ...overrides },
+      entryFills: [fill({ fill_date: null, trading_date: cycle })],
+    });
+
+  it('takes the broker fill dates', () => {
+    expect(fillBarsOf(trade(), undefined)).toEqual({ entry: '2026-10-06', exit: '2026-10-08' });
+  });
+
+  it('dates a simulated entry by its only bar, or the bar the limit first crossed', () => {
+    expect(fillBarsOf(simulatedEntry({ order_date: '2026-10-08' }), AAPL)?.entry).toBe(
+      '2026-10-08',
+    );
+    expect(fillBarsOf(simulatedEntry(), AAPL)?.entry).toBe('2026-10-07');
+    expect(fillBarsOf(simulatedEntry({ quoted: 1, quote_fill: 131 }), AAPL)?.entry).toBe(
+      '2026-10-05',
+    );
+  });
+
+  it('leaves a simulated entry undated when the bars cannot say which one filled', () => {
+    expect(fillBarsOf(simulatedEntry({ limit: 100 }), AAPL)).toBeUndefined();
+    expect(fillBarsOf(simulatedEntry({ limit: null }), AAPL)).toBeUndefined();
+    expect(fillBarsOf({ ...simulatedEntry(), rescaled: true }, AAPL)).toBeUndefined();
+    expect(fillBarsOf(simulatedEntry(), undefined)).toBeUndefined();
+  });
+
+  it('dates each simulated exit by the bar the cycle priced it on', () => {
+    const exit = (
+      order_date: string,
+      overrides: Partial<ClosedTrade> = {},
+      detail: string | null = null,
+    ) =>
+      fillBarsOf(
+        trade({
+          exit: { leg: 'exit', order_date, reason: null, detail, trigger: null },
+          exitFills: [fill({ fill_date: null, trading_date: '2026-10-09' })],
+          ...overrides,
+        }),
+        AAPL,
+      )?.exit;
+    expect(exit('2026-10-06')).toBe('2026-10-06');
+    expect(exit('2026-10-06', { splitBlocked: true })).toBe('2026-10-08');
+    expect(exit('2026-10-09')).toBe('2026-10-08');
+    expect(exit('2026-10-09', {}, 'stop_on_entry_bar')).toBe('2026-10-06');
+    expect(
+      fillBarsOf(
+        trade({ exitFills: [fill({ fill_date: null, trading_date: '2026-10-09' })] }),
+        undefined,
+      ),
+    ).toBeUndefined();
   });
 });
 
 describe('benchmarkWindowOf', () => {
-  it('needs a bar on or after the exit so newer bars cannot move the exit bar', () => {
+  it('needs a bar on or after the exit bar', () => {
     const short: BarSeries = { symbol: 'SPY', bars: SPY.bars.slice(0, 3) };
-    expect(
-      benchmarkWindowOf(short, '2026-10-06', fill({ fill_date: '2026-10-08' })),
-    ).toBeUndefined();
-    const simulated = fill({ fill_date: null, trading_date: '2026-10-08' });
-    expect(benchmarkWindowOf(short, '2026-10-06', simulated)).toBeUndefined();
-    expect(benchmarkWindowOf(SPY, '2026-10-06', simulated)?.last.date).toBe('2026-10-07');
+    expect(benchmarkWindowOf(short, DATES)).toBeUndefined();
+    expect(benchmarkWindowOf(SPY, DATES)).toMatchObject({ sessions: 2 });
   });
 
-  it('refuses an entry after the last bar or an exit bar before the entry bar', () => {
-    expect(benchmarkWindowOf(SPY, '2026-10-10', fill({ fill_date: '2026-10-09' }))).toBeUndefined();
-    const sameDay = fill({ fill_date: null, trading_date: '2026-10-06' });
-    expect(benchmarkWindowOf(SPY, '2026-10-06', sameDay)).toBeUndefined();
+  it('refuses an entry after the last bar or a window with no index session', () => {
+    expect(benchmarkWindowOf(SPY, { entry: '2026-10-10', exit: '2026-10-09' })).toBeUndefined();
+    const weekend = { entry: '2026-10-10', exit: '2026-10-10' };
+    const withMonday: BarSeries = { symbol: 'SPY', bars: [...SPY.bars, bar('2026-10-12', 1, 1)] };
+    expect(benchmarkWindowOf(withMonday, weekend)).toBeUndefined();
   });
 });
 
 describe('exitReasonOf', () => {
   const exit = (overrides: Partial<ClosedTrade['exit']>): ClosedTrade =>
-    trade({ exit: { leg: 'exit', reason: null, detail: null, trigger: null, ...overrides } });
+    trade({
+      exit: {
+        leg: 'exit',
+        order_date: '2026-10-07',
+        reason: null,
+        detail: null,
+        trigger: null,
+        ...overrides,
+      },
+    });
 
   it('takes a venue leg, then the journalled reason', () => {
     expect(exitReasonOf(exit({ leg: 'stop', reason: 'time_stop' }), 1)).toBe('stop');
@@ -202,7 +313,13 @@ describe('exitReasonOf', () => {
     expect(exitReasonOf(bracket(null), 1)).toBe('unclassified');
     const noTarget = trade({
       entry: { ...trade().entry, target: null },
-      exit: { leg: 'exit', reason: null, detail: 'bracket_leg_on_daily_bar', trigger: 118 },
+      exit: {
+        leg: 'exit',
+        order_date: '2026-10-07',
+        reason: null,
+        detail: 'bracket_leg_on_daily_bar',
+        trigger: 118,
+      },
     });
     expect(exitReasonOf(noTarget, 1)).toBe('unclassified');
   });
@@ -212,6 +329,27 @@ describe('exitReasonOf', () => {
     expect(exitReasonOf(exit({ detail: 'series_ended_at_last_close' }), 1)).toBe('series_ended');
     expect(exitReasonOf(exit({ detail: 'something_else' }), 1)).toBe('unclassified');
     expect(exitReasonOf(exit({}), 1)).toBe('unclassified');
+  });
+});
+
+describe('needsAttention', () => {
+  const pending = (reason: 'position_open' | 'fill_bar' | 'benchmark_bars') => ({
+    bookId: 'b',
+    instrument: 'i',
+    exitOrderId: 'x',
+    reason,
+  });
+
+  it('flags an unmatched close or an undatable fill, not a wait that settles itself', () => {
+    const rebuild = { written: 0, settled: 0, unmatched: [] };
+    expect(
+      needsAttention({
+        ...rebuild,
+        pending: [pending('position_open'), pending('benchmark_bars')],
+      }),
+    ).toBe(false);
+    expect(needsAttention({ ...rebuild, pending: [pending('fill_bar')] })).toBe(true);
+    expect(needsAttention({ ...rebuild, pending: [], unmatched: ['b|x'] })).toBe(true);
   });
 });
 
@@ -237,6 +375,7 @@ describe('rebuildDecisionOutcomes', () => {
       ['d-b', 'BBB', 'alpaca'],
       ['d-c', 'CCC', 'saxo'],
       ['d-d', 'DDD', 'alpaca'],
+      ['d-g', 'GGG', 'alpaca'],
     ]) {
       decision.run(id, instrument, venue);
     }
@@ -256,6 +395,8 @@ describe('rebuildDecisionOutcomes', () => {
       ['e-entry', null, 'EEE', 'alpaca', 'entry', 'buy', entryPayload],
       ['e-exit', null, 'EEE', 'alpaca', 'exit', 'sell', '{}'],
       ['f-exit', null, 'FFF', 'alpaca', 'exit', 'sell', '{}'],
+      ['g-entry', 'd-g', 'GGG', 'alpaca', 'entry', 'buy', entryPayload],
+      ['g-exit', null, 'GGG', 'alpaca', 'exit', 'sell', '{}'],
     ]) {
       order.run(...row);
     }
@@ -289,6 +430,8 @@ describe('rebuildDecisionOutcomes', () => {
       ['f10', 'e-entry', '2026-10-06', 'EEE', 'alpaca', 'entry', 'buy', 1, 100, 125, '2026-10-06'],
       ['f11', 'e-exit', '2026-10-07', 'EEE', 'alpaca', 'exit', 'sell', 1, 100, 125, '2026-10-07'],
       ['f12', 'f-exit', '2026-10-07', 'FFF', 'alpaca', 'exit', 'sell', 1, 100, 125, '2026-10-07'],
+      ['f13', 'g-entry', '2026-10-06', 'GGG', 'alpaca', 'entry', 'buy', 1, 100, 125, null],
+      ['f14', 'g-exit', '2026-10-07', 'GGG', 'alpaca', 'exit', 'sell', 1, 100, 125, null],
     ]) {
       fillRow.run(...row);
     }
@@ -334,7 +477,14 @@ describe('rebuildDecisionOutcomes', () => {
         exitOrderId: 'c-entry',
         reason: 'benchmark_bars',
       },
+      {
+        bookId: 'debate/primary',
+        instrument: 'GGG',
+        exitOrderId: 'g-exit',
+        reason: 'fill_bar',
+      },
     ]);
+    expect(needsAttention(first)).toBe(true);
     expect(first.unmatched).toEqual(['debate/primary|e-exit', 'debate/primary|f-exit']);
     expect(first.settled + first.pending.length + first.unmatched.length).toBe(closedTradeTotal());
 
@@ -376,6 +526,28 @@ describe('rebuildDecisionOutcomes', () => {
     expect(db.prepare('SELECT * FROM v2_decision_outcomes ORDER BY outcome_id').all()).toEqual(
       before,
     );
+  });
+
+  it("prices a stray over-sell by the entry's own quantity", () => {
+    seed();
+    db.prepare(
+      `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+         side, qty, price_gbp, fee_gbp, recorded_at, broker_mode, price_native, fill_date)
+       VALUES ('f15', 'a-exit-2', 'debate/primary', '2026-10-08', 'AAA', 'alpaca', 'exit', 'sell',
+         1, 90, 0, 'x', 'paper', 112.5, '2026-10-08')`,
+    ).run();
+    rebuildDecisionOutcomes(db, bars);
+    expect(
+      db
+        .prepare(
+          `SELECT exit_client_order_id, entry_qty, exit_qty FROM v2_decision_outcomes
+            WHERE instrument = 'AAA' ORDER BY outcome_id`,
+        )
+        .all(),
+    ).toEqual([
+      { exit_client_order_id: 'a-exit-1', entry_qty: 1, exit_qty: 1 },
+      { exit_client_order_id: 'a-exit-2', entry_qty: 2, exit_qty: 2 },
+    ]);
   });
 
   it('nulls R across a split that changed the share count', () => {
