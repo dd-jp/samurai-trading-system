@@ -9,6 +9,11 @@ import type { Logger } from '../../shared/index.js';
 import { SimulatedClock } from '../../shared/index.js';
 import { guardedStore, openSharedStore, type StoreHandle } from '../../shared/store/index.js';
 import {
+  assertDividendHistoryCovers,
+  type BacktestDividends,
+  cfdNamesInUniverse,
+} from './backtest-dividends.js';
+import {
   type BacktestVerdict,
   type BookSeries,
   backtestVerdict,
@@ -93,6 +98,9 @@ export interface BacktestInput {
   // snapshot's borrow than the one that admitted it
   readonly cfdCatalogues?: CfdCatalogueArchive | undefined;
   readonly ukStockCfdOpen?: boolean | undefined;
+  // #2143: kept out of the run info so earlier trials keep their hashes; a trial that books
+  // dividend cash names its source in its own config. Unset, a held CFD books none and warns
+  readonly cfdDividends?: BacktestDividends | undefined;
   // The input's trials, in their order, one bar later (doc 66, 2026-10-07 rulings on #1747)
   readonly shiftCanary?: ShiftCanaryInput | undefined;
   readonly randomCanary?: RandomCanaryInput | undefined;
@@ -402,6 +410,7 @@ async function simulate(
       costMultiple: input.costMultiple,
       volTarget: volTargetOf(input),
       ukStockCfdRefusal: input.ukStockCfdOpen === true ? UK_STOCK_CFD_OPEN : undefined,
+      dividendFeed: input.cfdDividends?.feed,
     });
     const marks = await replay(cycle, clock, sleeves, dates, today);
     const books = sleeves.map((sleeve) => `${sleeve.id}/primary`);
@@ -605,6 +614,18 @@ function logRandom(
   log.record({ ...row, kind: 'random_band', seed: undefined, result: { ...band } });
 }
 
+function assertDividendsCover(
+  input: BacktestInput,
+  sleeves: readonly Sleeve[],
+  today: { current: string },
+  dates: readonly string[],
+): void {
+  const dividends = input.cfdDividends;
+  if (dividends === undefined) return;
+  const names = cfdNamesInUniverse(sleeves, dates, today, dividends.cfdExchangeOf);
+  assertDividendHistoryCovers({ ...input, dividends }, names);
+}
+
 interface RecordedSimulation extends BacktestSimulation {
   readonly configs: readonly TrialConfig[];
   readonly trialSleeves: readonly Sleeve[];
@@ -625,6 +646,7 @@ async function simulateRecorded(input: BacktestInput): Promise<RecordedSimulatio
     input.calendarReference ?? CALENDAR_REFERENCE,
   );
   const configs = trialConfigs(input, trialSleeves, benchmarkSleeve);
+  assertDividendsCover(input, sleeves, view.today, dates);
   const trialNumbers = configs.map((config) => input.ledger.record(input.candidate, config));
   const simulation = await simulate(input, sleeves, view.today, dates);
   const books = seriesOf(simulation, sleeves);
