@@ -73,34 +73,43 @@ function book(deps: CfdDividendStepDeps, booking: CfdDividendBooking): void {
   });
 }
 
+interface StepReport {
+  readonly booked: CfdDividendBooking[];
+  readonly unread: UnbookedDividend[];
+  readonly splitBefore: UnbookedDividend[];
+}
+
+function bookPosition(
+  deps: CfdDividendStepDeps,
+  feed: CfdDividendFeed,
+  position: HeldCfd,
+  report: StepReport,
+): void {
+  const result = heldDividends({
+    ...position,
+    tradingDate: deps.tradingDate,
+    market: deps.market,
+    source: feed,
+    fxQuotePerGbp: deps.fxFor(position.held.venue),
+    booked: (exDate) => deps.ledger.booked(position.bookId, position.held.instrument, exDate),
+  });
+  for (const booking of result.bookings) book(deps, booking);
+  report.booked.push(...result.bookings);
+  if (result.unread !== undefined) report.unread.push(unbooked(position, result.unread));
+  if (result.splitBefore !== undefined) {
+    report.splitBefore.push(unbooked(position, result.splitBefore));
+  }
+}
+
 // Runs before the cycle books any fill, so each position is the holding at the last mark
 export async function bookCfdDividends(deps: CfdDividendStepDeps): Promise<CfdDividendStepReport> {
   const held = heldCfds(deps);
-  const report = {
-    booked: [] as CfdDividendBooking[],
-    unread: [] as UnbookedDividend[],
-    splitBefore: [] as UnbookedDividend[],
-  };
+  const report: StepReport = { booked: [], unread: [], splitBefore: [] };
   const { feed } = deps;
   if (feed === undefined) {
     return { ...report, unmodelled: held.map((position) => unbooked(position, 'no feed')) };
   }
   await feed.refresh(requestsFor(deps, held));
-  for (const position of held) {
-    const result = heldDividends({
-      ...position,
-      tradingDate: deps.tradingDate,
-      market: deps.market,
-      source: feed,
-      fxQuotePerGbp: deps.fxFor(position.held.venue),
-      booked: (exDate) => deps.ledger.booked(position.bookId, position.held.instrument, exDate),
-    });
-    for (const booking of result.bookings) book(deps, booking);
-    report.booked.push(...result.bookings);
-    if (result.unread !== undefined) report.unread.push(unbooked(position, result.unread));
-    if (result.splitBefore !== undefined) {
-      report.splitBefore.push(unbooked(position, result.splitBefore));
-    }
-  }
+  for (const position of held) bookPosition(deps, feed, position, report);
   return { ...report, unmodelled: [] };
 }

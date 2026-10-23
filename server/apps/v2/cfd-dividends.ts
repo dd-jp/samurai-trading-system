@@ -154,8 +154,16 @@ export function heldDividends(inputs: HeldDividendInputs): HeldDividends {
     window,
   );
   if (across.kind !== 'covered') return { bookings: [], unread: readDetail(across) };
+  return bookingsAcross(inputs, window, across.dividends);
+}
+
+function bookingsAcross(
+  inputs: HeldDividendInputs,
+  window: DividendWindow,
+  dividends: readonly EodhdDividend[],
+): HeldDividends {
   const bookings: CfdDividendBooking[] = [];
-  for (const [exDate, perShare] of perShareByDate(across.dividends)) {
+  for (const [exDate, perShare] of perShareByDate(dividends)) {
     if (inputs.booked(exDate)) continue;
     if (splitBefore(inputs, window, exDate)) return { bookings, splitBefore: exDate };
     bookings.push(bookingOf(inputs, exDate, perShare));
