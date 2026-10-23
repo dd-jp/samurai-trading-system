@@ -204,6 +204,7 @@ export interface Arm2UkPoolVerdictInput {
   readonly trialsCounted: number;
   readonly lossCapGbp: number;
   readonly folds?: number | undefined;
+  readonly embargo?: number | undefined;
 }
 
 export interface Arm2UkPoolVerdict {

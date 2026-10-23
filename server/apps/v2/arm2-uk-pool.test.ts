@@ -447,6 +447,7 @@ describe('arm2UkPoolVerdict (#2143)', () => {
     expect(verdict.pbo).toBe(pairPbo(swapping));
     expect(verdict.pbo).toBeGreaterThan(0);
     expect(verdict.pbo).toBeLessThanOrEqual(1);
+    expect(() => arm2UkPoolVerdict({ ...swapping, embargo: 1 })).toThrow(/embargo 1/);
   });
 
   it('refuses series that do not cover the dates and a split leaving one side short', () => {
@@ -553,7 +554,7 @@ describe('arm2UkPoolPassRule (#2143)', () => {
     expect(rule.pass).toBe(pass);
   });
 
-  it('reads the 2x gates off the 1x run, not the 2x one', () => {
+  it('reads DSR and PBO off the 1x run, not the 2x one', () => {
     const rule = arm2UkPoolPassRule(
       verdictAt(1, 0.5),
       verdictAt(0.9, 0.5, { deflatedSharpe: 0, pbo: 1 }),

@@ -635,6 +635,8 @@ async function arm2UkPoolPass(
     outOfSampleFrom: window.outOfSampleFrom,
     trialsCounted: ledger.count(),
     lossCapGbp: BACKTEST_LOSS_CAP_GBP * simulation.trialsShare,
+    folds: VOL_TARGET_TRIAL_FOLDS,
+    embargo: VOL_TARGET_TRIAL_EMBARGO,
   });
   return { dates: simulation.dates, verdict };
 }
