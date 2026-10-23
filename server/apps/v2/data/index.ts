@@ -37,8 +37,19 @@ export {
   SAXO_CFD_SPREAD,
   saxoCfdBorrow,
 } from './cfd-tariff.js';
-export type { EodhdExchange, EodhdSplit, SplitsRead, SplitsWindow } from './eodhd-client.js';
+export type { DividendReadPurpose } from './dividend-reads.js';
+export { SqliteDividendReads } from './dividend-reads.js';
+export type {
+  DividendsRead,
+  EodhdDividend,
+  EodhdExchange,
+  EodhdSplit,
+  SplitsRead,
+  SplitsWindow,
+} from './eodhd-client.js';
 export { EodhdClient, EodhdRequestError, eodhdSymbol } from './eodhd-client.js';
+export type { DividendsAcross } from './eodhd-dividends.js';
+export { dividendsAcross } from './eodhd-dividends.js';
 export { splitsAcross } from './eodhd-splits.js';
 export type { FxObservation } from './fx.js';
 export {
@@ -77,6 +88,7 @@ export {
   PENCE_PER_POUND,
   ukStockKey,
   ukStockScreenCounts,
+  ukStockTidm,
 } from './uk-stocks.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
 export {

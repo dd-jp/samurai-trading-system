@@ -340,6 +340,7 @@ export async function reconcileBooks(
 }
 
 export type SyncThrowEvent =
+  | 'v2_cfd_dividend_threw'
   | 'v2_pending_resolve_threw'
   | 'v2_fill_sweep_threw'
   | 'v2_split_rescale_threw'

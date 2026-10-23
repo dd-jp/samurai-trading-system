@@ -97,6 +97,8 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'v2_split_reads',
     'v2_split_checks',
     'v2_split_clears',
+    'v2_dividend_reads',
+    'v2_cfd_dividends',
   ],
   verdict: ['verdict_log'],
 };

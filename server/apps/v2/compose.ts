@@ -10,8 +10,10 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore } from '../../shared/store/index.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import { SqliteCashInLieuBooks } from './cash-in-lieu-books.js';
+import { SqliteCfdDividends } from './cfd-dividends.js';
 import type { CycleDeps } from './cycle.js';
 import { isCfdVenue, type VenueSessionGate } from './data/index.js';
+import type { CfdDividendFeed } from './dividend-feed.js';
 import {
   type AlpacaBrokerClient,
   type BrokerAccess,
@@ -69,6 +71,7 @@ export interface CycleCompositionOptions {
   // Replay only: answers every broker call from the journal, so no venue adapter is built
   readonly brokerAccess?: ((pricing: FillPricing) => BrokerAccess) | undefined;
   readonly splitFeed?: SplitFeed | undefined;
+  readonly dividendFeed?: CfdDividendFeed | undefined;
 }
 
 export interface CycleComposition extends CycleDeps {
@@ -187,5 +190,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     runStartedAt: options.runStartedAt,
     atomically: (work) => v2Store.transaction(work)(),
     splitFeed: options.splitFeed,
+    dividendFeed: options.dividendFeed,
+    dividendLedger: new SqliteCfdDividends(v2Store, clock),
   };
 }

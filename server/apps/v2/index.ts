@@ -49,12 +49,14 @@ import {
   newsForVenue,
   ParquetBarsSource,
   parseBoeGbpUsdCsv,
+  SqliteDividendReads,
   SqliteNewsLedger,
   SqliteSplitReads,
   TABLE_VENUE_SESSIONS,
   type VenueRouter,
   type VenueSessionGate,
 } from './data/index.js';
+import { type CfdDividendFeed, liveDividendFeed } from './dividend-feed.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { alpacaQuotesFor, saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import {
@@ -368,6 +370,18 @@ export function splitFeedFor(
   });
 }
 
+export function dividendFeedFor(
+  options: V2RootOptions,
+  db: StoreHandle,
+  clock: Clock,
+): CfdDividendFeed | undefined {
+  const apiKey = options.eodhdApiKey?.trim() ?? '';
+  if (options.dryRun || apiKey === '') return undefined;
+  const eodhd = new EodhdClient(apiKey, options.splitFetch ?? fetch, () => clock.now());
+  const reads = new SqliteDividendReads(guardedStore(db, 'v2'));
+  return liveDividendFeed({ eodhd, reads, clock }, options.tradingDate);
+}
+
 function brokerModeFor(options: V2RootOptions): BrokerMode {
   return options.samuraiMode === 'live' ? 'live' : 'paper';
 }
@@ -666,6 +680,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     venueSessions: venueSessionsFor(options),
     runStartedAt: options.runStartedAt,
     splitFeed: splitFeedFor(options, db, clock),
+    dividendFeed: dividendFeedFor(options, db, clock),
   });
   const lease = new RunLease(db, clock);
   const quotes = quotesFor(options);

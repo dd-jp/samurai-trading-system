@@ -1,4 +1,4 @@
-import type { EodhdSplit, SplitsRead } from './eodhd-client.js';
+import type { EodhdSplit, SplitsRead, SplitsWindow } from './eodhd-client.js';
 import { addDays } from './macro-calendar.js';
 
 export type SplitsAcross =
@@ -8,17 +8,21 @@ export type SplitsAcross =
 
 const CONFLICT = Symbol('conflict');
 
+export interface DatedRead extends SplitsWindow {
+  readonly asOf: string;
+}
+
 // asOf is a UTC date, so a read made before that day's session cannot vouch for it; nor for any later day
-export function coverageEnd(read: SplitsRead): string {
+export function coverageEnd(read: DatedRead): string {
   const lastWholeDay = addDays(read.asOf, -1);
   return lastWholeDay < read.to ? lastWholeDay : read.to;
 }
 
-function covers(read: SplitsRead, date: string): boolean {
+export function covers(read: DatedRead, date: string): boolean {
   return read.from <= date && date <= coverageEnd(read);
 }
 
-function firstUncovered(reads: readonly SplitsRead[], start: string): string {
+export function firstUncovered(reads: readonly DatedRead[], start: string): string {
   let cursor = start;
   for (const read of [...reads].sort((a, b) => a.from.localeCompare(b.from))) {
     if (read.from > cursor) break;

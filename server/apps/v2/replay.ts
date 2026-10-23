@@ -17,11 +17,13 @@ import {
   type CfdCatalogue,
   journalledNewsSource,
   quotePerGbp,
+  SqliteDividendReads,
   SqliteNewsLedger,
   SqliteSplitReads,
   TABLE_VENUE_SESSIONS,
   type VenueSessionGate,
 } from './data/index.js';
+import { journalledDividendFeed } from './dividend-feed.js';
 import { brokerAccessFor } from './execution/index.js';
 import {
   decisionSleeves,
@@ -447,6 +449,7 @@ function replayComposition(replay: ReplayCycle): CycleComposition {
       journalledSplitBlocks(db, new SqliteSplitChecks(copy, replay.clock), tradingDate),
       tradingDate,
     ),
+    dividendFeed: journalledDividendFeed(new SqliteDividendReads(db), tradingDate),
     brokerAccess: (pricing) =>
       brokerAccessFor({
         dryRun: day.dryRun,

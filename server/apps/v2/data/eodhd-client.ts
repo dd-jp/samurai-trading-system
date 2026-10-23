@@ -1,4 +1,5 @@
 import { fetchTokenUrl } from './token-url-fetch.js';
+import { PENCE_PER_POUND } from './uk-stocks.js';
 
 export const EODHD_API_URL = 'https://eodhd.com/api';
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -20,6 +21,17 @@ export interface SplitsRead extends SplitsWindow {
   readonly symbol: string;
   readonly asOf: string;
   readonly splits: readonly EodhdSplit[];
+}
+
+export interface EodhdDividend {
+  readonly exDate: string;
+  readonly perShare: number;
+}
+
+export interface DividendsRead extends SplitsWindow {
+  readonly symbol: string;
+  readonly asOf: string;
+  readonly dividends: readonly EodhdDividend[];
 }
 
 export class EodhdRequestError extends Error {
@@ -72,13 +84,75 @@ export function parseSplitsBody(body: unknown, window: SplitsWindow): readonly E
   return splits;
 }
 
-export function splitsUrl(apiKey: string, symbol: string, window: SplitsWindow): URL {
-  const url = new URL(`${EODHD_API_URL}/splits/${encodeURIComponent(symbol)}`);
+// GBX and GBp are pence; any other currency on an LSE symbol, or a US one not in USD, cannot be
+// put against a position quoted in GBP or USD
+const QUOTE_UNITS_PER_CURRENCY: Readonly<Record<EodhdExchange, Readonly<Record<string, number>>>> =
+  {
+    LSE: { GBP: 1, GBX: PENCE_PER_POUND, GBp: PENCE_PER_POUND },
+    US: { USD: 1 },
+  };
+
+function exchangeOfSymbol(symbol: string): EodhdExchange {
+  const suffix = symbol.slice(symbol.lastIndexOf('.') + 1);
+  if (suffix !== 'LSE' && suffix !== 'US') throw new EodhdRequestError('bad_symbol');
+  return suffix;
+}
+
+function dividendRecord(raw: unknown): Record<string, unknown> {
+  return typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+}
+
+// unadjustedValue is the cash per share as the share traded on its ex-date; value is restated
+// for every later split, so a history read years on would misprice any name that split since
+function parseDividend(raw: unknown, exchange: EodhdExchange): EodhdDividend {
+  const record = dividendRecord(raw);
+  const amount = record.unadjustedValue;
+  if (!isIsoDate(record.date) || typeof amount !== 'number' || !(amount > 0)) {
+    throw new EodhdRequestError('bad_body');
+  }
+  const units = QUOTE_UNITS_PER_CURRENCY[exchange][String(record.currency)];
+  if (units === undefined) throw new EodhdRequestError('bad_currency');
+  return { exDate: record.date, perShare: amount / units };
+}
+
+function hasRepeatedRecord(body: readonly unknown[]): boolean {
+  const seen = new Set(body.map((raw) => JSON.stringify(dividendRecord(raw))));
+  return seen.size < body.length;
+}
+
+// A regular and a special dividend can share an ex-date and are both paid, so they stay two
+// entries; a record repeated field for field is a feed duplicate and the read is refused
+export function parseDividendsBody(
+  body: unknown,
+  symbol: string,
+  window: SplitsWindow,
+): readonly EodhdDividend[] {
+  const exchange = exchangeOfSymbol(symbol);
+  if (!Array.isArray(body) || hasRepeatedRecord(body)) throw new EodhdRequestError('bad_body');
+  const dividends = body
+    .map((raw) => parseDividend(raw, exchange))
+    .sort((a, b) => a.exDate.localeCompare(b.exDate));
+  if (dividends.some(({ exDate }) => exDate < window.from || exDate > window.to)) {
+    throw new EodhdRequestError('out_of_window');
+  }
+  return dividends;
+}
+
+function windowUrl(apiKey: string, path: string, symbol: string, window: SplitsWindow): URL {
+  const url = new URL(`${EODHD_API_URL}/${path}/${encodeURIComponent(symbol)}`);
   url.searchParams.set('from', window.from);
   url.searchParams.set('to', window.to);
   url.searchParams.set('fmt', 'json');
   url.searchParams.set('api_token', apiKey);
   return url;
+}
+
+export function dividendsUrl(apiKey: string, symbol: string, window: SplitsWindow): URL {
+  return windowUrl(apiKey, 'div', symbol, window);
+}
+
+export function splitsUrl(apiKey: string, symbol: string, window: SplitsWindow): URL {
+  return windowUrl(apiKey, 'splits', symbol, window);
 }
 
 export class EodhdClient {
@@ -88,19 +162,36 @@ export class EodhdClient {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  async #body(url: URL): Promise<unknown> {
+    const response = await fetchTokenUrl(this.fetchImpl, url);
+    if (typeof response === 'string') throw new EodhdRequestError(response);
+    if (!response.ok) throw new EodhdRequestError(`http_${response.status}`);
+    return response.json().catch(() => undefined);
+  }
+
   async splits(symbol: string, window: SplitsWindow): Promise<SplitsRead> {
     assertWindow(window);
     const asOf = this.now().toISOString().slice(0, 10);
-    const response = await fetchTokenUrl(this.fetchImpl, splitsUrl(this.apiKey, symbol, window));
-    if (typeof response === 'string') throw new EodhdRequestError(response);
-    if (!response.ok) throw new EodhdRequestError(`http_${response.status}`);
-    const body: unknown = await response.json().catch(() => undefined);
+    const body = await this.#body(splitsUrl(this.apiKey, symbol, window));
     return {
       symbol,
       from: window.from,
       to: window.to,
       asOf,
       splits: parseSplitsBody(body, window),
+    };
+  }
+
+  async dividends(symbol: string, window: SplitsWindow): Promise<DividendsRead> {
+    assertWindow(window);
+    const asOf = this.now().toISOString().slice(0, 10);
+    const body = await this.#body(dividendsUrl(this.apiKey, symbol, window));
+    return {
+      symbol,
+      from: window.from,
+      to: window.to,
+      asOf,
+      dividends: parseDividendsBody(body, symbol, window),
     };
   }
 }
