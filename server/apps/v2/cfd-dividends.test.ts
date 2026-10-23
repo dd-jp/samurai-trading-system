@@ -132,6 +132,21 @@ describe('CFD dividend booking rule', () => {
     expect(amounts({ ...exDate, held: position('saxo_cfd_gbp', 100, '2026-06-05') })).toEqual([]);
   });
 
+  it('opens the window at the booking date when the book last marked before the position opened', () => {
+    const dividends = [
+      { exDate: '2026-06-03', perShare: 0.01 },
+      { exDate: '2026-06-05', perShare: 0.02 },
+    ];
+    expect(
+      amounts({
+        tradingDate: '2026-06-06',
+        lastMarkDate: '2026-06-01',
+        held: position('saxo_cfd_gbp', 100, '2026-06-05'),
+        source: source(dividends),
+      }),
+    ).toEqual([2]);
+  });
+
   it('books each ex-date once, after the bar the last mark took and through the bar marked now', () => {
     const dividends = [
       { exDate: '2026-06-02', perShare: 0.01 },
