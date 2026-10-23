@@ -1060,6 +1060,10 @@ David ruled G11 one question at a time in chat on 2026-10-22, each recorded on [
 5. **Trial budget ([#1717](https://github.com/dd-jp/samurai-trading-system/issues/1717#issuecomment-6343789288)):** "At most 1 per run". Each run ranks its candidates and only the top one becomes a counted trial; the rest are recorded as research output, uncounted.
 6. **Start ([#1717](https://github.com/dd-jp/samurai-trading-system/issues/1717#issuecomment-6343794172)):** "After first 25 closed". #2146 and #2147 are offline and may be built now; the first run fires at 25 closed debate trades. Lessons reach a prompt only through #2148, as a counted trial against a no-lessons shadow.
 
+## Ruling of 2026-10-23 — SIM drill scope for #1400
+
+David ruled in chat on 2026-10-23, recorded on [#1400](https://github.com/dd-jp/samurai-trading-system/issues/1400#issuecomment-6369334572): "AC3+AC6 now, AC4 later (Recommended)". AC3 and AC6 are built as a cash ETF leg of the SIM drill, run with `npm run v2:sim-cfd-stop-drill -- --cash-etf ISF` (off unless named). The leg refuses a line whose live `IsComplex` is anything but `false`. AC6 is a paired check through the real `V2RiskGate`: an unbreached book is approved, and the same entry from a book that `LossBudget.markClose` has halted past its loss cap is refused, with no SIM trade request and no new order activity during the refused check. AC3 is the control's order: a Market Buy of one whole share whose `ExternalReference` is the #1510 wire key, its fill read back through `SaxoHttpBrokerClient.listOrderActivities` and matched on order id and wire key, then sold flat. AC4, the reconcile, waits until a real Saxo cash adapter is routed in `create-executor.ts` (#2107 item 2), since a drill reconciling against a store it wrote itself proves nothing. No SIM order is placed until David logs in to SIM and says yes at run time, in LSE hours, with the SIM account flat.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).
