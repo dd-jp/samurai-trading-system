@@ -6,7 +6,6 @@ import type {
   EntryRequest,
   LossBudgetState,
   MarketData,
-  RiskApprovedOrder,
   SleeveDecision,
   SleeveSpec,
   V2Bar,
@@ -261,59 +260,75 @@ export function countPlacements(inner: CashEtfBroker): CountedBroker {
   };
 }
 
+interface Sent {
+  readonly request: SaxoOrderRequest;
+  readonly placement: SaxoOrderPlacement;
+  readonly since: Date;
+}
+
 async function breachedCheck(
   leg: CashEtfLeg,
   counted: CountedBroker,
-  refuse: () => EntryApproval,
-): Promise<{ approval: EntryApproval; trades: number; activities: number }> {
+  submit: () => Promise<Sent | undefined>,
+): Promise<{ sent: Sent | undefined; trades: number; activities: number }> {
   const since = new Date(leg.now().getTime() - 60_000);
   const trades = () => leg.gateway.tradeRequests + counted.placed();
   const tradesBefore = trades();
   const rowsBefore = (await counted.broker.listOrderActivities(since)).length;
-  const approval = refuse();
+  const sent = await submit();
   const rowsAfter = (await counted.broker.listOrderActivities(since)).length;
-  return { approval, trades: trades() - tradesBefore, activities: rowsAfter - rowsBefore };
+  return { sent, trades: trades() - tradesBefore, activities: rowsAfter - rowsBefore };
+}
+
+// Both books go through this one path, so the breached proof counts the path that places the
+// control's order; the drill sends one share of what the gate sized
+async function submitApproved(
+  leg: CashEtfLeg,
+  prepared: Prepared,
+  broker: CashEtfBroker,
+  request: EntryRequest,
+  approval: EntryApproval,
+): Promise<Sent | undefined> {
+  const order = approval.order;
+  if (order === undefined) return undefined;
+  const matches =
+    order.kind === 'bracket_entry' &&
+    order.side === 'buy' &&
+    order.instrument === request.decision.instrument &&
+    order.size >= DRILL_SHARES;
+  if (!matches || !consumeApproval(order)) leg.fail('cash_etf_control_refused');
+  return send(leg, prepared, { broker, side: 'Buy', clientOrderId: order.clientOrderId });
 }
 
 async function gatePair(
   leg: CashEtfLeg,
-  record: InstrumentEvidence,
   prepared: Prepared,
   counted: CountedBroker,
-): Promise<RiskApprovedOrder> {
-  const { request, capital } = entryRequest(leg, record, prepared);
+  entry: { request: EntryRequest; capital: CapitalYear },
+): Promise<Sent> {
+  const { request, capital } = entry;
   const unbreached = markedBook(capital, capital.startCapitalGbp);
   const breached = markedBook(capital, capital.startCapitalGbp - capital.lossCapGbp - 1);
   const control = approve(request, capital, unbreached);
-  const refused = await breachedCheck(leg, counted, () => approve(request, capital, breached));
+  const refusal = approve(request, capital, breached);
+  const refused = await breachedCheck(leg, counted, () =>
+    submitApproved(leg, prepared, counted.broker, request, refusal),
+  );
   const gate = {
     tradingDate: request.tradingDate,
     control: gateCheck(control, unbreached),
-    breached: gateCheck(refused.approval, breached),
+    breached: gateCheck(refusal, breached),
     tradeRequestsDuringBreach: refused.trades,
     newActivitiesDuringBreach: refused.activities,
   };
   prepared.cash.gate = gate;
-  leg.note('drill_cash_etf_gate_pair', { symbol: record.symbol, ...gate });
-  if (refused.approval.order !== undefined || !breached.halted)
+  leg.note('drill_cash_etf_gate_pair', { symbol: request.decision.instrument, ...gate });
+  if (refused.sent !== undefined || refused.trades + refused.activities !== 0)
+    leg.fail('cash_etf_breach_sent_request');
+  if (refusal.order !== undefined || refusal.refusal !== 'zero_size' || !breached.halted)
     leg.fail('cash_etf_breach_not_refused');
-  if (refused.trades + refused.activities !== 0) leg.fail('cash_etf_breach_sent_request');
-  return approvedBuy(leg, request, control);
-}
-
-function approvedBuy(
-  leg: CashEtfLeg,
-  request: EntryRequest,
-  control: EntryApproval,
-): RiskApprovedOrder {
-  const order = control.order;
-  const matches =
-    order?.kind === 'bracket_entry' &&
-    order.side === 'buy' &&
-    order.instrument === request.decision.instrument &&
-    control.size > 0;
-  if (!matches || !consumeApproval(order)) leg.fail('cash_etf_control_refused');
-  return order;
+  const sent = await submitApproved(leg, prepared, counted.broker, request, control);
+  return sent ?? leg.fail('cash_etf_control_refused');
 }
 
 function marketOrder(prepared: Prepared, side: SaxoBuySell, reference: string): SaxoOrderRequest {
@@ -385,14 +400,12 @@ async function readFill(
   return leg.fail(seen.length > 0 ? 'cash_etf_fill_unmatched' : 'cash_etf_fill_not_read');
 }
 
-async function trade(
+async function send(
   leg: CashEtfLeg,
-  record: InstrumentEvidence,
   prepared: Prepared,
   ticket: { broker: CashEtfBroker; side: SaxoBuySell; clientOrderId: string },
-): Promise<SaxoOrderActivity> {
-  const reference = saxoWireReference(ticket.clientOrderId);
-  const request = marketOrder(prepared, ticket.side, reference);
+): Promise<Sent> {
+  const request = marketOrder(prepared, ticket.side, saxoWireReference(ticket.clientOrderId));
   const since = new Date(leg.now().getTime() - 60_000);
   const placement = await place(
     leg,
@@ -400,9 +413,19 @@ async function trade(
     request,
     `cash_etf_${ticket.side.toLowerCase()}_rejected`,
   );
+  return { request, placement, since };
+}
+
+async function settle(
+  leg: CashEtfLeg,
+  record: InstrumentEvidence,
+  prepared: Prepared,
+  ticket: { broker: CashEtfBroker; sent: Sent },
+): Promise<SaxoOrderActivity> {
+  const { request, placement, since } = ticket.sent;
   const fill = await readFill(leg, prepared.cash, ticket.broker, {
     orderId: placement.OrderId,
-    reference,
+    reference: request.ExternalReference,
     since,
   });
   leg.note('drill_cash_etf_filled', { symbol: record.symbol, fill });
@@ -424,44 +447,47 @@ async function awaitHolding(
   if (held === undefined) leg.fail(missing);
 }
 
-async function buyThenFlatten(
+async function settleThenFlatten(
   leg: CashEtfLeg,
   record: InstrumentEvidence,
   prepared: Prepared,
-  ticket: { broker: CashEtfBroker; clientOrderId: string },
+  ticket: { broker: CashEtfBroker; placedAt: string; sent: Sent; clientOrderId: string },
 ): Promise<void> {
   const { cash } = prepared;
-  record.amount = DRILL_SHARES;
-  const placedAt = leg.now().toISOString();
-  const entry = await trade(leg, record, prepared, { ...ticket, side: 'Buy' });
+  const entry = await settle(leg, record, prepared, ticket);
   cash.entryFill = entry;
   record.entry = {
     orderId: entry.OrderId,
     externalReference: entry.ExternalReference ?? '',
-    placedAt,
+    placedAt: ticket.placedAt,
     relatedOrderIds: [],
     fillPrice: entry.AveragePrice ?? entry.Price,
     filledAt: entry.ActivityTime,
   };
   await awaitHolding(leg, prepared.instrument, DRILL_SHARES, 'cash_etf_position_not_held');
-  const flat = `${ticket.clientOrderId}:flat`;
-  cash.exitFill = await trade(leg, record, prepared, {
-    ...ticket,
+  const exit = await send(leg, prepared, {
+    broker: ticket.broker,
     side: 'Sell',
-    clientOrderId: flat,
+    clientOrderId: `${ticket.clientOrderId}:flat`,
   });
+  cash.exitFill = await settle(leg, record, prepared, { broker: ticket.broker, sent: exit });
   await awaitHolding(leg, prepared.instrument, 0, 'drill_position_not_closed');
 }
 
 export async function drillCashEtf(leg: CashEtfLeg, record: InstrumentEvidence): Promise<void> {
+  record.outcome = 'failed';
   const prepared = await prepare(leg, record);
   if (prepared === undefined) return;
-  record.outcome = 'failed';
   const counted = countPlacements(leg.broker);
-  const order = await gatePair(leg, record, prepared, counted);
-  await buyThenFlatten(leg, record, prepared, {
+  const entry = entryRequest(leg, record, prepared);
+  record.amount = DRILL_SHARES;
+  const placedAt = leg.now().toISOString();
+  const sent = await gatePair(leg, prepared, counted, entry);
+  await settleThenFlatten(leg, record, prepared, {
     broker: counted.broker,
-    clientOrderId: order.clientOrderId,
+    placedAt,
+    sent,
+    clientOrderId: entry.request.clientOrderId,
   });
   record.outcome = 'passed';
   leg.note('drill_instrument_passed', { symbol: record.symbol, leg: 'cash-etf' });

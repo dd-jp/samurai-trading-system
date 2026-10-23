@@ -192,7 +192,7 @@ export interface SimBrokerOptions {
   readonly logger: Logger;
 }
 
-function simHttpBroker(options: SimBrokerOptions): CashEtfBroker {
+export function simHttpBroker(options: SimBrokerOptions): CashEtfBroker {
   assertSimGateway(options.baseUrl);
   const client = new SaxoHttpBrokerClient({ ...options, environment: 'sim' });
   assertSimGateway(client.baseUrl);

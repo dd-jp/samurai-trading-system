@@ -2,7 +2,9 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EntryApproval } from '../../../../contracts/index.js';
 import { TokenBucket } from '../../../shared/index.js';
+import { V2RiskGate } from '../risk/index.js';
 import type { SaxoOrderActivity, SaxoOrderRequest } from './saxo/saxo-client.js';
 import { SaxoHttpBrokerClient } from './saxo/saxo-http-client.js';
 import { StaticSaxoTokenSource } from './saxo/saxo-token-source.js';
@@ -16,7 +18,7 @@ import {
   type DrillOptions,
   runSimCfdStopDrill,
 } from './sim-cfd-stop-drill.js';
-import { type DrillDeps, main, parseDrillArgs } from './sim-cfd-stop-drill-cli.js';
+import { type DrillDeps, main, parseDrillArgs, simHttpBroker } from './sim-cfd-stop-drill-cli.js';
 
 const ACCOUNT_KEY = 'acct-key-sentinel-cash';
 const CLIENT_KEY = 'client-key-sentinel-cash';
@@ -302,6 +304,31 @@ describe('the cash ETF leg (#1400 AC3, AC6)', () => {
     expect(evidence.passed).toBe(false);
   });
 
+  it('fails the leg when a wrong gate approves the breached book, counting its placement', async () => {
+    const realApprove = V2RiskGate.prototype.approveEntry;
+    let first: EntryApproval | undefined;
+    vi.spyOn(V2RiskGate.prototype, 'approveEntry').mockImplementation(function (
+      this: V2RiskGate,
+      request,
+    ) {
+      first ??= realApprove.call(this, request);
+      return first;
+    });
+    const { evidence, record } = await drill();
+    vi.restoreAllMocks();
+    expect(record).toMatchObject({ outcome: 'failed', reason: 'cash_etf_breach_sent_request' });
+    expect(record?.cash?.gate?.tradeRequestsDuringBreach).toBe(1);
+    expect(evidence.passed).toBe(false);
+    expect(fake.positions).toEqual([]);
+  });
+
+  it('records a leg that fails before the gate as failed, not running', async () => {
+    fake.currency = 'USD';
+    const { record } = await drill();
+    expect(record).toMatchObject({ outcome: 'failed', reason: 'cash_etf_not_gbp' });
+    expect(fake.trades()).toHaveLength(0);
+  });
+
   it.each([
     ['complex', true, 'cash_etf_complex'],
     ['missing', undefined, 'cash_etf_complex'],
@@ -309,7 +336,7 @@ describe('the cash ETF leg (#1400 AC3, AC6)', () => {
   ])('refuses an IsComplex flag that is %s and places nothing', async (_label, flag, reason) => {
     fake.isComplex = flag;
     const { evidence, record } = await drill();
-    expect(record).toMatchObject({ outcome: 'running', reason });
+    expect(record).toMatchObject({ outcome: 'failed', reason });
     expect(record?.cash?.isComplex).toBe(flag);
     expect(fake.trades()).toHaveLength(0);
     expect(evidence.passed).toBe(false);
@@ -472,6 +499,22 @@ describe('placement counter', () => {
     await counted.broker.placeOrder({} as SaxoOrderRequest, 'r');
     expect(counted.placed()).toBe(1);
     expect(inner.placeOrder).toHaveBeenCalledWith({}, 'r');
+  });
+});
+
+describe('simHttpBroker', () => {
+  it.each([
+    'https://gateway.saxobank.com/openapi',
+    'https://gateway.saxobank.com/sim/openapi.evil.example',
+  ])('refuses a base URL that is not the SIM gateway: %s', (baseUrl) => {
+    expect(() =>
+      simHttpBroker({
+        baseUrl,
+        tokenSource: new StaticSaxoTokenSource(TOKEN),
+        accountKey: ACCOUNT_KEY,
+        logger: { log: () => {} },
+      }),
+    ).toThrow();
   });
 });
 
