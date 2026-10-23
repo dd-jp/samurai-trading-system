@@ -37,6 +37,7 @@ import {
 import {
   type BacktestInput,
   type BacktestResult,
+  type BacktestSimulation,
   type BacktestTrial,
   backtestSessions,
   runBacktest,
@@ -500,6 +501,23 @@ interface VolTargetTrialRun {
   readonly cfdCatalogues: CfdCatalogueArchive;
 }
 
+function pairVerdictInput(
+  simulation: BacktestSimulation,
+  window: VolTargetTrialWindow,
+  ledger: TrialLedger,
+) {
+  return {
+    dates: simulation.dates,
+    trial: simulation.trials[0] as TrialSeries,
+    baseline: simulation.benchmark,
+    outOfSampleFrom: window.outOfSampleFrom,
+    trialsCounted: ledger.count(),
+    lossCapGbp: BACKTEST_LOSS_CAP_GBP * simulation.trialsShare,
+    folds: VOL_TARGET_TRIAL_FOLDS,
+    embargo: VOL_TARGET_TRIAL_EMBARGO,
+  };
+}
+
 async function volTargetTrialPass(
   run: VolTargetTrialRun,
   costMultiple: number,
@@ -524,16 +542,7 @@ async function volTargetTrialPass(
     volTarget: VOL_TARGET_TRIAL_SIZING,
     cfdCatalogues: run.cfdCatalogues,
   });
-  const verdict = volTargetVerdict({
-    dates: simulation.dates,
-    trial: simulation.trials[0] as TrialSeries,
-    baseline: simulation.benchmark,
-    outOfSampleFrom: window.outOfSampleFrom,
-    trialsCounted: ledger.count(),
-    lossCapGbp: BACKTEST_LOSS_CAP_GBP * simulation.trialsShare,
-    folds: VOL_TARGET_TRIAL_FOLDS,
-    embargo: VOL_TARGET_TRIAL_EMBARGO,
-  });
+  const verdict = volTargetVerdict(pairVerdictInput(simulation, window, ledger));
   return { dates: simulation.dates, verdict };
 }
 
@@ -628,14 +637,7 @@ async function arm2UkPoolPass(
     cfdCatalogues: run.cfdCatalogues,
     ukStockCfdOpen: arms.ukStockCfdOpen,
   });
-  const verdict = arm2UkPoolVerdict({
-    dates: simulation.dates,
-    trial: simulation.trials[0] as TrialSeries,
-    baseline: simulation.benchmark,
-    outOfSampleFrom: window.outOfSampleFrom,
-    trialsCounted: ledger.count(),
-    lossCapGbp: BACKTEST_LOSS_CAP_GBP * simulation.trialsShare,
-  });
+  const verdict = arm2UkPoolVerdict(pairVerdictInput(simulation, window, ledger));
   return { dates: simulation.dates, verdict };
 }
 

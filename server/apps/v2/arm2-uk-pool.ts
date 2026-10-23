@@ -8,9 +8,11 @@ import type { BacktestTrial } from './backtest.js';
 import {
   type BookSeries,
   deflatedSharpeOfReturns,
+  MIN_DEFLATED_SHARPE,
   SHARPE_HAIRCUT_MULTIPLIER,
   type TrialSeries,
 } from './backtest-verdict.js';
+import { type CostStress, costStress, type SignedOutcome } from './cost-stress.js';
 import {
   type BarsSource,
   type CfdCatalogue,
@@ -22,6 +24,7 @@ import {
   sessionsBefore,
   type UkStockScreens,
 } from './data/index.js';
+import { PBO_REJECT_THRESHOLD } from './evidence/index.js';
 import { PAGE_SHRINK_SLACK_BARS } from './saxo-bar-refresh.js';
 import {
   ARM2_ENTRY_THRESHOLDS,
@@ -36,7 +39,7 @@ import {
   type Parameter,
   requireSet,
 } from './signal/index.js';
-import { type ArmSummary, armSummary } from './vol-target-verdict.js';
+import { type ArmSummary, armSummary, pairPbo } from './vol-target-verdict.js';
 
 export const ARM2_UK_POOL_CANDIDATE_ID = 'arm2-uk-pool';
 // David 2026-10-15 (#2143 (a), (b)) and 2026-10-18 (window end): from the start of the ~4.7 years
@@ -200,6 +203,8 @@ export interface Arm2UkPoolVerdictInput {
   readonly outOfSampleFrom: string;
   readonly trialsCounted: number;
   readonly lossCapGbp: number;
+  readonly folds?: number | undefined;
+  readonly embargo?: number | undefined;
 }
 
 export interface Arm2UkPoolVerdict {
@@ -215,6 +220,7 @@ export interface Arm2UkPoolVerdict {
   readonly ukPool: ArmSummary;
   readonly etfOnly: ArmSummary;
   readonly deflatedSharpe: number;
+  readonly pbo: number;
 }
 
 export function arm2UkPoolVerdict(input: Arm2UkPoolVerdictInput): Arm2UkPoolVerdict {
@@ -243,6 +249,7 @@ export function arm2UkPoolVerdict(input: Arm2UkPoolVerdictInput): Arm2UkPoolVerd
     ukPool: armSummary(input.trial, input.dates, split, input.lossCapGbp),
     etfOnly: armSummary(input.baseline, input.dates, split, input.lossCapGbp),
     deflatedSharpe: deflatedSharpeOfReturns(input.trial.returns, input.trialsCounted),
+    pbo: pairPbo(input),
   };
 }
 
@@ -257,7 +264,20 @@ export interface Arm2UkPoolLeg {
 export interface Arm2UkPoolPassRule {
   readonly afterHaircut: Arm2UkPoolLeg;
   readonly atDoubledCost: Arm2UkPoolLeg;
+  readonly checks: {
+    readonly deflatedSharpeAtLeast095: boolean;
+    readonly pboAtMost010: boolean;
+    readonly holdsSignAtDoubledCost: boolean;
+  };
+  readonly costStress: CostStress;
   readonly pass: boolean;
+}
+
+function ukPoolOutcome(verdict: Arm2UkPoolVerdict): SignedOutcome {
+  return {
+    sharpeOutOfSample: verdict.ukPool.sharpeOutOfSample,
+    totalReturn: verdict.ukPool.totalReturn,
+  };
 }
 
 function passRuleLeg(verdict: Arm2UkPoolVerdict): Arm2UkPoolLeg {
@@ -277,18 +297,29 @@ function passRuleLeg(verdict: Arm2UkPoolVerdict): Arm2UkPoolLeg {
 // arms at 2x modelled cost. One trial has no fold selection, so its walk-forward Sharpe is the
 // out-of-sample Sharpe past the pinned split, as the vol-target trial's verdict reads it. The
 // haircut shrinks a negative Sharpe towards zero, so each leg must beat both before and after it
-// (David 2026-10-22, #2143)
+// (David 2026-10-22, #2143). The vol-target trial's DSR, pair PBO and 2x sign-flip checks bind too
+// (David 2026-10-23, #2143); one trial, so the 1x pick priced at 2x is the 2x run's own
 export function arm2UkPoolPassRule(
   base: Arm2UkPoolVerdict,
   stressed: Arm2UkPoolVerdict,
 ): Arm2UkPoolPassRule {
   const afterHaircut = passRuleLeg(base);
   const atDoubledCost = passRuleLeg(stressed);
+  const atDoubledCostOutcome = ukPoolOutcome(stressed);
+  const stress = costStress(ukPoolOutcome(base), atDoubledCostOutcome, atDoubledCostOutcome);
+  const checks = {
+    deflatedSharpeAtLeast095: base.deflatedSharpe >= MIN_DEFLATED_SHARPE,
+    pboAtMost010: base.pbo <= PBO_REJECT_THRESHOLD,
+    holdsSignAtDoubledCost: stress.flipped.length === 0,
+  };
+  const legsBeat = [afterHaircut, atDoubledCost].every(
+    (leg) => leg.beatsBeforeHaircut && leg.beatsAfterHaircut,
+  );
   return {
     afterHaircut,
     atDoubledCost,
-    pass: [afterHaircut, atDoubledCost].every(
-      (leg) => leg.beatsBeforeHaircut && leg.beatsAfterHaircut,
-    ),
+    checks,
+    costStress: stress,
+    pass: legsBeat && Object.values(checks).every(Boolean),
   };
 }

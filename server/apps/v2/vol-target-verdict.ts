@@ -118,9 +118,14 @@ export function armSummary(
   };
 }
 
-// David 2026-10-08 (#1860): one counted trial against unscaled arm 2, so CSCV ranks the pair, the
+type PairPboInput = Pick<
+  VolTargetVerdictInput,
+  'dates' | 'trial' | 'baseline' | 'folds' | 'embargo'
+>;
+
+// David 2026-10-08 (#1860): one counted trial against its baseline, so CSCV ranks the pair, the
 // only configurations the run chooses between
-function pairPbo(input: VolTargetVerdictInput): number {
+export function pairPbo(input: PairPboInput): number {
   const ranges = foldRanges(
     input.dates.length,
     input.folds ?? WALK_FORWARD_FOLDS,
