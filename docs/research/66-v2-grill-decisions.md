@@ -1060,6 +1060,21 @@ David ruled G11 one question at a time in chat on 2026-10-22, each recorded on [
 5. **Trial budget ([#1717](https://github.com/dd-jp/samurai-trading-system/issues/1717#issuecomment-6343789288)):** "At most 1 per run". Each run ranks its candidates and only the top one becomes a counted trial; the rest are recorded as research output, uncounted.
 6. **Start ([#1717](https://github.com/dd-jp/samurai-trading-system/issues/1717#issuecomment-6343794172)):** "After first 25 closed". #2146 and #2147 are offline and may be built now; the first run fires at 25 closed debate trades. Lessons reach a prompt only through #2148, as a counted trial against a no-lessons shadow.
 
+## Rulings of 2026-10-22 — decision outcome ledger (#2146)
+
+David ruled two design questions for the ledger G11's loop reads, in chat on 2026-10-22, each recorded on [#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6344726410).
+
+1. **Writer ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6344726410)):** "(b) Post-cycle rebuild". A step after the cycle rebuilds `v2_decision_outcomes` from the journal, so `cycle.ts` is not touched (#1942); the backfill runs the same code.
+2. **Benchmark ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6345327251)):** "Index by venue". SPY for `alpaca` and `saxo_cfd_usd`, ISF for `saxo` and `saxo_cfd_gbp`, from the entry bar's open to the exit bar's close; the excess return is net of the trade's direction.
+
+3. **Simulated fill bar ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6360828584), 2026-10-23):** "Re-run simulator". A simulated fill journals no date, so the ledger dates it by the bar the cycle priced it on. A limit entry with more than one bar between its order and the fill cycle (missed cycles) is re-run through the cycle's own `simulateLimitEntry` to find its bar. `cycle.ts` stays unchanged, and the row stays pending if a split falls in the window.
+4. **Fill times ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6360841294), 2026-10-23):** "Dates + broker times". `settled_at` stays the close's cycle date, so a rebuild stays deterministic. Nullable `entry_filled_at` and `exit_filled_at` carry the broker's fill time where there is one.
+
+*Built 2026-10-22 (#2146).* Build notes (not rulings): `docs/specs/debate-sleeve-spec.md` §9 describes the table, its finality rule and the fault code. Results on the 2026-10-23 paper snapshot:
+- The rebuild settled all 29 closed trades the evidence panel counts, book by book (arm 2 11, no-macro-gate 12, primary 6), with none pending and none unmatched.
+- A second run wrote nothing.
+- Two independent rebuilds wrote identical rows. R is null for entries journalled before migration 0085, which carry no native price.
+
 ## Still open
 
 - ~~**Capital share after momentum was dropped (Session B (n)):** whether the debate sleeve keeps Q14's 30% with 70% in cash, or takes more.~~ Ruled 2026-09-25, S1: debate keeps 30%; the 70% is cash until S2 candidates pass (S4).

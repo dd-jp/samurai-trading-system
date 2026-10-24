@@ -55,6 +55,11 @@ import {
   type VenueRouter,
   type VenueSessionGate,
 } from './data/index.js';
+import {
+  formatOutcomeRebuild,
+  needsAttention,
+  rebuildDecisionOutcomes,
+} from './decision-outcomes.js';
 import type { AlpacaBrokerClient } from './execution/index.js';
 import { alpacaQuotesFor, saxoSessionRefusal, saxoTokenSecrets } from './execution/index.js';
 import {
@@ -579,8 +584,33 @@ export async function runDigestedCycle(
   if (!report.skipped) {
     journalInputDigests(cycle.faults, tradingDate, inputs);
     await readBrokerCashInLieu(cycle, tradingDate);
+    settleDecisionOutcomes(cycle, tradingDate, inputs);
   }
   return report;
+}
+
+function settleDecisionOutcomes(
+  cycle: Pick<CycleComposition, 'faults' | 'logger'>,
+  tradingDate: string,
+  inputs: DigestedInputs,
+): void {
+  try {
+    const rebuild = rebuildDecisionOutcomes(inputs.db, inputs.bars);
+    cycle.logger?.log({
+      trace_id: `v2-${tradingDate}`,
+      stage: 'v2',
+      level: needsAttention(rebuild) ? 'warn' : 'info',
+      event: 'v2_decision_outcomes',
+      message: formatOutcomeRebuild(rebuild),
+    });
+  } catch (error) {
+    cycle.faults.record({
+      kind: 'refused_cycle',
+      trading_date: tradingDate,
+      code: 'v2_decision_outcomes_failed',
+      detail: describeThrownSafely(error),
+    });
+  }
 }
 
 function journalInputDigests(
