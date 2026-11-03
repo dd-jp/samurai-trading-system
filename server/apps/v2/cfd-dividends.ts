@@ -68,6 +68,7 @@ export interface HeldDividends {
   readonly unread?: string | undefined;
   readonly splitBefore?: string | undefined;
   readonly refused?: readonly string[] | undefined;
+  readonly implausible?: readonly string[] | undefined;
 }
 
 const NONE: HeldDividends = { bookings: [] };
@@ -121,6 +122,33 @@ function perShareByDate(dividends: readonly EodhdDividend[]): Map<string, number
 interface QuotedLines {
   readonly lines: readonly EodhdDividend[];
   readonly refused: readonly string[];
+}
+
+// David 2026-11-03 (#2143 comment 6612506642): a dividend above this share of the ex-date close is
+// taken as pence labelled GBP, which would credit 100 times the cash
+export const CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE = 0.25;
+
+interface PlausibleLines {
+  readonly lines: readonly EodhdDividend[];
+  readonly implausible: readonly string[];
+}
+
+function implausibility(inputs: HeldDividendInputs, line: EodhdDividend): string | undefined {
+  const bar = inputs.market.lastBarBefore(inputs.held.instrument, addDays(line.exDate, 1));
+  if (bar === undefined) return `ex-date ${line.exDate} has no bar to bound its amount`;
+  if (line.perShare <= bar.rawClose * CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE) return undefined;
+  return `ex-date ${line.exDate} pays ${line.perShare} ${line.currency} a share, over ${CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE * 100}% of the ${bar.date} raw close ${bar.rawClose}`;
+}
+
+function plausible(inputs: HeldDividendInputs, quoted: readonly EodhdDividend[]): PlausibleLines {
+  const lines: EodhdDividend[] = [];
+  const implausible: string[] = [];
+  for (const line of quoted) {
+    const why = implausibility(inputs, line);
+    if (why === undefined) lines.push(line);
+    else implausible.push(why);
+  }
+  return { lines, implausible };
 }
 
 // David 2026-11-03 (#2143,
@@ -197,14 +225,16 @@ function bookingsAcross(
   window: DividendWindow,
   dividends: readonly EodhdDividend[],
 ): HeldDividends {
-  const { lines, refused } = inPositionQuote(inputs, dividends);
+  const quoted = inPositionQuote(inputs, dividends);
+  const { lines, implausible } = plausible(inputs, quoted.lines);
+  const unbooked = { refused: quoted.refused, implausible };
   const bookings: CfdDividendBooking[] = [];
   for (const [exDate, perShare] of perShareByDate(lines)) {
     if (inputs.booked(exDate)) continue;
-    if (splitBefore(inputs, window, exDate)) return { bookings, splitBefore: exDate, refused };
+    if (splitBefore(inputs, window, exDate)) return { bookings, splitBefore: exDate, ...unbooked };
     bookings.push(bookingOf(inputs, exDate, perShare));
   }
-  return { bookings, refused };
+  return { bookings, ...unbooked };
 }
 
 export interface CfdDividendLedger {

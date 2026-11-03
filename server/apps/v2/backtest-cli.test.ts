@@ -699,6 +699,7 @@ describe('runArm2UkPoolTrialAgainst', () => {
           short: 'gross',
           booked: 'ex_date_on_ex_date_minus_1_holding',
           other_currency: 'converted_at_mark_fx_else_line_refused',
+          line_refused_above_share_of_raw_close: 0.25,
         },
         out_of_sample_from: '2023-01-01',
         run: {
@@ -954,7 +955,7 @@ describe('candidate trial hashes', () => {
         ),
       1,
     );
-    expect(hashes, NEW_TRIAL).toEqual(['abcbd7d50593bd8b']);
+    expect(hashes, NEW_TRIAL).toEqual(['2531eabadeeb0ae0']);
   });
 
   it('#2105: makes an archived CFD catalogue inside the window a new vol-target trial', async () => {

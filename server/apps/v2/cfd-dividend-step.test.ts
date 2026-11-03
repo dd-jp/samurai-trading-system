@@ -47,14 +47,18 @@ const HELD = [
   position('VUSA', 'saxo', 50),
 ];
 
-function feed(requests: DividendRequest[][] = [], lseCurrency = 'GBP'): CfdDividendFeed {
+function feed(
+  requests: DividendRequest[][] = [],
+  lseCurrency = 'GBP',
+  lsePerShare = 0.02,
+): CfdDividendFeed {
   return {
     refresh: (asked) => {
       requests.push([...asked]);
       return Promise.resolve();
     },
     across: (instrument, _exchange, window) => {
-      const perShare = instrument === 'AAPL' ? 0.26 : 0.02;
+      const perShare = instrument === 'AAPL' ? 0.26 : lsePerShare;
       const currency = instrument === 'AAPL' ? 'USD' : lseCurrency;
       const read = { symbol: instrument, from: '2026-01-01', to: '2026-12-31', asOf: '2027-01-01' };
       const dividends = [{ exDate: '2026-06-04', perShare, currency }];
@@ -105,6 +109,21 @@ describe('bookCfdDividends', () => {
     expect(recorded.map((booking) => booking.instrument)).toEqual(['VOD_XLON', 'AAPL']);
     expect(report.booked).toEqual(recorded);
     expect(report.unmodelled).toEqual([]);
+    expect(report.refused).toEqual([]);
+    expect(report.implausible).toEqual([]);
+  });
+
+  it('reports a line over the plausibility bound as implausible and books the rest', async () => {
+    const { step, recorded } = deps({ feed: feed([], 'GBP', 5.01) });
+    const report = await bookCfdDividends(step);
+    expect(recorded.map((booking) => booking.instrument)).toEqual(['AAPL']);
+    expect(report.implausible).toEqual([
+      {
+        bookId: 'debate-primary',
+        instrument: 'VOD_XLON',
+        detail: 'ex-date 2026-06-04 pays 5.01 GBP a share, over 25% of the 2026-06-04 raw close 20',
+      },
+    ]);
     expect(report.refused).toEqual([]);
   });
 

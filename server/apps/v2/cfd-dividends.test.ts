@@ -2,27 +2,32 @@ import type { MarketData, Position, V2Bar, Venue } from '../../../contracts/inde
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import {
   CFD_DIVIDEND_LONG_WITHHOLDING,
+  CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE,
   type CfdDividendSource,
   dividendWindow,
   type HeldDividendInputs,
   heldDividends,
   SqliteCfdDividends,
 } from './cfd-dividends.js';
+import { parseDividendsBody } from './data/eodhd-client.js';
 import { addDays, type DividendsRead, dividendsAcross } from './data/index.js';
 
 const USD_PER_GBP = 1.25;
 
-function dailyBars(splitOn?: string): MarketData['barsBefore'] {
+function dailyBars(splitOn?: string, rawClose = 20): MarketData['barsBefore'] {
   return (_instrument, tradingDate, count) =>
     Array.from({ length: count }, (_, back) => {
       const date = addDays(tradingDate, back - count);
-      const raw = splitOn !== undefined && date < splitOn ? 40 : 20;
+      const raw = splitOn !== undefined && date < splitOn ? 2 * rawClose : rawClose;
       return { date, open: 20, high: 20, low: 20, close: 20, volume: 1, rawClose: raw };
     }) as V2Bar[];
 }
 
-function market(splitOn?: string): Pick<MarketData, 'lastBarBefore' | 'barsBefore'> {
-  const barsBefore = dailyBars(splitOn);
+function market(
+  splitOn?: string,
+  rawClose?: number,
+): Pick<MarketData, 'lastBarBefore' | 'barsBefore'> {
+  const barsBefore = dailyBars(splitOn, rawClose);
   return { barsBefore, lastBarBefore: (instrument, date) => barsBefore(instrument, date, 1)[0] };
 }
 
@@ -262,6 +267,103 @@ describe('CFD dividend booking rule', () => {
     );
     expect(result.bookings.map((booking) => booking.ex_date)).toEqual(['2026-06-02']);
     expect(result.splitBefore).toBe('2026-06-03');
+  });
+});
+
+// GET /api/div/VOD.LSE?fmt=json per EODHD's dividends documentation: one line declared GBX and one
+// declaring the same pence amount as GBP, on a name whose ex-date close is 75p
+const VOD_LSE_DIV_BODY = [
+  {
+    date: '2026-06-03',
+    declarationDate: '2026-05-14',
+    recordDate: '2026-06-04',
+    paymentDate: '2026-08-01',
+    period: 'Final',
+    value: 4.5,
+    unadjustedValue: 4.5,
+    currency: 'GBX',
+  },
+  {
+    date: '2026-06-04',
+    declarationDate: '2026-05-14',
+    recordDate: '2026-06-05',
+    paymentDate: '2026-08-01',
+    period: 'Final',
+    value: 4.5,
+    unadjustedValue: 4.5,
+    currency: 'GBP',
+  },
+];
+
+describe('CFD dividend plausibility bound', () => {
+  function bounded(perShare: number) {
+    return heldDividends(
+      inputs({ source: source([{ exDate: '2026-06-04', perShare, currency: 'GBP' }]) }),
+    );
+  }
+
+  it('books a dividend at a quarter of the ex-date raw close and refuses one above it', () => {
+    expect(CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE).toBe(0.25);
+    expect(bounded(5)).toMatchObject({ bookings: [{ amount_gbp: 500 }], implausible: [] });
+    expect(bounded(5.01)).toEqual({
+      bookings: [],
+      refused: [],
+      implausible: [
+        'ex-date 2026-06-04 pays 5.01 GBP a share, over 25% of the 2026-06-04 raw close 20',
+      ],
+    });
+  });
+
+  it('books the GBX line of an EODHD body as pounds and refuses the pence amount labelled GBP', () => {
+    const dividends = parseDividendsBody(VOD_LSE_DIV_BODY, 'VOD.LSE', {
+      from: '2026-01-01',
+      to: '2026-12-31',
+    });
+    const result = heldDividends(
+      inputs({
+        lastMarkDate: '2026-06-01',
+        market: market(undefined, 0.75),
+        source: source(dividends),
+      }),
+    );
+    expect(
+      result.bookings.map(({ ex_date, per_share_native, amount_gbp }) => ({
+        ex_date,
+        per_share_native,
+        amount_gbp,
+      })),
+    ).toEqual([{ ex_date: '2026-06-03', per_share_native: 0.045, amount_gbp: 4.5 }]);
+    expect(result.implausible).toEqual([
+      'ex-date 2026-06-04 pays 4.5 GBP a share, over 25% of the 2026-06-04 raw close 0.75',
+    ]);
+  });
+
+  it('bounds a line converted from another currency in the position quote', () => {
+    const usd = (perShare: number) =>
+      heldDividends(
+        inputs({ source: source([{ exDate: '2026-06-04', perShare, currency: 'USD' }]) }),
+      );
+    expect(usd(6.25).bookings).toHaveLength(1);
+    expect(usd(6.26).implausible).toHaveLength(1);
+  });
+
+  it('refuses a line with no bar on or before its ex-date to bound it', () => {
+    const base = market();
+    const result = heldDividends(
+      inputs({
+        tradingDate: '2026-06-06',
+        market: {
+          ...base,
+          lastBarBefore: (instrument, date) =>
+            date === '2026-06-05' ? undefined : base.lastBarBefore(instrument, date),
+        },
+      }),
+    );
+    expect(result).toEqual({
+      bookings: [],
+      refused: [],
+      implausible: ['ex-date 2026-06-04 has no bar to bound its amount'],
+    });
   });
 });
 

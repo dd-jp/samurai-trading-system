@@ -8464,6 +8464,47 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     ]);
   });
 
+  it('refuses, journals and logs a line over a quarter of the ex-date raw close as implausible_amount, books the rest and marks the date', async () => {
+    const base = harness([shortIsf], true);
+    const feed = dividendFeed([
+      { exDate: '2026-09-26', perShare: 1000, currency: 'GBP' },
+      { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
+    ]);
+    await runCycle(withDividends(base, feed), '2026-09-25');
+    base.setDecisions([]);
+    await runCycle(withDividends(base, feed), '2026-09-26');
+    const logs: LogEntry[] = [];
+    const deps = {
+      ...withDividends(base, feed),
+      logger: { log: (entry: LogEntry) => logs.push(entry) },
+    };
+    const report = await runCycle(deps, '2026-09-27');
+    expect(base.books.isMarked('2026-09-27')).toBe(true);
+    const refused = deps.db
+      .prepare(
+        "SELECT scope, parameter, ticket, message, book_id FROM v2_refusals WHERE parameter = 'CFD_DIVIDEND' ORDER BY refusal_id",
+      )
+      .all() as { message: string }[];
+    expect(refused).toEqual(
+      ['debate/primary', 'debate/no-macro-gate'].map((book_id) => ({
+        scope: 'cash',
+        parameter: 'CFD_DIVIDEND',
+        ticket: '#2143',
+        message: expect.stringMatching(
+          new RegExp(
+            `^${book_id} ISF: dividend not booked, implausible_amount: ex-date 2026-09-26 pays 1000 GBP a share, over 25% of the 2026-09-26 raw close `,
+          ),
+        ),
+        book_id,
+      })),
+    );
+    for (const { message } of refused) expect(report.refusals).toContain(message);
+    expect(
+      logs.filter((entry) => entry.event === 'v2_cfd_dividend_implausible_amount'),
+    ).toMatchObject(refused.map(({ message }) => ({ level: 'error', message })));
+    expect(booked(deps.db)).toMatchObject([{ ex_date: '2026-09-26' }]);
+  });
+
   it('books each ex-date once when the date is run again', async () => {
     const base = harness([shortIsf], true);
     const deps = withDividends(

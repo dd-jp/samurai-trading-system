@@ -12,7 +12,10 @@ import {
   SHARPE_HAIRCUT_MULTIPLIER,
   type TrialSeries,
 } from './backtest-verdict.js';
-import { CFD_DIVIDEND_LONG_WITHHOLDING } from './cfd-dividends.js';
+import {
+  CFD_DIVIDEND_LONG_WITHHOLDING,
+  CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE,
+} from './cfd-dividends.js';
 import { type CostStress, costStress, type SignedOutcome } from './cost-stress.js';
 import {
   type BarsSource,
@@ -146,6 +149,7 @@ export const ARM2_UK_POOL_CFD_DIVIDENDS = {
   short: 'gross',
   booked: 'ex_date_on_ex_date_minus_1_holding',
   other_currency: 'converted_at_mark_fx_else_line_refused',
+  line_refused_above_share_of_raw_close: CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE,
 } as const;
 
 const DIVIDEND_EXCHANGE: Readonly<Record<CfdInstrument['currency'], EodhdExchange>> = {
