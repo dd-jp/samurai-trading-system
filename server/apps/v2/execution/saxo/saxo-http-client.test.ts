@@ -1,3 +1,5 @@
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { TokenBucket } from '../../../../shared/index.js';
 import { recordingLogger } from '../../../../shared/recording-logger.js';
 import {
@@ -2217,5 +2219,60 @@ describe('SaxoHttpBrokerClient getInfoPrice (#1916)', () => {
     await expect(client.getInfoPrice(211, 'CfdOnStock')).rejects.toThrow(SaxoBrokerProviderError);
     const again = priceClient(body).client;
     await expect(again.getInfoPrice(211, 'CfdOnStock')).rejects.toThrow(message);
+  });
+});
+
+describe('SaxoHttpBrokerClient refuses redirects (#2165)', () => {
+  const SIM = '/sim/openapi';
+  const LIVE = '/live/openapi';
+  let server: Server;
+  let hits: string[];
+
+  async function redirectingGateway(status: number, redirectFrom: string): Promise<string> {
+    hits = [];
+    server = createServer((req, res) => {
+      const path = req.url ?? '';
+      hits.push(`${req.method} ${path}`);
+      if (path.startsWith(redirectFrom)) {
+        res.writeHead(status, { location: path.replace(SIM, LIVE) });
+        res.end();
+        return;
+      }
+      const body = path.endsWith('/accounts/me') ? ACCOUNTS : { OrderId: 'followed' };
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}${SIM}`;
+  }
+
+  function loopbackClient(baseUrl: string): SaxoHttpBrokerClient {
+    return new SaxoHttpBrokerClient({
+      accessToken: FAKE_TOKEN,
+      baseUrl,
+      retry: { maxAttempts: 1, baseDelayMs: 1, maxDelayMs: 1 },
+      rateLimiter: permissiveLimiter(),
+      logger: recordingLogger(),
+    });
+  }
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it.each([307, 308])('fails a POST answered %i, sending nothing to the target', async (status) => {
+    const baseUrl = await redirectingGateway(status, `${SIM}/trade/v2/orders`);
+
+    await expect(loopbackClient(baseUrl).placeOrder(ORDER, 'req-1')).rejects.toThrow(
+      SaxoBrokerProviderError,
+    );
+    expect(hits).toEqual([`GET ${SIM}/port/v1/accounts/me`, `POST ${SIM}/trade/v2/orders`]);
+  });
+
+  it.each([307, 308])('fails a GET answered %i, sending nothing to the target', async (status) => {
+    const baseUrl = await redirectingGateway(status, `${SIM}/port/v1/accounts/me`);
+
+    await expect(loopbackClient(baseUrl).listOpenOrders()).rejects.toThrow(SaxoBrokerProviderError);
+    expect(hits).toEqual([`GET ${SIM}/port/v1/accounts/me`]);
   });
 });

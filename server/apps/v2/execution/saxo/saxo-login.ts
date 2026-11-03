@@ -181,6 +181,7 @@ export async function verifyToken(
   try {
     response = await fetchImpl(`${gatewayBaseUrl.replace(/\/+$/, '')}/port/v1/users/me`, {
       method: 'GET',
+      redirect: 'error',
       headers: { authorization: `Bearer ${accessToken}` },
     });
   } catch {
