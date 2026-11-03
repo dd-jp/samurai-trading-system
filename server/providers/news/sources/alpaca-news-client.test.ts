@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { startRedirectingServer } from '../../../shared/http/redirecting-server.js';
 import { TokenBucket } from '../../../shared/index.js';
 import { AlpacaNewsClient } from './alpaca-news-client.js';
 
@@ -184,5 +185,24 @@ describe('AlpacaNewsClient article validation', () => {
   it('truncates a long malformed article in the error', async () => {
     const raw = { id: 1, created_at: 'bad', headline: 'x'.repeat(500) };
     await expect(fetchOne(raw)).rejects.toThrow(/malformed article: .{200}…$/);
+  });
+});
+
+describe('AlpacaNewsClient refuses redirects (#2175)', () => {
+  it.each([307, 308])('fails a GET answered %i, sending nothing to the target', async (status) => {
+    const server = await startRedirectingServer(status);
+    try {
+      const client = new AlpacaNewsClient({
+        apiKey: 'key',
+        apiSecret: 'secret',
+        baseUrl: server.origin,
+        rateLimiter: new TokenBucket({ capacity: 1_000, refillPerSecond: 1_000 }),
+      });
+      await expect(client.fetchNews(['AAPL'], START, END)).rejects.toThrow(/unexpected redirect/);
+      expect(server.hits).toHaveLength(1);
+      expect(server.hits[0]).toMatch(/^GET \/v1beta1\/news\?/);
+    } finally {
+      await server.close();
+    }
   });
 });

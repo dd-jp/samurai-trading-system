@@ -28,6 +28,7 @@ export {
   requireJsonObjectBody,
   truncateForError,
 } from './http/response-errors.js';
+export { rethrowWithCause } from './http/rethrow-with-cause.js';
 export type { RetryAttemptReport, RetryConfig } from './http/retry.js';
 export { withRetry, worstCaseFetchMs } from './http/retry.js';
 export { TOKEN_BUCKET_WAIT_LOG_THRESHOLD_MS, TokenBucket } from './http/token-bucket.js';

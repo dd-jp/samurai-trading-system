@@ -1,4 +1,4 @@
-import { credentialReader, TokenBucket } from '../../../shared/index.js';
+import { credentialReader, rethrowWithCause, TokenBucket } from '../../../shared/index.js';
 
 const DEFAULT_BASE_URL = 'https://data.alpaca.markets';
 
@@ -140,7 +140,8 @@ export class AlpacaNewsClient {
         'APCA-API-KEY-ID': this.apiKey,
         'APCA-API-SECRET-KEY': this.apiSecret,
       },
-    });
+      redirect: 'error',
+    }).catch(rethrowWithCause);
     if (!response.ok) {
       throw new Error(
         `AlpacaNewsClient: Alpaca returned HTTP ${response.status} ${response.statusText}.`,

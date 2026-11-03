@@ -1,3 +1,4 @@
+import { startRedirectingServer } from '../../../shared/http/redirecting-server.js';
 import {
   ALPACA_CORPORATE_ACTIONS_URL,
   AlpacaSplitsClient,
@@ -250,5 +251,23 @@ describe('AlpacaSplitsClient', () => {
       [],
     );
     expect(calls).toBe(20);
+  });
+});
+
+describe('AlpacaSplitsClient refuses redirects (#2175)', () => {
+  it.each([307, 308])('fails a GET answered %i, sending nothing to the target', async (status) => {
+    const server = await startRedirectingServer(status);
+    try {
+      const loopback = ((input: URL, init?: RequestInit) =>
+        fetch(`${server.origin}${input.pathname}${input.search}`, init)) as typeof fetch;
+      const client = new AlpacaSplitsClient(CREDENTIALS, loopback, () => NOW);
+      expect(await reason(client.splits('AAPL', { from: '2026-01-08', to: '2026-01-08' }))).toBe(
+        'network',
+      );
+      expect(server.hits).toHaveLength(1);
+      expect(server.hits[0]).toMatch(/^GET \/v1\/corporate-actions\?/);
+    } finally {
+      await server.close();
+    }
   });
 });

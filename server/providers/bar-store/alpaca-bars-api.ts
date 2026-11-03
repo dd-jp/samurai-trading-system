@@ -1,4 +1,10 @@
-import { delay, isString, jsonOrTextResult, readOhlcvBar } from '../../shared/index.js';
+import {
+  delay,
+  isString,
+  jsonOrTextResult,
+  readOhlcvBar,
+  rethrowWithCause,
+} from '../../shared/index.js';
 
 const ALPACA_DATA_BASE_URL = 'https://data.alpaca.markets';
 const ALPACA_REQUESTS_PER_MINUTE = 200;
@@ -167,5 +173,5 @@ export class AlpacaBarsApi {
 }
 
 async function jsonFetcher(url: string, headers: Record<string, string>): Promise<FetchResult> {
-  return jsonOrTextResult(await fetch(url, { headers }));
+  return jsonOrTextResult(await fetch(url, { headers, redirect: 'error' }).catch(rethrowWithCause));
 }

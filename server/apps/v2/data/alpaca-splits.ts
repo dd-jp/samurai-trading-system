@@ -153,6 +153,7 @@ export class AlpacaSplitsClient {
           'APCA-API-KEY-ID': this.credentials.apiKey,
           'APCA-API-SECRET-KEY': this.credentials.apiSecret,
         },
+        redirect: 'error',
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (error) {

@@ -7,7 +7,12 @@ import {
   tokenFilePath,
 } from '../../apps/v2/execution/index.js';
 import type { DailyBar, Logger } from '../../shared/index.js';
-import { isFiniteNumber, jsonOrTextResult, maskCredentials } from '../../shared/index.js';
+import {
+  isFiniteNumber,
+  jsonOrTextResult,
+  maskCredentials,
+  rethrowWithCause,
+} from '../../shared/index.js';
 import type { FetchResult } from '../bar-store/index.js';
 
 export const SAXO_CHART_PAGE = 1200;
@@ -321,11 +326,4 @@ export function jsonFetcher(timeoutMs = REQUEST_TIMEOUT_MS): SaxoFetcher {
     }).catch(rethrowWithCause);
     return jsonOrTextResult(response);
   };
-}
-
-function rethrowWithCause(error: unknown): never {
-  if (error instanceof TypeError && error.cause instanceof Error) {
-    throw new TypeError(`${error.message}: ${error.cause.message}`, { cause: error.cause });
-  }
-  throw error;
 }

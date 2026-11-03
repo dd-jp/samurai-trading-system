@@ -1,3 +1,4 @@
+import { startRedirectingServer } from '../../../../shared/http/redirecting-server.js';
 import * as shared from '../../../../shared/index.js';
 import { AlpacaBrokerProviderError, AlpacaBrokerRateLimitError } from './alpaca-broker-errors.js';
 import type { AlpacaBracketOrderRequest, AlpacaMarketOrderRequest } from './alpaca-client.js';
@@ -1479,5 +1480,30 @@ describe('AlpacaHttpBrokerClient — wire validation (#509)', () => {
       AlpacaBrokerProviderError,
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AlpacaHttpBrokerClient refuses redirects (#2175)', () => {
+  const calls: readonly [string, string, (client: AlpacaHttpBrokerClient) => Promise<unknown>][] = [
+    ['getAccount', 'GET /v2/account', (client) => client.getAccount()],
+    ['submitOrder', 'POST /v2/orders', (client) => client.submitOrder(ORDER_REQUEST)],
+    ['cancelOrder', 'DELETE /v2/orders/order-1', (client) => client.cancelOrder('order-1')],
+  ];
+
+  describe.each([307, 308])('answered %i', (status) => {
+    it.each(calls)('%s fails, sending nothing to the target', async (_name, hit, call) => {
+      const server = await startRedirectingServer(status);
+      try {
+        const client = new AlpacaHttpBrokerClient({
+          apiKey: FAKE_KEY,
+          apiSecret: FAKE_SECRET,
+          baseUrl: server.origin,
+        });
+        await expect(call(client)).rejects.toThrow(/unexpected redirect/);
+        expect(server.hits).toEqual([hit]);
+      } finally {
+        await server.close();
+      }
+    });
   });
 });
