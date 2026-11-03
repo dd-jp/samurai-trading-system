@@ -43,10 +43,17 @@ import { describeThrownSafely } from '../../shared/index.js';
 import { readBrokerCashActivities } from './cash-activities.js';
 import type { CashAnchorLedger } from './cash-anchor.js';
 import type { CashInLieuBookLedger, CashInLieuCorrection } from './cash-in-lieu-books.js';
+import {
+  bookCfdDividends,
+  type CfdDividendStepReport,
+  type UnbookedDividend,
+} from './cfd-dividend-step.js';
+import type { CfdDividendLedger } from './cfd-dividends.js';
 import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
   addDays,
   CALENDAR_REFERENCE,
+  currencyQuotePerGbp,
   fillFxOf,
   firstSessionOn,
   isFresh,
@@ -54,10 +61,13 @@ import {
   MAX_BAR_AGE_CALENDAR_DAYS,
   type MacroGateVerdict,
   macroGate,
+  type QuoteCurrency,
+  quoteCurrencyOf,
   quotePerGbp,
   type SitOutCode,
   type VenueSessionGate,
 } from './data/index.js';
+import type { CfdDividendFeed } from './dividend-feed.js';
 import {
   blockEntriesOnThrow,
   blockEntriesOnThrows,
@@ -129,6 +139,8 @@ export interface CycleDeps {
   readonly runStartedAt?: Date | undefined;
   readonly atomically?: (<T>(work: () => T) => T) | undefined;
   readonly splitFeed?: SplitFeed | undefined;
+  readonly dividendFeed?: CfdDividendFeed | undefined;
+  readonly dividendLedger?: CfdDividendLedger | undefined;
 }
 
 export interface BookReport {
@@ -230,6 +242,10 @@ type ExitReason =
 const BPS = 10_000;
 const CONTROL_TICKET = 'docs/specs/dashboard-spec.md §5';
 
+function describeUnbooked(unbooked: readonly UnbookedDividend[]): string {
+  return unbooked.map((row) => `${row.bookId} ${row.instrument} (${row.detail})`).join(', ');
+}
+
 function positionKey(bookId: string, instrument: string): string {
   return `${bookId}|${instrument}`;
 }
@@ -318,6 +334,8 @@ class Cycle {
   readonly #unrescaledBooks = new Set<string>();
   readonly #splitRequested = new Set<string>();
   readonly #exitsFrozen = new Set<string>();
+  readonly #dividendsUnread: string[] = [];
+  #dividendBookingThrew = false;
   readonly tally: Tally = {
     submitted: 0,
     simulated: 0,
@@ -338,7 +356,11 @@ class Cycle {
   ) {}
 
   fxFor(venue: Venue): number {
-    return quotePerGbp(this.deps.market, venue, this.tradingDate);
+    return this.fxForCurrency(quoteCurrencyOf(venue));
+  }
+
+  fxForCurrency(currency: QuoteCurrency): number {
+    return currencyQuotePerGbp(this.deps.market, currency, this.tradingDate);
   }
 
   markGbp(instrument: string, venue: Venue): number | undefined {
@@ -668,6 +690,118 @@ class Cycle {
     });
     this.refusals.push(message);
     this.log('error', 'v2_crossing_fill', message);
+  }
+
+  async bookCfdDividends(): Promise<void> {
+    try {
+      await this.bookCfdDividendsOnce();
+    } catch (error) {
+      this.#dividendBookingThrew = true;
+      throw error;
+    }
+  }
+
+  async bookCfdDividendsOnce(): Promise<void> {
+    const ledger = this.deps.dividendLedger;
+    if (ledger === undefined) return;
+    const report = await bookCfdDividends({
+      books: this.deps.books,
+      bookIds: this.deps.registry
+        .ids()
+        .flatMap((id) => this.deps.books.forSleeve(id))
+        .map((book) => book.id),
+      market: this.deps.market,
+      feed: this.deps.dividendFeed,
+      ledger,
+      tradingDate: this.tradingDate,
+      fxFor: (currency) => this.fxForCurrency(currency),
+      atomically: (work) => this.atomically(work),
+    });
+    this.reportCfdDividends(report);
+  }
+
+  reportCfdDividends(report: CfdDividendStepReport): void {
+    this.logCfdDividendBookings(report);
+    this.refuseUnbookedDividends(report);
+    for (const unbooked of report.unread) this.#dividendsUnread.push(describeUnbooked([unbooked]));
+    if (this.#dividendsUnread.length > 0) {
+      const message = `CFD dividend cash unread for ${this.#dividendsUnread.join('; ')}`;
+      this.log('error', 'v2_cfd_dividend_unread', message);
+      throw new Error(message);
+    }
+  }
+
+  logCfdDividendBookings(report: CfdDividendStepReport): void {
+    for (const booking of report.booked) {
+      this.log(
+        'info',
+        'v2_cfd_dividend_booked',
+        `${booking.book_id} ${booking.instrument}: ex-date ${booking.ex_date} dividend ${booking.amount_gbp} GBP on qty ${booking.qty}`,
+      );
+    }
+    if (report.unmodelled.length > 0) {
+      this.log(
+        'warn',
+        'v2_cfd_dividend_feed_unset',
+        `CFD dividend cash not booked for ${describeUnbooked(report.unmodelled)}: the EODHD dividend feed is unset`,
+      );
+    }
+  }
+
+  refuseUnbookedDividends(report: CfdDividendStepReport): void {
+    for (const unbooked of report.splitBefore) this.refuseSplitDividend(unbooked);
+    for (const unbooked of report.refused) this.refuseDividendCurrency(unbooked);
+    for (const unbooked of report.implausible) this.refuseDividendAmount(unbooked);
+    for (const unbooked of report.unverifiable) this.refuseDividendHolding(unbooked);
+  }
+
+  refuseSplitDividend(unbooked: UnbookedDividend): void {
+    const message = `${unbooked.bookId} ${unbooked.instrument}: dividend from ex-date ${unbooked.detail} not booked, a split precedes it since the last mark and the held qty is not in its units`;
+    this.refuseDividend(unbooked, message, 'v2_cfd_dividend_split_refused');
+  }
+
+  refuseDividendCurrency(unbooked: UnbookedDividend): void {
+    const message = `${unbooked.bookId} ${unbooked.instrument}: dividend on ${unbooked.detail} not booked, no mark FX converts it`;
+    this.refuseDividend(unbooked, message, 'v2_cfd_dividend_currency_refused');
+  }
+
+  refuseDividendAmount(unbooked: UnbookedDividend): void {
+    const message = `${unbooked.bookId} ${unbooked.instrument}: dividend not booked, implausible_amount: ${unbooked.detail}`;
+    this.refuseDividend(unbooked, message, 'v2_cfd_dividend_implausible_amount');
+  }
+
+  refuseDividendHolding(unbooked: UnbookedDividend): void {
+    const message = `${unbooked.bookId} ${unbooked.instrument}: dividend not booked, holding_unverifiable: ${unbooked.detail}, so the journal cannot vouch for the ex-date−1 holding (#2171)`;
+    this.refuseDividend(unbooked, message, 'v2_cfd_dividend_holding_unverifiable');
+  }
+
+  refuseDividend(unbooked: UnbookedDividend, message: string, event: string): void {
+    this.deps.journal.recordRefusal({
+      trading_date: this.tradingDate,
+      scope: 'cash',
+      parameter: 'CFD_DIVIDEND',
+      ticket: '#2143',
+      message,
+      book_id: unbooked.bookId,
+      instrument: unbooked.instrument,
+    });
+    this.refusals.push(message);
+    this.log('error', event, message);
+  }
+
+  refuseMarkIfDividendUnread(): void {
+    if (this.#dividendsUnread.length === 0) return;
+    throw new Error(
+      `CFD dividend cash unread for ${this.#dividendsUnread.join('; ')}; the date stays unmarked for a retry`,
+    );
+  }
+
+  // An unread read sets the flag too, so refuseMarkIfDividendUnread runs first to keep its refusal
+  refuseMarkIfDividendBookingThrew(): void {
+    if (!this.#dividendBookingThrew) return;
+    const message = 'CFD dividend booking threw; the date stays unmarked for a retry';
+    this.log('error', 'v2_cfd_dividend_unmarked', message);
+    throw new Error(message);
   }
 
   // A position whose rescale threw keeps its pre-split qty and levels: an exit on them trades the
@@ -2493,6 +2627,11 @@ interface SyncStep extends ThrowFailure {
 // fillSimulatedEntries is not a guarded step: a fill quote error must stop the cycle (#1849)
 const syncSteps = (): readonly SyncStep[] => [
   {
+    event: 'v2_cfd_dividend_threw',
+    what: 'CFD dividend booking',
+    run: (cycle) => cycle.bookCfdDividends(),
+  },
+  {
     event: 'v2_pending_resolve_threw',
     what: 'pending order resolve',
     run: (cycle) => cycle.resolvePendingOrders(),
@@ -2616,6 +2755,8 @@ async function runUnmarked(
   }
   await sweepFillsBeforeMarks(deps, cycle, tradingDate);
   cycle.refuseMarkIfRescaleThrew();
+  cycle.refuseMarkIfDividendUnread();
+  cycle.refuseMarkIfDividendBookingThrew();
   const bookReports = await cycle.markAll(books);
   refusals.push(...cycle.refusals);
   const { tally } = cycle;

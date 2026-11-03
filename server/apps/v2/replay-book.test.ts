@@ -587,6 +587,88 @@ describe('replay of cash in lieu book-cash corrections (#2001)', () => {
   });
 });
 
+describe('replay of CFD dividend cash (#2143)', () => {
+  const clock = new SimulatedClock(new Date('2026-10-05T07:30:00.000Z'));
+  const DAY = '2026-10-05';
+  const MARKED = `${DAY}T21:00:00.000Z`;
+  const KEY = 'debate/primary|ISF|2026-10-02';
+
+  function journalWith(dividends: readonly [string, string, number][]): BetterSqlite3.Database {
+    const db = migratedMemoryStore();
+    new CapitalConfigStore(db, clock).setYear(2026, 2_000, 1_500);
+    db.prepare(
+      `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+       VALUES ('debate/primary', 'debate', 'primary', 600, 600, 'now')`,
+    ).run();
+    const insert = db.prepare(
+      `INSERT INTO v2_cfd_dividends (book_id, trading_date, instrument, venue, client_order_id,
+         ex_date, qty, per_share_native, withholding, fx_quote_per_gbp, amount_gbp, fills_before,
+         recorded_at)
+       VALUES ('debate/primary', ?, 'ISF', 'saxo_cfd_gbp', 'short-1', ?, -3, ?, 0, 1, ?, 0, ?)`,
+    );
+    for (const [date, exDate, perShare] of dividends) {
+      insert.run(date, exDate, perShare, -3 * perShare, `${date}T07:31:00.000Z`);
+    }
+    db.prepare("UPDATE schema_migrations SET applied_at = '2026-01-01T00:00:00.000Z'").run();
+    return db;
+  }
+
+  function compare(journal: BetterSqlite3.Database, replayed: BetterSqlite3.Database) {
+    const { divergences } = tradingDivergences({
+      journal,
+      replayed,
+      tradingDate: DAY,
+      markedAt: MARKED,
+      startedAt: `${DAY}T07:30:00.000Z`,
+    });
+    replayed.close();
+    return divergences;
+  }
+
+  it('rebuilds book cash from the dividends booked before the day, never a later one', () => {
+    const db = journalWith([
+      ['2026-10-02', '2026-10-01', 0.25],
+      [DAY, '2026-10-02', 5],
+    ]);
+    const copy = rewoundCopy(db, DAY, `${DAY}T07:30:00.000Z`);
+    db.close();
+    const books = new PaperBooks(copy, clock, new CapitalConfigStore(copy, clock), DAY, [
+      { id: 'debate', spec: DEBATE_SLEEVE_SPEC },
+    ]);
+    rebuildBooks({
+      copy,
+      books,
+      market: {
+        lastBarBefore: () => undefined,
+        barsBefore: () => [],
+        gbpUsdAtYearStart: () => 1.25,
+      },
+      venueSessions: OPEN_EVERY_DAY,
+    });
+    expect(books.cash('debate/primary')).toBe(600 - 0.75);
+    copy.close();
+  });
+
+  it('holds a day to each dividend it booked and names one the replay did not book', () => {
+    const journal = journalWith([[DAY, '2026-10-02', 0.25]]);
+    expect(compare(journal, journalWith([[DAY, '2026-10-02', 0.25]]))).toEqual([]);
+    expect(compare(journal, journalWith([[DAY, '2026-10-02', 0.5]]))).toEqual([
+      {
+        kind: 'row_field',
+        stage: 'dividends',
+        key: KEY,
+        field: 'per_share_native',
+        journalled: 0.25,
+        replayed: 0.5,
+      },
+    ]);
+    expect(compare(journal, journalWith([]))).toEqual([
+      { kind: 'row_missing', stage: 'dividends', key: KEY },
+    ]);
+    journal.close();
+  });
+});
+
 describe('journalledDay', () => {
   it('takes the mode from the day orders, and from the rest of the store on a day with none', () => {
     const db = migratedMemoryStore();

@@ -37,8 +37,18 @@ export {
   SAXO_CFD_SPREAD,
   saxoCfdBorrow,
 } from './cfd-tariff.js';
-export type { EodhdExchange, EodhdSplit, SplitsRead, SplitsWindow } from './eodhd-client.js';
+export { SqliteDividendReads } from './dividend-reads.js';
+export type {
+  DividendsRead,
+  EodhdDividend,
+  EodhdExchange,
+  EodhdSplit,
+  SplitsRead,
+  SplitsWindow,
+} from './eodhd-client.js';
 export { EodhdClient, EodhdRequestError, eodhdSymbol } from './eodhd-client.js';
+export type { DividendsAcross } from './eodhd-dividends.js';
+export { dividendsAcross } from './eodhd-dividends.js';
 export { splitsAcross } from './eodhd-splits.js';
 export type { FxObservation } from './fx.js';
 export {
@@ -54,6 +64,7 @@ export type { MacroGateVerdict } from './macro-calendar.js';
 export { addDays, MACRO_DAY_SIZE_FRACTION, macroGate } from './macro-calendar.js';
 export {
   BarsMarketData,
+  currencyQuotePerGbp,
   fillFxOf,
   londonDateOf,
   quotePerGbp,
@@ -77,6 +88,7 @@ export {
   PENCE_PER_POUND,
   ukStockKey,
   ukStockScreenCounts,
+  ukStockTidm,
 } from './uk-stocks.js';
 export type { RouteChoice, VenueRouter } from './venue-routes.js';
 export {
@@ -93,4 +105,4 @@ export {
   TABLE_VENUE_SESSIONS,
 } from './venue-sessions.js';
 export type { QuoteCurrency } from './venues.js';
-export { isCfdVenue, quoteCurrencyOf } from './venues.js';
+export { isCfdVenue, isQuoteCurrency, quoteCurrencyOf } from './venues.js';

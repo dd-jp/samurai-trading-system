@@ -22,6 +22,8 @@ export const TRADING_PATH_PREFIXES = [
   'server/apps/v2/reconcile.ts',
   'server/apps/v2/reconcile-compare.ts',
   'server/apps/v2/cash-anchor.ts',
+  'server/apps/v2/cfd-dividends.ts',
+  'server/apps/v2/cfd-dividend-step.ts',
   'server/shared/market/sizing.ts',
 ] as const;
 

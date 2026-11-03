@@ -24,6 +24,7 @@ export type ReplayStage =
   | 'anchors'
   | 'carry'
   | 'cash_in_lieu_corrections'
+  | 'dividends'
   | 'marks'
   | 'signal_events'
   | 'signal_vetoes'
@@ -76,6 +77,7 @@ const DATED_TABLES = [
   'v2_split_checks',
   'v2_cash_in_lieu',
   'v2_cash_in_lieu_adjustments',
+  'v2_cfd_dividends',
 ] as const;
 
 const APPEND_ONLY_TRIGGERS = [
@@ -94,6 +96,7 @@ const APPEND_ONLY_TRIGGERS = [
   'v2_cash_in_lieu_no_delete',
   'v2_cash_in_lieu_adjustments_no_delete',
   'v2_split_clears_no_delete',
+  'v2_cfd_dividends_no_delete',
 ] as const;
 
 const SIGNAL_REWIND_SQL = [
@@ -461,16 +464,28 @@ export function rebuildBooks(rebuild: BookRebuild): void {
         previous.set(mark.book_id, mark.trading_date);
       },
     }));
-  const events = [...fills, ...rescales, ...cashCorrectionEvents(rebuild, known), ...marks];
+  // The cycle books a day's dividends before any of its fills, rescales or cash-in-lieu
+  // corrections; the stable sort keeps them ahead of a correction at the same fill count
+  const events = [
+    ...cashEvents(rebuild, known, 'v2_cfd_dividends'),
+    ...fills,
+    ...rescales,
+    ...cashEvents(rebuild, known, 'v2_cash_in_lieu_adjustments'),
+    ...marks,
+  ];
   for (const event of events.sort(byDateThenRank)) event.apply();
   restorePendingExits(rebuild);
 }
 
-function cashCorrectionEvents(rebuild: BookRebuild, known: ReadonlySet<string>): LedgerEvent[] {
+function cashEvents(
+  rebuild: BookRebuild,
+  known: ReadonlySet<string>,
+  table: 'v2_cfd_dividends' | 'v2_cash_in_lieu_adjustments',
+): LedgerEvent[] {
   const rows = rebuild.copy
     .prepare(
-      `SELECT book_id, trading_date, amount_gbp, fills_before
-       FROM v2_cash_in_lieu_adjustments ORDER BY trading_date, adjustment_id`,
+      `SELECT book_id, trading_date, amount_gbp, fills_before FROM ${table}
+       ORDER BY trading_date, rowid`,
     )
     .all() as JournalCashCorrection[];
   return rows
@@ -676,6 +691,14 @@ const TABLES: readonly TableSpec[] = [
                  WHERE trading_date = @date AND recorded_at <= @end ORDER BY adjustment_id`,
   },
   {
+    stage: 'dividends',
+    presence: true,
+    sql: () => `SELECT book_id || '|' || instrument || '|' || ex_date AS key, venue,
+                  client_order_id, qty, per_share_native, withholding, fx_quote_per_gbp,
+                  amount_gbp, fills_before FROM v2_cfd_dividends
+                 WHERE trading_date = @date AND recorded_at <= @end ORDER BY dividend_id`,
+  },
+  {
     stage: 'marks',
     presence: true,
     sql: () => `SELECT book_id AS key, equity_gbp, cash_gbp, invested_gbp, ytd_loss_gbp,
@@ -763,12 +786,13 @@ const CUTOVERS: readonly SkippedStage[] = [
   { stage: 'rescales', migration: 87 },
   { stage: 'carry', migration: 94 },
   { stage: 'cash_in_lieu_corrections', migration: 104 },
+  { stage: 'dividends', migration: 105 },
 ];
 
 // A day run before a table's migration journals none of its rows, so every row its replay writes
 // would read as an extra one: before #1983 no rescale, before #2071 no per-position CFD carry,
-// before #2001 no cash-in-lieu book-cash correction. The cutover is the migration's apply
-// instant, not the table's first row: a day after the deploy with no such row is still held, and
+// before #2001 no cash-in-lieu book-cash correction, before #2143 no CFD dividend. The cutover is
+// the migration's apply instant, not the table's first row: a day after the deploy with no such row is still held, and
 // a later re-run of an old date holds no earlier day. A run cannot straddle it, as migrations
 // apply before the process cycles
 function skippedStages(comparison: TradingComparison): SkippedStage[] {

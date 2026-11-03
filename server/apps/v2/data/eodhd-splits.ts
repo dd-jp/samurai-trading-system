@@ -1,4 +1,4 @@
-import type { EodhdSplit, SplitsRead } from './eodhd-client.js';
+import type { EodhdSplit, SplitsRead, SplitsWindow } from './eodhd-client.js';
 import { addDays } from './macro-calendar.js';
 
 export type SplitsAcross =
@@ -8,17 +8,21 @@ export type SplitsAcross =
 
 const CONFLICT = Symbol('conflict');
 
+export interface DatedRead extends SplitsWindow {
+  readonly asOf: string;
+}
+
 // asOf is a UTC date, so a read made before that day's session cannot vouch for it; nor for any later day
-export function coverageEnd(read: SplitsRead): string {
+export function coverageEnd(read: DatedRead): string {
   const lastWholeDay = addDays(read.asOf, -1);
   return lastWholeDay < read.to ? lastWholeDay : read.to;
 }
 
-function covers(read: SplitsRead, date: string): boolean {
+export function covers(read: DatedRead, date: string): boolean {
   return read.from <= date && date <= coverageEnd(read);
 }
 
-function firstUncovered(reads: readonly SplitsRead[], start: string): string {
+export function firstUncovered(reads: readonly DatedRead[], start: string): string {
   let cursor = start;
   for (const read of [...reads].sort((a, b) => a.from.localeCompare(b.from))) {
     if (read.from > cursor) break;
@@ -38,9 +42,8 @@ function ratioOn(reads: readonly SplitsRead[], date: string): number | undefined
   return ratios.size === 1 ? [...ratios][0] : CONFLICT;
 }
 
-function listedDates(reads: readonly SplitsRead[], after: string, through: string): string[] {
-  const dates = new Set(reads.flatMap((read) => read.splits.map((split) => split.date)));
-  return [...dates].filter((date) => date > after && date <= through).sort();
+export function datesWithin(dates: readonly string[], after: string, through: string): string[] {
+  return [...new Set(dates)].filter((date) => date > after && date <= through).sort();
 }
 
 function assertInputs(reads: readonly SplitsRead[], after: string, through: string): void {
@@ -59,7 +62,8 @@ export function splitsAcross(
   const uncovered = firstUncovered(reads, addDays(after, 1));
   if (uncovered <= through) return { kind: 'uncovered', from: uncovered };
   const splits: EodhdSplit[] = [];
-  for (const date of listedDates(reads, after, through)) {
+  const listed = reads.flatMap((read) => read.splits.map((split) => split.date));
+  for (const date of datesWithin(listed, after, through)) {
     const ratio = ratioOn(reads, date);
     if (ratio === CONFLICT) return { kind: 'conflict', date };
     if (ratio !== undefined) splits.push({ date, ratio });

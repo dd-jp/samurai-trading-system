@@ -457,6 +457,51 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    table: 'v2_dividend_reads',
+    seed: `INSERT INTO v2_dividend_reads (read_id, purpose, trading_date, symbol, from_date, to_date,
+        as_of, status, reason, dividends, fetched_at)
+      VALUES (1, 'cycle', '2026-10-01', 'VOD.LSE', '2026-09-01', '2026-09-30', '2026-10-01', 'ok',
+        '', '[]', '2026-10-01T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same read_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_dividend_reads (read_id, purpose, trading_date, symbol,
+            from_date, to_date, as_of, status, reason, dividends, fetched_at)
+          VALUES (1, 'cycle', '2026-10-01', 'VOD.LSE', '2026-09-01', '2026-09-30', '2026-10-01',
+            'ok', '', '[{"exDate":"2026-09-02","perShare":0.04}]', '2026-10-01T08:00:00.000Z')`,
+      },
+    ],
+  },
+  {
+    table: 'v2_cfd_dividends',
+    seed: `INSERT INTO v2_cfd_dividends (dividend_id, book_id, trading_date, instrument, venue,
+        client_order_id, ex_date, qty, per_share_native, withholding, fx_quote_per_gbp, amount_gbp,
+        fills_before, recorded_at)
+      VALUES (1, 'arm2/technical-only', '2026-10-02', 'VOD_XLON', 'saxo_cfd_gbp', 'o-1',
+        '2026-10-01', 100, 0.04, 0, 1, 4, 0, '2026-10-02T07:00:00.000Z')`,
+    attacks: [
+      {
+        name: 'same dividend_id',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_cfd_dividends (dividend_id, book_id, trading_date,
+            instrument, venue, client_order_id, ex_date, qty, per_share_native, withholding,
+            fx_quote_per_gbp, amount_gbp, fills_before, recorded_at)
+          VALUES (1, 'arm2/technical-only', '2026-10-02', 'VOD_XLON', 'saxo_cfd_gbp', 'o-1',
+            '2026-10-01', 100, 0.4, 0, 1, 40, 0, '2026-10-02T07:00:00.000Z')`,
+      },
+      {
+        name: 'same book, instrument and ex-date',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_cfd_dividends (book_id, trading_date, instrument, venue,
+            client_order_id, ex_date, qty, per_share_native, withholding, fx_quote_per_gbp,
+            amount_gbp, fills_before, recorded_at)
+          VALUES ('arm2/technical-only', '2026-10-03', 'VOD_XLON', 'saxo_cfd_gbp', 'o-1',
+            '2026-10-01', 100, 0.4, 0, 1, 40, 0, '2026-10-03T07:00:00.000Z')`,
+      },
+    ],
+  },
+  {
     table: 'v2_rescales',
     seed: `INSERT INTO v2_rescales (rescale_id, trading_date, book_id, instrument, source, ratio,
         anchor_date, fills_before, qty_before, qty_after, entry_before, entry_after, recorded_at)

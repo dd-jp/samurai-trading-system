@@ -3,12 +3,14 @@ import type { MarketData, SleeveDecision } from '../../../contracts/index.js';
 import type { BarSeries, DailyBar } from '../../shared/index.js';
 import { volTargetTrialArms } from './arm2-backtest.js';
 import {
+  ARM2_UK_POOL_CFD_DIVIDENDS,
   ARM2_UK_POOL_FROM,
   ARM2_UK_POOL_NAMES_AS_OF,
   ARM2_UK_POOL_OUT_OF_SAMPLE_FROM,
   ARM2_UK_POOL_TO,
   type Arm2UkPoolVerdict,
   arm2UkPoolArms,
+  arm2UkPoolCfdNames,
   arm2UkPoolPassRule,
   arm2UkPoolVerdict,
   assertArm2UkPoolRunReady,
@@ -290,7 +292,7 @@ describe('arm2UkPoolArms (#2143)', () => {
     expect(saxoLiquidity(arms.baseline)).toBe(1);
   });
 
-  it('identifies the trial by its pool rule, slots, route policy and unmodelled dividends', () => {
+  it('identifies the trial by its pool rule, slots, route policy and dividend booking', () => {
     expect(arms.trial.sleeve(market).id).toBe(ARM2_UK_POOL_SLEEVE_ID);
     expect(arms.baseline.sleeve(market).id).toBe('arm2');
     const catalogue = { asOf: today.asOf, sha256: today.sha256 };
@@ -309,7 +311,7 @@ describe('arm2UkPoolArms (#2143)', () => {
         },
       },
       cfd_routes_before_archive: routes,
-      cfd_dividends: 'not_modelled',
+      cfd_dividends: ARM2_UK_POOL_CFD_DIVIDENDS,
       out_of_sample_from: '2024-01-01',
     });
     expect(arms.ukStockCfdOpen).toBe(true);
@@ -320,6 +322,45 @@ describe('arm2UkPoolArms (#2143)', () => {
       cfd_routes_before_archive: routes,
     });
     expect(CFD_SLEEVE_IDS).toContain(ARM2_UK_POOL_SLEEVE_ID);
+  });
+
+  it('names, by quote currency, a superset of the CFD names either arm enters on any session', () => {
+    const listed = catalogueOf(TRADING_DATE, [
+      ...UK_NAMES.map((symbol) => row(symbol)),
+      row('US0'),
+      row('US1'),
+      row('ISF', { currency: 'GBP', assetType: 'CfdOnEtf' }),
+    ]);
+    const archive = new CfdCatalogueArchive([
+      catalogueOf('2023-06-01', [row('US6')]),
+      catalogueOf(DATES[100] as string, [row('US7')]),
+      catalogueOf('2025-06-02', [row('US8')]),
+    ]);
+    const sessions = DATES.slice(-3);
+    const names = arm2UkPoolCfdNames({
+      archive,
+      today: listed,
+      window: { from: DATES[0] as string, to: TRADING_DATE },
+      constituentsFor: () => US_NAMES,
+      dates: sessions,
+    });
+    expect(Object.fromEntries(names)).toEqual({
+      ...Object.fromEntries(UK_NAMES.map((symbol) => [symbol, 'LSE'])),
+      US0: 'US',
+      US1: 'US',
+      US6: 'US',
+      US7: 'US',
+      ISF: 'LSE',
+    });
+    const both = armsOver(bars, listed, US_NAMES);
+    const entered = sessions.flatMap((tradingDate) =>
+      [both.trial, both.baseline].flatMap(
+        (arm) => arm.sleeve(market).universe({ ...context, tradingDate }).instruments,
+      ),
+    );
+    const cfdListed = entered.filter((symbol) => listed.lookup(symbol) !== undefined);
+    expect(new Set(cfdListed)).toEqual(new Set([...UK_NAMES.slice(0, -1), 'US0', 'US1', 'ISF']));
+    expect(cfdListed.filter((symbol) => !names.has(symbol))).toEqual([]);
   });
 
   describe('routes before the first snapshot', () => {

@@ -38,6 +38,7 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import { SqliteCashInLieuBooks } from './cash-in-lieu-books.js';
+import { type CfdDividendLedger, SqliteCfdDividends } from './cfd-dividends.js';
 import * as cycleModule from './cycle.js';
 import {
   budgetChanges,
@@ -52,16 +53,20 @@ import {
 import {
   addDays,
   BarsMarketData,
+  dividendsAcross,
+  type EodhdDividend,
   type EodhdSplit,
   SqliteSplitReads,
   TABLE_VENUE_SESSIONS,
 } from './data/index.js';
+import type { CfdDividendFeed } from './dividend-feed.js';
 import { ProtectiveReplaceError } from './execution/alpaca/protective-replace-error.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
 import { V2OrderExecutor } from './execution/executor.js';
 import type { FillPricing } from './execution/simulated-costs.js';
 import { Journal } from './journal/index.js';
 import { storeView } from './reconcile.js';
+import { rebuildBooks, rewoundCopy } from './replay-book.js';
 import { CapitalConfigStore, ControlStore, PaperBooks, V2RiskGate } from './risk/index.js';
 import { refreshSaxoBars } from './saxo-bar-refresh.js';
 import { CFD_SLEEVE_IDS, CYCLE_LEVEL_PARAMETERS, isSet, SleeveRegistry } from './signal/index.js';
@@ -8199,5 +8204,581 @@ describe('journal before submit (David 2026-10-04, #1747)', () => {
     expect(settled?.payload).toMatchObject({ price: 20, limit: 20.1 });
     expect(pending.get(PRIMARY_ID)?.payload.modelled_slippage_bps).toBeCloseTo(20.1, 9);
     expect(settled?.payload.modelled_slippage_bps).toBeCloseTo(20.1, 9);
+  });
+});
+
+describe('CFD dividend cash on the ex-date (#2143)', () => {
+  const shortIsf: SleeveDecision = { ...shortAapl, instrument: 'ISF', venue: 'saxo_cfd_gbp' };
+  const TENTH = { open: 2, high: 2.05, low: 1.95, close: 2 };
+
+  function dividendFeed(
+    dividends: readonly EodhdDividend[],
+    asked: string[] = [],
+  ): CfdDividendFeed {
+    return {
+      refresh: (requests) => {
+        asked.push(
+          ...requests.map(
+            (request) => `${request.instrument} ${request.after}..${request.through}`,
+          ),
+        );
+        return Promise.resolve();
+      },
+      across: (instrument, _exchange, window) =>
+        dividendsAcross(
+          [
+            {
+              symbol: instrument,
+              from: '2026-01-01',
+              to: '2026-12-31',
+              asOf: '2027-01-01',
+              dividends,
+            },
+          ],
+          window.after,
+          window.through,
+        ),
+    };
+  }
+
+  function withDividends(deps: Harness, feed: CfdDividendFeed | undefined) {
+    const db = (deps.journal as unknown as { db: StoreHandle }).db;
+    return { ...deps, dividendFeed: feed, dividendLedger: new SqliteCfdDividends(db, clock), db };
+  }
+
+  function booked(db: StoreHandle) {
+    return db
+      .prepare(
+        "SELECT trading_date, instrument, ex_date, qty, withholding, amount_gbp FROM v2_cfd_dividends WHERE book_id = 'debate/primary' ORDER BY dividend_id",
+      )
+      .all();
+  }
+
+  async function runDays(deps: CycleDeps, dates: readonly string[]) {
+    for (const date of dates) await runCycle(deps, date);
+  }
+
+  it('entitles an entry filled on the session before the ex-date and not one filled on the ex-date', async () => {
+    const base = harness([shortIsf], true);
+    const deps = withDividends(
+      base,
+      dividendFeed([
+        { exDate: '2026-09-25', perShare: 0.5, currency: 'GBP' },
+        { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
+      ]),
+    );
+    await runCycle(deps, '2026-09-25');
+    base.setDecisions([]);
+    await runDays(deps, ['2026-09-26', '2026-09-27', '2026-09-28']);
+    const qty = deps.books.position('debate/primary', 'ISF')?.qty ?? 0;
+    expect(qty).toBeLessThan(0);
+    expect(booked(deps.db)).toEqual([
+      {
+        trading_date: '2026-09-27',
+        instrument: 'ISF',
+        ex_date: '2026-09-26',
+        qty,
+        withholding: 0,
+        amount_gbp: qty * 0.02,
+      },
+    ]);
+  });
+
+  it('entitles an exit filled on the ex-date and not one filled on the session before it', async () => {
+    const run = async (exitCycle: string) => {
+      const base = harness([shortIsf], true);
+      const deps = withDividends(
+        base,
+        dividendFeed([{ exDate: '2026-09-28', perShare: 0.02, currency: 'GBP' }]),
+      );
+      await runCycle(deps, '2026-09-25');
+      base.setDecisions([]);
+      await runDays(
+        deps,
+        ['2026-09-26', '2026-09-27'].filter((date) => date < exitCycle),
+      );
+      base.setDecisions([{ ...shortIsf, action: 'exit' }]);
+      await runCycle(deps, exitCycle);
+      base.setDecisions([]);
+      const after = ['2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30'];
+      await runDays(
+        deps,
+        after.filter((date) => date > exitCycle),
+      );
+      expect(deps.books.position('debate/primary', 'ISF')).toBeUndefined();
+      return booked(deps.db).map((row) => (row as { ex_date: string }).ex_date);
+    };
+    expect(await run('2026-09-27')).toEqual([]);
+    expect(await run('2026-09-28')).toEqual(['2026-09-28']);
+  });
+
+  it('debits a US CFD short the gross at the cycle FX and changes cash by exactly that', async () => {
+    const cashAfter = async (dividends: readonly EodhdDividend[]) => {
+      const base = harness([shortAapl], true);
+      const logs: LogEntry[] = [];
+      const deps = {
+        ...withDividends(base, dividendFeed(dividends)),
+        logger: { log: (entry: LogEntry) => logs.push(entry) },
+      };
+      await runCycle(deps, '2026-09-25');
+      base.setDecisions([]);
+      await runDays(deps, ['2026-09-26', '2026-09-27']);
+      return {
+        cash: deps.books.cash('debate/primary'),
+        rows: booked(deps.db),
+        logged: logs.filter((entry) => entry.event === 'v2_cfd_dividend_booked'),
+      };
+    };
+    const paid = await cashAfter([{ exDate: '2026-09-26', perShare: 0.26, currency: 'USD' }]);
+    const none = await cashAfter([]);
+    expect(paid.logged).toMatchObject([
+      {
+        level: 'info',
+        message: `debate/primary AAPL: ex-date 2026-09-26 dividend ${(-6 * 0.26) / FX} GBP on qty -6`,
+      },
+      { level: 'info', message: expect.stringMatching(/^debate\/no-macro-gate AAPL: ex-date/) },
+    ]);
+    expect(none.logged).toEqual([]);
+    expect(paid.rows).toEqual([
+      {
+        trading_date: '2026-09-27',
+        instrument: 'AAPL',
+        ex_date: '2026-09-26',
+        qty: -6,
+        withholding: 0,
+        amount_gbp: (-6 * 0.26) / FX,
+      },
+    ]);
+    expect(paid.cash - none.cash).toBeCloseTo((-6 * 0.26) / FX, 12);
+  });
+
+  it('rebuilds to the same book cash from the journal, dividends included', async () => {
+    const base = harness([shortAapl], true);
+    const deps = withDividends(
+      base,
+      dividendFeed([
+        { exDate: '2026-09-26', perShare: 0.26, currency: 'USD' },
+        { exDate: '2026-09-27', perShare: 0.1, currency: 'USD' },
+      ]),
+    );
+    await runCycle(deps, '2026-09-25');
+    base.setDecisions([]);
+    await runDays(deps, ['2026-09-26', '2026-09-27', '2026-09-28']);
+    expect(booked(deps.db)).toHaveLength(2);
+    const copy = rewoundCopy(deps.db, '2026-09-29', '2026-09-29T07:30:00.000Z');
+    const books = new PaperBooks(copy, clock, new CapitalConfigStore(copy, clock), '2026-09-01', [
+      base.sleeve,
+    ]);
+    rebuildBooks({
+      copy,
+      books,
+      market: base.market,
+      venueSessions: { entrySitOut: () => undefined, timeStopPausedVenues: () => [] },
+    });
+    for (const bookId of ['debate/primary', 'debate/no-macro-gate']) {
+      expect(books.cash(bookId)).toBeCloseTo(base.books.cash(bookId), 9);
+    }
+    copy.close();
+  });
+
+  it('books a USD dividend on an LSE CFD at the cycle FX and rebuilds to the same book cash', async () => {
+    const base = harness([shortIsf], true);
+    const deps = withDividends(
+      base,
+      dividendFeed([{ exDate: '2026-09-26', perShare: 0.26, currency: 'USD' }]),
+    );
+    await runCycle(deps, '2026-09-25');
+    base.setDecisions([]);
+    await runDays(deps, ['2026-09-26', '2026-09-27', '2026-09-28']);
+    const qty = base.books.position('debate/primary', 'ISF')?.qty ?? 0;
+    expect(qty).toBeLessThan(0);
+    const [row] = booked(deps.db) as { ex_date: string; amount_gbp: number }[];
+    expect(row?.ex_date).toBe('2026-09-26');
+    expect(row?.amount_gbp).toBeCloseTo((qty * 0.26) / FX, 12);
+    const copy = rewoundCopy(deps.db, '2026-09-29', '2026-09-29T07:30:00.000Z');
+    const books = new PaperBooks(copy, clock, new CapitalConfigStore(copy, clock), '2026-09-01', [
+      base.sleeve,
+    ]);
+    rebuildBooks({
+      copy,
+      books,
+      market: base.market,
+      venueSessions: { entrySitOut: () => undefined, timeStopPausedVenues: () => [] },
+    });
+    for (const bookId of ['debate/primary', 'debate/no-macro-gate']) {
+      expect(books.cash(bookId)).toBeCloseTo(base.books.cash(bookId), 9);
+    }
+    copy.close();
+  });
+
+  it('refuses, journals and logs only a line no mark FX converts, books the rest and marks the date', async () => {
+    const base = harness([shortIsf], true);
+    const feed = dividendFeed([
+      { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
+      { exDate: '2026-09-26', perShare: 0.5, currency: 'XYZ' },
+    ]);
+    await runCycle(withDividends(base, feed), '2026-09-25');
+    base.setDecisions([]);
+    await runCycle(withDividends(base, feed), '2026-09-26');
+    const logs: LogEntry[] = [];
+    const deps = {
+      ...withDividends(base, feed),
+      logger: { log: (entry: LogEntry) => logs.push(entry) },
+    };
+    const report = await runCycle(deps, '2026-09-27');
+    const messages = ['debate/primary', 'debate/no-macro-gate'].map(
+      (bookId) =>
+        `${bookId} ISF: dividend on ex-date 2026-09-26 declared in XYZ not booked, no mark FX converts it`,
+    );
+    expect(base.books.isMarked('2026-09-27')).toBe(true);
+    for (const message of messages) expect(report.refusals).toContain(message);
+    expect(
+      deps.db
+        .prepare(
+          "SELECT scope, parameter, ticket, message, book_id, instrument FROM v2_refusals WHERE parameter = 'CFD_DIVIDEND' ORDER BY refusal_id",
+        )
+        .all(),
+    ).toEqual(
+      messages.map((message, index) => ({
+        scope: 'cash',
+        parameter: 'CFD_DIVIDEND',
+        ticket: '#2143',
+        message,
+        book_id: index === 0 ? 'debate/primary' : 'debate/no-macro-gate',
+        instrument: 'ISF',
+      })),
+    );
+    expect(
+      logs.filter((entry) => entry.event === 'v2_cfd_dividend_currency_refused'),
+    ).toMatchObject(messages.map((message) => ({ level: 'error', message })));
+    const qty = base.books.position('debate/primary', 'ISF')?.qty ?? 0;
+    expect(booked(deps.db)).toEqual([
+      {
+        trading_date: '2026-09-27',
+        instrument: 'ISF',
+        ex_date: '2026-09-26',
+        qty,
+        withholding: 0,
+        amount_gbp: qty * 0.02,
+      },
+    ]);
+  });
+
+  it('refuses, journals and logs a line over a quarter of the ex-date raw close as implausible_amount, books the rest and marks the date', async () => {
+    const base = harness([shortIsf], true);
+    const feed = dividendFeed([
+      { exDate: '2026-09-26', perShare: 1000, currency: 'GBP' },
+      { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
+    ]);
+    await runCycle(withDividends(base, feed), '2026-09-25');
+    base.setDecisions([]);
+    await runCycle(withDividends(base, feed), '2026-09-26');
+    const logs: LogEntry[] = [];
+    const deps = {
+      ...withDividends(base, feed),
+      logger: { log: (entry: LogEntry) => logs.push(entry) },
+    };
+    const report = await runCycle(deps, '2026-09-27');
+    expect(base.books.isMarked('2026-09-27')).toBe(true);
+    const refused = deps.db
+      .prepare(
+        "SELECT scope, parameter, ticket, message, book_id FROM v2_refusals WHERE parameter = 'CFD_DIVIDEND' ORDER BY refusal_id",
+      )
+      .all() as { message: string }[];
+    expect(refused).toEqual(
+      ['debate/primary', 'debate/no-macro-gate'].map((book_id) => ({
+        scope: 'cash',
+        parameter: 'CFD_DIVIDEND',
+        ticket: '#2143',
+        message: expect.stringMatching(
+          new RegExp(
+            `^${book_id} ISF: dividend not booked, implausible_amount: ex-date 2026-09-26 pays 1000 GBP a share, over 25% of the 2026-09-26 raw close `,
+          ),
+        ),
+        book_id,
+      })),
+    );
+    for (const { message } of refused) expect(report.refusals).toContain(message);
+    expect(
+      logs.filter((entry) => entry.event === 'v2_cfd_dividend_implausible_amount'),
+    ).toMatchObject(refused.map(({ message }) => ({ level: 'error', message })));
+    expect(booked(deps.db)).toMatchObject([{ ex_date: '2026-09-26' }]);
+  });
+
+  it('books each ex-date once when the date is run again', async () => {
+    const base = harness([shortIsf], true);
+    const deps = withDividends(
+      base,
+      dividendFeed([{ exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' }]),
+    );
+    await runCycle(deps, '2026-09-25');
+    base.setDecisions([]);
+    await runDays(deps, ['2026-09-26', '2026-09-27', '2026-09-27']);
+    expect(booked(deps.db)).toHaveLength(1);
+  });
+
+  it('blocks entries and leaves the date unmarked when the dividend read is missing, then books on the retry', async () => {
+    const base = harness([shortIsf], true);
+    const unread: CfdDividendFeed = {
+      refresh: () => Promise.resolve(),
+      across: () => ({ kind: 'uncovered', from: '2026-09-26' }),
+    };
+    const unreadIsf = ['debate/primary', 'debate/no-macro-gate']
+      .map((bookId) => `${bookId} ISF (no dividend read covers 2026-09-26)`)
+      .join('; ');
+    const logs: LogEntry[] = [];
+    await runCycle(withDividends(base, dividendFeed([])), '2026-09-25');
+    base.setDecisions([]);
+    await runCycle(withDividends(base, dividendFeed([])), '2026-09-26');
+    base.setDecisions([{ ...shortAapl, inputs_hash: 'later' }]);
+    await expect(
+      runCycle(
+        { ...withDividends(base, unread), logger: { log: (entry: LogEntry) => logs.push(entry) } },
+        '2026-09-27',
+      ),
+    ).rejects.toThrow(
+      `CFD dividend cash unread for ${unreadIsf}; the date stays unmarked for a retry`,
+    );
+    expect(logs.filter((entry) => entry.level === 'error')).toMatchObject([
+      { event: 'v2_cfd_dividend_unread', message: `CFD dividend cash unread for ${unreadIsf}` },
+      {
+        event: 'v2_cfd_dividend_threw',
+        message: `CFD dividend booking threw: CFD dividend cash unread for ${unreadIsf}`,
+      },
+    ]);
+    expect(base.journal.orderFor('v2-debate-primary-2026-09-27-AAPL')).toBeUndefined();
+    expect(base.books.isMarked('2026-09-27')).toBe(false);
+
+    base.setDecisions([]);
+    const retry = withDividends(
+      base,
+      dividendFeed([{ exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' }]),
+    );
+    await runCycle(retry, '2026-09-27');
+    expect(base.books.isMarked('2026-09-27')).toBe(true);
+    expect(booked(retry.db)).toHaveLength(1);
+  });
+
+  it('refuses every ex-date of an outage window as holding_unverifiable, marks the date and rebuilds to the same cash', async () => {
+    const base = harness([shortIsf], true);
+    const unread: CfdDividendFeed = {
+      refresh: () => Promise.resolve(),
+      across: () => ({ kind: 'uncovered', from: '2026-09-26' }),
+    };
+    await runCycle(withDividends(base, dividendFeed([])), '2026-09-25');
+    base.setDecisions([]);
+    await runCycle(withDividends(base, dividendFeed([])), '2026-09-26');
+    await expect(runCycle(withDividends(base, unread), '2026-09-27')).rejects.toThrow(
+      'the date stays unmarked for a retry',
+    );
+    const logs: LogEntry[] = [];
+    const deps = {
+      ...withDividends(
+        base,
+        dividendFeed([
+          { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
+          { exDate: '2026-09-27', perShare: 0.03, currency: 'GBP' },
+        ]),
+      ),
+      logger: { log: (entry: LogEntry) => logs.push(entry) },
+    };
+    const cashBefore = base.books.cash('debate/primary');
+    const report = await runCycle(deps, '2026-09-28');
+    expect(base.books.isMarked('2026-09-28')).toBe(true);
+    expect(booked(deps.db)).toEqual([]);
+    const messages = ['2026-09-26', '2026-09-27'].map(
+      (exDate) =>
+        `debate/primary ISF: dividend not booked, holding_unverifiable: ex-date ${exDate} falls in a window from 2026-09-25 through 2026-09-27 of more than one session, so the journal cannot vouch for the ex-date−1 holding (#2171)`,
+    );
+    for (const message of messages) expect(report.refusals).toContain(message);
+    expect(
+      deps.db
+        .prepare(
+          "SELECT scope, parameter, ticket, message FROM v2_refusals WHERE book_id = 'debate/primary' AND parameter = 'CFD_DIVIDEND' ORDER BY refusal_id",
+        )
+        .all(),
+    ).toEqual(
+      messages.map((message) => ({
+        scope: 'cash',
+        parameter: 'CFD_DIVIDEND',
+        ticket: '#2143',
+        message,
+      })),
+    );
+    expect(
+      logs.filter(
+        (entry) =>
+          entry.event === 'v2_cfd_dividend_holding_unverifiable' &&
+          entry.message.startsWith('debate/primary'),
+      ),
+    ).toMatchObject(messages.map((message) => ({ level: 'error', message })));
+    expect(base.books.cash('debate/primary')).toBe(cashBefore);
+    const copy = rewoundCopy(deps.db, '2026-09-29', '2026-09-29T07:30:00.000Z');
+    const books = new PaperBooks(copy, clock, new CapitalConfigStore(copy, clock), '2026-09-01', [
+      base.sleeve,
+    ]);
+    rebuildBooks({
+      copy,
+      books,
+      market: base.market,
+      venueSessions: { entrySitOut: () => undefined, timeStopPausedVenues: () => [] },
+    });
+    for (const bookId of ['debate/primary', 'debate/no-macro-gate']) {
+      expect(books.cash(bookId)).toBeCloseTo(base.books.cash(bookId), 9);
+    }
+    copy.close();
+  });
+
+  it('blocks entries and leaves the date unmarked when booking a dividend throws, then books it once on the retry', async () => {
+    const base = harness([shortIsf], true);
+    const feed = dividendFeed([{ exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' }]);
+    await runCycle(withDividends(base, feed), '2026-09-25');
+    base.setDecisions([]);
+    await runCycle(withDividends(base, feed), '2026-09-26');
+    const cashBefore = base.books.cash('debate/primary');
+    const deps = withDividends(base, feed);
+    const failingLedger: CfdDividendLedger = {
+      booked: (bookId, instrument, exDate) =>
+        deps.dividendLedger.booked(bookId, instrument, exDate),
+      record: () => {
+        throw new Error('SQLITE_BUSY: database is locked');
+      },
+    };
+    const logs: LogEntry[] = [];
+    base.setDecisions([{ ...shortAapl, inputs_hash: 'later' }]);
+    await expect(
+      runCycle(
+        {
+          ...deps,
+          dividendLedger: failingLedger,
+          logger: { log: (entry: LogEntry) => logs.push(entry) },
+        },
+        '2026-09-27',
+      ),
+    ).rejects.toThrow('CFD dividend booking threw; the date stays unmarked for a retry');
+    expect(logs.filter((entry) => entry.level === 'error')).toMatchObject([
+      {
+        event: 'v2_cfd_dividend_threw',
+        message: 'CFD dividend booking threw: SQLITE_BUSY: database is locked',
+      },
+      {
+        event: 'v2_cfd_dividend_unmarked',
+        message: 'CFD dividend booking threw; the date stays unmarked for a retry',
+      },
+    ]);
+    expect(base.journal.orderFor('v2-debate-primary-2026-09-27-AAPL')).toBeUndefined();
+    expect(base.books.isMarked('2026-09-27')).toBe(false);
+    expect(booked(deps.db)).toEqual([]);
+    expect(base.books.cash('debate/primary')).toBe(cashBefore);
+
+    base.setDecisions([]);
+    await runCycle(deps, '2026-09-27');
+    expect(base.books.isMarked('2026-09-27')).toBe(true);
+    const qty = base.books.position('debate/primary', 'ISF')?.qty ?? 0;
+    expect(booked(deps.db)).toEqual([
+      {
+        trading_date: '2026-09-27',
+        instrument: 'ISF',
+        ex_date: '2026-09-26',
+        qty,
+        withholding: 0,
+        amount_gbp: qty * 0.02,
+      },
+    ]);
+    const copy = rewoundCopy(deps.db, '2026-09-28', '2026-09-28T07:30:00.000Z');
+    const books = new PaperBooks(copy, clock, new CapitalConfigStore(copy, clock), '2026-09-01', [
+      base.sleeve,
+    ]);
+    rebuildBooks({
+      copy,
+      books,
+      market: base.market,
+      venueSessions: { entrySitOut: () => undefined, timeStopPausedVenues: () => [] },
+    });
+    expect(books.cash('debate/primary')).toBeCloseTo(base.books.cash('debate/primary'), 9);
+    copy.close();
+  });
+
+  it('refuses, journals and logs an ex-date a split precedes since the last mark, booking nothing', async () => {
+    const preSplit = (date: string): DailyBar => ({ ...bar(date), ...TENTH, rawClose: 20 });
+    const postSplit = (date: string): DailyBar => ({ ...bar(date), ...TENTH, rawClose: 2 });
+    const bars = [
+      ...['2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25'].map(preSplit),
+      ...['2026-09-28', '2026-09-29', '2026-09-30'].map(postSplit),
+    ];
+    const base = harness([], true);
+    base.books.applyFill('debate/primary', {
+      instrument: 'AAPL',
+      venue: 'saxo_cfd_usd',
+      side: 'sell',
+      leg: 'entry',
+      qty: 6,
+      priceGbp: 20 / FX,
+      feeGbp: 0,
+      clientOrderId: 'seed-cfd',
+      tradingDate: '2026-09-28',
+      stopGbp: 20.8 / FX,
+      targetGbp: 18.8 / FX,
+    });
+    const logs: LogEntry[] = [];
+    const deps = {
+      ...withDividends(
+        base,
+        dividendFeed([{ exDate: '2026-09-28', perShare: 0.26, currency: 'USD' }]),
+      ),
+      market: {
+        ...base.market,
+        lastBarBefore: (_instrument: string, tradingDate: string) =>
+          bars.filter((dated) => dated.date < tradingDate).at(-1),
+        barsBefore: (_instrument: string, tradingDate: string, count: number) =>
+          bars.filter((dated) => dated.date < tradingDate).slice(-count),
+      },
+      logger: { log: (entry: LogEntry) => logs.push(entry) },
+    };
+    const message =
+      'debate/primary AAPL: dividend from ex-date 2026-09-28 not booked, a split precedes it since the last mark and the held qty is not in its units';
+    const report = await runCycle(deps, '2026-09-29');
+    expect(report.refusals).toContain(message);
+    expect(
+      deps.db
+        .prepare(
+          "SELECT trading_date, scope, parameter, ticket, message, book_id, instrument FROM v2_refusals WHERE parameter = 'CFD_DIVIDEND'",
+        )
+        .all(),
+    ).toEqual([
+      {
+        trading_date: '2026-09-29',
+        scope: 'cash',
+        parameter: 'CFD_DIVIDEND',
+        ticket: '#2143',
+        message,
+        book_id: 'debate/primary',
+        instrument: 'AAPL',
+      },
+    ]);
+    expect(logs.filter((entry) => entry.event === 'v2_cfd_dividend_split_refused')).toMatchObject([
+      { level: 'error', message },
+    ]);
+    expect(booked(deps.db)).toEqual([]);
+  });
+
+  it('warns and books nothing for a held CFD while the dividend feed is unset', async () => {
+    const base = harness([shortIsf], true);
+    const logs: LogEntry[] = [];
+    const deps = {
+      ...withDividends(base, undefined),
+      logger: { log: (entry: LogEntry) => logs.push(entry) },
+    };
+    await runCycle(deps, '2026-09-25');
+    base.setDecisions([]);
+    await runDays(deps, ['2026-09-26', '2026-09-27']);
+    expect(logs.filter((entry) => entry.event === 'v2_cfd_dividend_feed_unset')).toMatchObject([
+      {
+        level: 'warn',
+        message:
+          'CFD dividend cash not booked for debate/primary ISF (no feed), debate/no-macro-gate ISF (no feed): the EODHD dividend feed is unset',
+      },
+    ]);
+    expect(booked(deps.db)).toEqual([]);
   });
 });

@@ -11,6 +11,12 @@ const QUOTE_CURRENCY: Readonly<Record<Venue, QuoteCurrency>> = {
 
 const CFD_VENUES: ReadonlySet<Venue> = new Set<Venue>(['saxo_cfd_gbp', 'saxo_cfd_usd']);
 
+const QUOTE_CURRENCIES: ReadonlySet<string> = new Set<QuoteCurrency>(['GBP', 'USD']);
+
+export function isQuoteCurrency(currency: string): currency is QuoteCurrency {
+  return QUOTE_CURRENCIES.has(currency);
+}
+
 export function quoteCurrencyOf(venue: Venue): QuoteCurrency {
   return QUOTE_CURRENCY[venue];
 }

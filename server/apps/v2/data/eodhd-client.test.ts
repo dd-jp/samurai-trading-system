@@ -1,9 +1,11 @@
 import {
   assertWindow,
+  dividendsUrl,
   EODHD_API_URL,
   EodhdClient,
   EodhdRequestError,
   eodhdSymbol,
+  parseDividendsBody,
   parseSplitRatio,
   parseSplitsBody,
   splitsUrl,
@@ -194,5 +196,123 @@ describe('EodhdClient.splits', () => {
     }) as typeof fetch;
     await new EodhdClient(API_KEY, fetchImpl, () => NOW).splits('AAPL.US', HISTORY);
     expect(signal).toBeInstanceOf(AbortSignal);
+  });
+});
+
+const DIVIDEND_WINDOW = { from: '2026-01-01', to: '2026-10-09' };
+
+// shape of GET /api/div/{SYMBOL}?fmt=json per EODHD's dividends documentation
+function dividendRecord(date: string, unadjustedValue: number, currency: string, value = 0.01) {
+  return {
+    date,
+    declarationDate: '2025-12-01',
+    recordDate: date,
+    paymentDate: '2026-11-01',
+    period: 'Interim',
+    value,
+    unadjustedValue,
+    currency,
+  };
+}
+
+describe('parseDividendsBody', () => {
+  it('reads an LSE dividend in GBP, GBX or GBp as pounds per share from unadjustedValue', () => {
+    const body = [
+      dividendRecord('2026-06-04', 2.5, 'GBX'),
+      dividendRecord('2026-02-05', 0.04, 'GBP', 0.02),
+      dividendRecord('2026-09-03', 3, 'GBp'),
+    ];
+    expect(parseDividendsBody(body, 'VOD.LSE', DIVIDEND_WINDOW)).toEqual([
+      { exDate: '2026-02-05', perShare: 0.04, currency: 'GBP' },
+      { exDate: '2026-06-04', perShare: 0.025, currency: 'GBP' },
+      { exDate: '2026-09-03', perShare: 0.03, currency: 'GBP' },
+    ]);
+  });
+
+  it('reads a US dividend in USD per share', () => {
+    expect(
+      parseDividendsBody([dividendRecord('2026-08-11', 0.26, 'USD')], 'AAPL.US', DIVIDEND_WINDOW),
+    ).toEqual([{ exDate: '2026-08-11', perShare: 0.26, currency: 'USD' }]);
+  });
+
+  it('keeps a regular and a special dividend that share an ex-date', () => {
+    const body = [
+      dividendRecord('2026-08-11', 0.26, 'USD'),
+      dividendRecord('2026-08-11', 1, 'USD'),
+    ];
+    expect(parseDividendsBody(body, 'AAPL.US', DIVIDEND_WINDOW)).toHaveLength(2);
+  });
+
+  it('keeps a line in any other currency as declared, and one with no currency as blank', () => {
+    const cases: [string, unknown, string][] = [
+      ['VOD.LSE', 'USD', 'USD'],
+      ['VOD.LSE', 'EUR', 'EUR'],
+      ['AAPL.US', 'GBP', 'GBP'],
+      ['AAPL.US', 'GBX', 'GBX'],
+      ['VOD.LSE', undefined, ''],
+      ['VOD.LSE', 7, ''],
+    ];
+    for (const [symbol, declared, currency] of cases) {
+      const record = { ...dividendRecord('2026-08-11', 1.5, ''), currency: declared };
+      expect(parseDividendsBody([record], symbol, DIVIDEND_WINDOW)).toEqual([
+        { exDate: '2026-08-11', perShare: 1.5, currency },
+      ]);
+    }
+  });
+
+  it('refuses a symbol on an exchange it has no currency table for', () => {
+    expect(() => parseDividendsBody([], 'VOD.XETRA', DIVIDEND_WINDOW)).toThrow('bad_symbol');
+  });
+
+  it('refuses a dividend outside the asked window', () => {
+    for (const date of ['2025-12-31', '2026-10-10']) {
+      expect(() =>
+        parseDividendsBody([dividendRecord(date, 1, 'USD')], 'AAPL.US', DIVIDEND_WINDOW),
+      ).toThrow('out_of_window');
+    }
+  });
+
+  it('refuses a body that is not a list of well-formed dividends', () => {
+    const bad: unknown[] = [
+      { code: 'AAPL.US' },
+      [null],
+      [{ ...dividendRecord('2026-08-11', 1, 'USD'), date: '2026-13-01' }],
+      [{ ...dividendRecord('2026-08-11', 1, 'USD'), unadjustedValue: '1' }],
+      [dividendRecord('2026-08-11', 0, 'USD')],
+      [dividendRecord('2026-08-11', -1, 'USD')],
+      [dividendRecord('2026-08-11', 1, 'USD'), dividendRecord('2026-08-11', 1, 'USD')],
+    ];
+    for (const body of bad) {
+      expect(() => parseDividendsBody(body, 'AAPL.US', DIVIDEND_WINDOW)).toThrow('bad_body');
+    }
+  });
+});
+
+describe('EodhdClient.dividends', () => {
+  it('reads the div endpoint over the window and returns the parsed read', async () => {
+    const seen: URL[] = [];
+    const body = [dividendRecord('2026-08-11', 0.26, 'USD')];
+    const read = await clientReturning(jsonResponse(body), seen).dividends(
+      'AAPL.US',
+      DIVIDEND_WINDOW,
+    );
+    expect(seen.map(String)).toEqual([String(dividendsUrl(API_KEY, 'AAPL.US', DIVIDEND_WINDOW))]);
+    expect(seen[0]?.pathname).toBe('/api/div/AAPL.US');
+    expect(read).toEqual({
+      symbol: 'AAPL.US',
+      ...DIVIDEND_WINDOW,
+      asOf: '2026-10-09',
+      dividends: [{ exDate: '2026-08-11', perShare: 0.26, currency: 'USD' }],
+    });
+  });
+
+  it('refuses a bad window before any request and maps a bad body', async () => {
+    const seen: URL[] = [];
+    const client = clientReturning(jsonResponse({}), seen);
+    expect(
+      await reason(client.dividends('AAPL.US', { from: '2026-10-09', to: '2026-10-08' })),
+    ).toBe('bad_window');
+    expect(seen).toEqual([]);
+    expect(await reason(client.dividends('AAPL.US', DIVIDEND_WINDOW))).toBe('bad_body');
   });
 });
