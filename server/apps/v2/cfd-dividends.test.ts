@@ -299,7 +299,56 @@ describe('CFD dividend booking rule', () => {
     expect(result.bookings).toEqual([]);
     expect(result.splitBefore).toBe('2026-06-04');
   });
+
+  it('ignores a split the last mark already took, on a bar before the window opens', () => {
+    const result = heldDividends(
+      inputs({ market: sparseMarket(['2026-06-01', '2026-06-02', '2026-06-04'], '2026-06-02') }),
+    );
+    expect(result.splitBefore).toBeUndefined();
+    expect(result.bookings).toMatchObject([{ ex_date: '2026-06-04', amount_gbp: 2 }]);
+  });
+
+  it('opens no window when no bar bounds its start or its end', () => {
+    const fromJune4 = sparseMarket(['2026-06-04']);
+    expect(
+      dividendWindow(
+        inputs({
+          lastMarkDate: undefined,
+          held: position('saxo_cfd_gbp', 100, '2026-06-04'),
+          market: fromJune4,
+        }),
+      ),
+    ).toBeUndefined();
+    const daily = market();
+    const noBarMarkedNow: Pick<MarketData, 'lastBarBefore' | 'barsBefore'> = {
+      ...daily,
+      lastBarBefore: (instrument, date) =>
+        date === '2026-06-05' ? undefined : daily.lastBarBefore(instrument, date),
+    };
+    expect(dividendWindow(inputs({ market: noBarMarkedNow }))).toBeUndefined();
+  });
 });
+
+function sparseMarket(
+  dates: readonly string[],
+  splitOn?: string,
+): Pick<MarketData, 'lastBarBefore' | 'barsBefore'> {
+  const bars = dates.map(
+    (date) =>
+      ({
+        date,
+        open: 20,
+        high: 20,
+        low: 20,
+        close: 20,
+        volume: 1,
+        rawClose: splitOn !== undefined && date < splitOn ? 40 : 20,
+      }) as V2Bar,
+  );
+  const barsBefore: MarketData['barsBefore'] = (_instrument, tradingDate, count) =>
+    bars.filter((bar) => bar.date < tradingDate).slice(-count);
+  return { barsBefore, lastBarBefore: (instrument, date) => barsBefore(instrument, date, 1)[0] };
+}
 
 // GET /api/div/VOD.LSE?fmt=json per EODHD's dividends documentation: one line declared GBX and one
 // declaring the same pence amount as GBP, on a name whose ex-date close is 75p

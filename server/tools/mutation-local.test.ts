@@ -74,6 +74,8 @@ describe('risk, sizing and loss-budget paths', () => {
     'server/apps/v2/reconcile.ts',
     'server/apps/v2/reconcile-compare.ts',
     'server/apps/v2/cash-anchor.ts',
+    'server/apps/v2/cfd-dividends.ts',
+    'server/apps/v2/cfd-dividend-step.ts',
     'server/shared/market/sizing.ts',
   ])('%s is trading-path', (path) => {
     expect(isTradingPathFile(path)).toBe(true);

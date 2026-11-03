@@ -216,3 +216,32 @@ describe('bookCfdDividends', () => {
     expect(cash).toEqual([]);
   });
 });
+
+describe('bookCfdDividends on a rerun', () => {
+  it('books no line the ledger already holds', async () => {
+    const { step, cash } = deps({
+      ledger: {
+        booked: (_bookId, instrument) => instrument === 'VOD_XLON',
+        record: () => undefined,
+      },
+    });
+    const report = await bookCfdDividends(step);
+    expect(report.booked.map((booking) => booking.instrument)).toEqual(['AAPL']);
+    expect(cash).toEqual([['debate-primary', (-10 * 0.26) / USD_PER_GBP]]);
+  });
+
+  it('asks the feed for nothing when the last mark already took the bar marked now', async () => {
+    const requests: DividendRequest[][] = [];
+    const { step, cash } = deps({
+      feed: feed(requests),
+      books: {
+        ...deps().step.books,
+        lastDay: () =>
+          ({ tradingDate: '2026-06-05' }) as ReturnType<CfdDividendStepDeps['books']['lastDay']>,
+      },
+    });
+    await bookCfdDividends(step);
+    expect(requests).toEqual([[]]);
+    expect(cash).toEqual([]);
+  });
+});
