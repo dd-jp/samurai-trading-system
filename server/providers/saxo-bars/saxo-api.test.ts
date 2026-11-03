@@ -408,3 +408,30 @@ describe('saxo read-only api abort signal (#2027)', () => {
     await expect(paced).rejects.toMatchObject({ name: 'AbortError' });
   });
 });
+
+describe('saxo read-only api refuses redirects (#2173)', () => {
+  it.each([307, 308])('fails a GET answered %i, sending nothing to the target', async (status) => {
+    const hits: string[] = [];
+    const server = createServer((request, response) => {
+      const path = request.url ?? '';
+      hits.push(path);
+      if (path.startsWith('/sim/')) {
+        response.writeHead(status, { location: path.replace('/sim/', '/live/') });
+        response.end();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ Symbol: 'FOLLOWED' }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const api = new SaxoReadOnlyApi(tokens, `http://127.0.0.1:${port}/sim`);
+      await expect(api.instrumentDetails(1, 'Etf')).rejects.toThrow(/unexpected redirect/);
+      expect(hits).toEqual(['/sim/ref/v1/instruments/details/1/Etf']);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});

@@ -316,8 +316,16 @@ export function jsonFetcher(timeoutMs = REQUEST_TIMEOUT_MS): SaxoFetcher {
   return async (url, accessToken, signal) => {
     const response = await fetch(url, {
       headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json' },
+      redirect: 'error',
       signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
-    });
+    }).catch(rethrowWithCause);
     return jsonOrTextResult(response);
   };
+}
+
+function rethrowWithCause(error: unknown): never {
+  if (error instanceof TypeError && error.cause instanceof Error) {
+    throw new TypeError(`${error.message}: ${error.cause.message}`, { cause: error.cause });
+  }
+  throw error;
 }
