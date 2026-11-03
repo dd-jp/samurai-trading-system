@@ -38,7 +38,7 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import { SqliteCashInLieuBooks } from './cash-in-lieu-books.js';
-import { SqliteCfdDividends } from './cfd-dividends.js';
+import { type CfdDividendLedger, SqliteCfdDividends } from './cfd-dividends.js';
 import * as cycleModule from './cycle.js';
 import {
   budgetChanges,
@@ -8424,6 +8424,76 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     await runCycle(retry, '2026-09-27');
     expect(base.books.isMarked('2026-09-27')).toBe(true);
     expect(booked(retry.db)).toHaveLength(1);
+  });
+
+  it('blocks entries and leaves the date unmarked when booking a dividend throws, then books it once on the retry', async () => {
+    const base = harness([shortIsf], true);
+    const feed = dividendFeed([{ exDate: '2026-09-26', perShare: 0.02 }]);
+    await runCycle(withDividends(base, feed), '2026-09-25');
+    base.setDecisions([]);
+    await runCycle(withDividends(base, feed), '2026-09-26');
+    const cashBefore = base.books.cash('debate/primary');
+    const deps = withDividends(base, feed);
+    const failingLedger: CfdDividendLedger = {
+      booked: (bookId, instrument, exDate) =>
+        deps.dividendLedger.booked(bookId, instrument, exDate),
+      record: () => {
+        throw new Error('SQLITE_BUSY: database is locked');
+      },
+    };
+    const logs: LogEntry[] = [];
+    base.setDecisions([{ ...shortAapl, inputs_hash: 'later' }]);
+    await expect(
+      runCycle(
+        {
+          ...deps,
+          dividendLedger: failingLedger,
+          logger: { log: (entry: LogEntry) => logs.push(entry) },
+        },
+        '2026-09-27',
+      ),
+    ).rejects.toThrow('CFD dividend booking threw; the date stays unmarked for a retry');
+    expect(logs.filter((entry) => entry.level === 'error')).toMatchObject([
+      {
+        event: 'v2_cfd_dividend_threw',
+        message: 'CFD dividend booking threw: SQLITE_BUSY: database is locked',
+      },
+      {
+        event: 'v2_cfd_dividend_unmarked',
+        message: 'CFD dividend booking threw; the date stays unmarked for a retry',
+      },
+    ]);
+    expect(base.journal.orderFor('v2-debate-primary-2026-09-27-AAPL')).toBeUndefined();
+    expect(base.books.isMarked('2026-09-27')).toBe(false);
+    expect(booked(deps.db)).toEqual([]);
+    expect(base.books.cash('debate/primary')).toBe(cashBefore);
+
+    base.setDecisions([]);
+    await runCycle(deps, '2026-09-27');
+    expect(base.books.isMarked('2026-09-27')).toBe(true);
+    const qty = base.books.position('debate/primary', 'ISF')?.qty ?? 0;
+    expect(booked(deps.db)).toEqual([
+      {
+        trading_date: '2026-09-27',
+        instrument: 'ISF',
+        ex_date: '2026-09-26',
+        qty,
+        withholding: 0,
+        amount_gbp: qty * 0.02,
+      },
+    ]);
+    const copy = rewoundCopy(deps.db, '2026-09-28', '2026-09-28T07:30:00.000Z');
+    const books = new PaperBooks(copy, clock, new CapitalConfigStore(copy, clock), '2026-09-01', [
+      base.sleeve,
+    ]);
+    rebuildBooks({
+      copy,
+      books,
+      market: base.market,
+      venueSessions: { entrySitOut: () => undefined, timeStopPausedVenues: () => [] },
+    });
+    expect(books.cash('debate/primary')).toBeCloseTo(base.books.cash('debate/primary'), 9);
+    copy.close();
   });
 
   it('refuses, journals and logs an ex-date a split precedes since the last mark, booking nothing', async () => {

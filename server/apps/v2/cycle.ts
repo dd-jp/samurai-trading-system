@@ -332,6 +332,7 @@ class Cycle {
   readonly #splitRequested = new Set<string>();
   readonly #exitsFrozen = new Set<string>();
   readonly #dividendsUnread: string[] = [];
+  #dividendBookingThrew = false;
   readonly tally: Tally = {
     submitted: 0,
     simulated: 0,
@@ -685,6 +686,15 @@ class Cycle {
   }
 
   async bookCfdDividends(): Promise<void> {
+    try {
+      await this.bookCfdDividendsOnce();
+    } catch (error) {
+      this.#dividendBookingThrew = true;
+      throw error;
+    }
+  }
+
+  async bookCfdDividendsOnce(): Promise<void> {
     const ledger = this.deps.dividendLedger;
     if (ledger === undefined) return;
     const report = await bookCfdDividends({
@@ -747,6 +757,14 @@ class Cycle {
     throw new Error(
       `CFD dividend cash unread for ${this.#dividendsUnread.join('; ')}; the date stays unmarked for a retry`,
     );
+  }
+
+  // An unread read sets the flag too, so refuseMarkIfDividendUnread runs first to keep its refusal
+  refuseMarkIfDividendBookingThrew(): void {
+    if (!this.#dividendBookingThrew) return;
+    const message = 'CFD dividend booking threw; the date stays unmarked for a retry';
+    this.log('error', 'v2_cfd_dividend_unmarked', message);
+    throw new Error(message);
   }
 
   // A position whose rescale threw keeps its pre-split qty and levels: an exit on them trades the
@@ -2701,6 +2719,7 @@ async function runUnmarked(
   await sweepFillsBeforeMarks(deps, cycle, tradingDate);
   cycle.refuseMarkIfRescaleThrew();
   cycle.refuseMarkIfDividendUnread();
+  cycle.refuseMarkIfDividendBookingThrew();
   const bookReports = await cycle.markAll(books);
   refusals.push(...cycle.refusals);
   const { tally } = cycle;
