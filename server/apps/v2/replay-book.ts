@@ -695,7 +695,8 @@ const TABLES: readonly TableSpec[] = [
     presence: true,
     sql: () => `SELECT book_id || '|' || instrument || '|' || ex_date AS key, venue,
                   client_order_id, qty, per_share_native, withholding, fx_quote_per_gbp,
-                  amount_gbp, fills_before FROM v2_cfd_dividends
+                  amount_gbp, fills_before, declared_per_share, declared_currency,
+                  fx_declared_per_gbp FROM v2_cfd_dividends
                  WHERE trading_date = @date AND recorded_at <= @end ORDER BY dividend_id`,
   },
   {
@@ -795,15 +796,47 @@ const CUTOVERS: readonly SkippedStage[] = [
 // the migration's apply instant, not the table's first row: a day after the deploy with no such row is still held, and
 // a later re-run of an old date holds no earlier day. A run cannot straddle it, as migrations
 // apply before the process cycles
-function skippedStages(comparison: TradingComparison): SkippedStage[] {
+function ranBefore(comparison: TradingComparison): (migration: number) => boolean {
   const ranAt = comparison.markedAt ?? comparison.startedAt ?? LATEST;
   const applied = comparison.journal.prepare(
     'SELECT applied_at FROM schema_migrations WHERE version = ?',
   );
-  return CUTOVERS.filter((cutover) => {
-    const row = applied.get(cutover.migration) as { applied_at: string } | undefined;
+  return (migration) => {
+    const row = applied.get(migration) as { applied_at: string } | undefined;
     return row === undefined || row.applied_at > ranAt;
-  });
+  };
+}
+
+function skippedStages(comparison: TradingComparison): SkippedStage[] {
+  const before = ranBefore(comparison);
+  return CUTOVERS.filter((cutover) => before(cutover.migration));
+}
+
+// A dividend booked before #2177 journals no declared line; its replay does, under the same cutover
+const COLUMN_CUTOVERS: readonly (SkippedStage & { readonly columns: readonly string[] })[] = [
+  {
+    stage: 'dividends',
+    migration: 107,
+    columns: ['declared_per_share', 'declared_currency', 'fx_declared_per_gbp'],
+  },
+];
+
+function unheldColumns(comparison: TradingComparison): Map<ReplayStage, readonly string[]> {
+  const before = ranBefore(comparison);
+  return new Map(
+    COLUMN_CUTOVERS.filter((cutover) => before(cutover.migration)).map((cutover) => [
+      cutover.stage,
+      cutover.columns,
+    ]),
+  );
+}
+
+function withoutColumns(rows: readonly Row[], columns: readonly string[] | undefined): Row[] {
+  if (columns === undefined) return [...rows];
+  return rows.map(
+    (row) =>
+      Object.fromEntries(Object.entries(row).filter(([name]) => !columns.includes(name))) as Row,
+  );
 }
 
 export function tradingDivergences(comparison: TradingComparison): {
@@ -815,14 +848,16 @@ export function tradingDivergences(comparison: TradingComparison): {
   const end = comparison.markedAt ?? LATEST;
   const counts = { orders: 0, fills: 0 };
   const skipped = skippedStages(comparison);
+  const unheld = unheldColumns(comparison);
   const held = TABLES.filter((spec) => !skipped.some((skip) => skip.stage === spec.stage));
   const divergences = held.flatMap((spec) => {
     const journalled = rowsOf(journal, spec.sql('>', true), tradingDate, end);
     if (spec.stage === 'orders' || spec.stage === 'fills') counts[spec.stage] = journalled.length;
+    const columns = unheld.get(spec.stage);
     return tableDivergences(
       spec,
-      journalled,
-      rowsOf(replayed, spec.sql('>', false), tradingDate, LATEST),
+      withoutColumns(journalled, columns),
+      withoutColumns(rowsOf(replayed, spec.sql('>', false), tradingDate, LATEST), columns),
     );
   });
   return { divergences, counts, skipped };
