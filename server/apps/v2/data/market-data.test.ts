@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { V2Bar } from '../../../../contracts/index.js';
 import {
   BarsMarketData,
+  currencyQuotePerGbp,
   fillFxOf,
   londonDateOf,
   quotePerGbp,
@@ -49,6 +50,8 @@ describe('BarsMarketData', () => {
     expect(market.gbpUsdAtYearStart(2026)).toBe(first);
     expect(quotePerGbp(market, 'alpaca', '2026-09-25')).toBe(first);
     expect(quotePerGbp(market, 'saxo', '2026-09-25')).toBe(1);
+    expect(currencyQuotePerGbp(market, 'USD', '2026-09-25')).toBe(first);
+    expect(currencyQuotePerGbp(market, 'GBP', '2026-09-25')).toBe(1);
     expect(() => market.gbpUsdAtYearStart(2024)).toThrow(/no GBPUSD/);
   });
 });

@@ -21,7 +21,13 @@ const REQUEST = {
 };
 const WINDOW = { after: REQUEST.after, through: REQUEST.through };
 
-function eodhd(asked: [string, SplitsWindow][], failure?: Error) {
+const GBP_LINE = [{ exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' }];
+
+function eodhd(
+  asked: [string, SplitsWindow][],
+  failure?: Error,
+  dividends: DividendsRead['dividends'] = GBP_LINE,
+) {
   return {
     dividends: (symbol: string, window: SplitsWindow): Promise<DividendsRead> => {
       asked.push([symbol, window]);
@@ -30,7 +36,7 @@ function eodhd(asked: [string, SplitsWindow][], failure?: Error) {
         symbol,
         ...window,
         asOf: '2026-06-05',
-        dividends: [{ exDate: '2026-06-04', perShare: 0.02 }],
+        dividends,
       });
     },
   };
@@ -53,7 +59,7 @@ describe('liveDividendFeed', () => {
     expect(asked).toEqual([['VOD.LSE', { from: '2026-06-03', to: '2026-06-04' }]]);
     expect(feed.across('VOD_XLON', 'LSE', WINDOW)).toEqual({
       kind: 'covered',
-      dividends: [{ exDate: '2026-06-04', perShare: 0.02 }],
+      dividends: [{ exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' }],
     });
   });
 
@@ -84,17 +90,20 @@ describe('liveDividendFeed', () => {
 });
 
 describe('journalledDividendFeed', () => {
-  it('answers from the cycle reads of that day and is absent on a day with none', async () => {
+  it('answers from the cycle reads of that day, each line in its declared currency, and is absent on a day with none', async () => {
     const reads = new SqliteDividendReads(migratedMemoryStore());
-    await liveDividendFeed({ eodhd: eodhd([]), reads, clock: CLOCK }, '2026-06-05').refresh([
-      REQUEST,
-    ]);
+    const lines = [
+      { exDate: '2026-06-03', perShare: 0.5, currency: 'USD' },
+      { exDate: '2026-06-04', perShare: 0.4, currency: 'EUR' },
+    ];
+    const live = eodhd([], undefined, lines);
+    await liveDividendFeed({ eodhd: live, reads, clock: CLOCK }, '2026-06-05').refresh([REQUEST]);
     expect(journalledDividendFeed(reads, '2026-06-06')).toBeUndefined();
     const replayed = journalledDividendFeed(reads, '2026-06-05');
     await replayed?.refresh([REQUEST]);
     expect(replayed?.across('VOD_XLON', 'LSE', WINDOW)).toEqual({
       kind: 'covered',
-      dividends: [{ exDate: '2026-06-04', perShare: 0.02 }],
+      dividends: lines,
     });
   });
 });
@@ -110,14 +119,14 @@ describe('historyDividendFeed', () => {
         from: '2026-01-01',
         to: '2026-06-03',
         asOf: '2026-06-05',
-        dividends: [{ exDate: '2026-02-05', perShare: 0.04 }],
+        dividends: [{ exDate: '2026-02-05', perShare: 0.04, currency: 'GBP' }],
       },
       CLOCK.now(),
     );
     const feed = historyDividendFeed(reads);
     expect(feed.across('VOD_XLON', 'LSE', { after: '2026-02-01', through: '2026-03-01' })).toEqual({
       kind: 'covered',
-      dividends: [{ exDate: '2026-02-05', perShare: 0.04 }],
+      dividends: [{ exDate: '2026-02-05', perShare: 0.04, currency: 'GBP' }],
     });
     expect(feed.across('VOD_XLON', 'LSE', WINDOW)).toEqual({
       kind: 'uncovered',

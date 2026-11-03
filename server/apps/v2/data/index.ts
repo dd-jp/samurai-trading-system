@@ -64,6 +64,7 @@ export type { MacroGateVerdict } from './macro-calendar.js';
 export { addDays, MACRO_DAY_SIZE_FRACTION, macroGate } from './macro-calendar.js';
 export {
   BarsMarketData,
+  currencyQuotePerGbp,
   fillFxOf,
   londonDateOf,
   quotePerGbp,
@@ -104,4 +105,4 @@ export {
   TABLE_VENUE_SESSIONS,
 } from './venue-sessions.js';
 export type { QuoteCurrency } from './venues.js';
-export { isCfdVenue, quoteCurrencyOf } from './venues.js';
+export { isCfdVenue, isQuoteCurrency, quoteCurrencyOf } from './venues.js';

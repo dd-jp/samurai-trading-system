@@ -422,7 +422,10 @@ describe('composeCycle: CFD cost model (#1849, #1850)', () => {
       };
       const dividendFeed: CfdDividendFeed = {
         refresh: () => Promise.resolve(),
-        across: () => ({ kind: 'covered', dividends: [{ exDate: '2026-09-26', perShare: 0.4 }] }),
+        across: () => ({
+          kind: 'covered',
+          dividends: [{ exDate: '2026-09-26', perShare: 0.4, currency: 'GBP' }],
+        }),
       };
       const composed = composeCycle(
         options({

@@ -26,6 +26,7 @@ export interface SplitsRead extends SplitsWindow {
 export interface EodhdDividend {
   readonly exDate: string;
   readonly perShare: number;
+  readonly currency: string;
 }
 
 export interface DividendsRead extends SplitsWindow {
@@ -84,13 +85,9 @@ export function parseSplitsBody(body: unknown, window: SplitsWindow): readonly E
   return splits;
 }
 
-// GBX and GBp are pence; any other currency on an LSE symbol, or a US one not in USD, cannot be
-// put against a position quoted in GBP or USD
-const QUOTE_UNITS_PER_CURRENCY: Readonly<Record<EodhdExchange, Readonly<Record<string, number>>>> =
-  {
-    LSE: { GBP: 1, GBX: PENCE_PER_POUND, GBp: PENCE_PER_POUND },
-    US: { USD: 1 },
-  };
+// GBX and GBp are pence on an LSE line; any other currency is kept as declared for the booking to
+// convert at the mark FX or refuse
+const PENCE: ReadonlySet<string> = new Set(['GBX', 'GBp']);
 
 function exchangeOfSymbol(symbol: string): EodhdExchange {
   const suffix = symbol.slice(symbol.lastIndexOf('.') + 1);
@@ -110,9 +107,11 @@ function parseDividend(raw: unknown, exchange: EodhdExchange): EodhdDividend {
   if (!isIsoDate(record.date) || typeof amount !== 'number' || !(amount > 0)) {
     throw new EodhdRequestError('bad_body');
   }
-  const units = QUOTE_UNITS_PER_CURRENCY[exchange][String(record.currency)];
-  if (units === undefined) throw new EodhdRequestError('bad_currency');
-  return { exDate: record.date, perShare: amount / units };
+  const currency = typeof record.currency === 'string' ? record.currency : '';
+  if (exchange === 'LSE' && PENCE.has(currency)) {
+    return { exDate: record.date, perShare: amount / PENCE_PER_POUND, currency: 'GBP' };
+  }
+  return { exDate: record.date, perShare: amount, currency };
 }
 
 function hasRepeatedRecord(body: readonly unknown[]): boolean {

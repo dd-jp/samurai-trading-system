@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Venue } from '../../../../contracts/index.js';
-import { homeBarVenue, isCfdVenue, quoteCurrencyOf } from './venues.js';
+import { homeBarVenue, isCfdVenue, isQuoteCurrency, quoteCurrencyOf } from './venues.js';
 
 const CASES: readonly (readonly [Venue, 'GBP' | 'USD', boolean])[] = [
   ['alpaca', 'USD', false],
@@ -24,5 +24,11 @@ describe('homeBarVenue', () => {
     ['saxo_cfd_gbp', 'saxo'],
   ] as const)('reads %s bars from the %s series', (venue, home) => {
     expect(homeBarVenue(venue)).toBe(home);
+  });
+});
+
+describe('isQuoteCurrency', () => {
+  it('names only the currencies a venue quotes in', () => {
+    expect(['GBP', 'USD', 'EUR', 'GBX', 'usd', ''].filter(isQuoteCurrency)).toEqual(['GBP', 'USD']);
   });
 });

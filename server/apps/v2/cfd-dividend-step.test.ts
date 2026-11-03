@@ -47,7 +47,7 @@ const HELD = [
   position('VUSA', 'saxo', 50),
 ];
 
-function feed(requests: DividendRequest[][] = []): CfdDividendFeed {
+function feed(requests: DividendRequest[][] = [], lseCurrency = 'GBP'): CfdDividendFeed {
   return {
     refresh: (asked) => {
       requests.push([...asked]);
@@ -55,8 +55,9 @@ function feed(requests: DividendRequest[][] = []): CfdDividendFeed {
     },
     across: (instrument, _exchange, window) => {
       const perShare = instrument === 'AAPL' ? 0.26 : 0.02;
+      const currency = instrument === 'AAPL' ? 'USD' : lseCurrency;
       const read = { symbol: instrument, from: '2026-01-01', to: '2026-12-31', asOf: '2027-01-01' };
-      const dividends = [{ exDate: '2026-06-04', perShare }];
+      const dividends = [{ exDate: '2026-06-04', perShare, currency }];
       return dividendsAcross([{ ...read, dividends }], window.after, window.through);
     },
   };
@@ -79,7 +80,7 @@ function deps(overrides: Partial<CfdDividendStepDeps> = {}) {
     feed: feed(),
     ledger: { booked: () => false, record: (booking) => recorded.push(booking) },
     tradingDate: '2026-06-05',
-    fxFor: (venue) => (venue === 'saxo_cfd_usd' ? USD_PER_GBP : 1),
+    fxFor: (currency) => (currency === 'USD' ? USD_PER_GBP : 1),
     atomically: (work) => work(),
     ...overrides,
   };
@@ -104,6 +105,27 @@ describe('bookCfdDividends', () => {
     expect(recorded.map((booking) => booking.instrument)).toEqual(['VOD_XLON', 'AAPL']);
     expect(report.booked).toEqual(recorded);
     expect(report.unmodelled).toEqual([]);
+    expect(report.refused).toEqual([]);
+  });
+
+  it('converts a USD line on an LSE CFD at the mark FX and reports a line in EUR as refused', async () => {
+    const usd = deps({ feed: feed([], 'USD') });
+    await bookCfdDividends(usd.step);
+    expect(usd.cash).toEqual([
+      ['debate-primary', 2 / USD_PER_GBP],
+      ['debate-primary', (-10 * 0.26) / USD_PER_GBP],
+    ]);
+    const eur = deps({ feed: feed([], 'EUR') });
+    const report = await bookCfdDividends(eur.step);
+    expect(eur.recorded.map((booking) => booking.instrument)).toEqual(['AAPL']);
+    expect(report.refused).toEqual([
+      {
+        bookId: 'debate-primary',
+        instrument: 'VOD_XLON',
+        detail: 'ex-date 2026-06-04 declared in EUR',
+      },
+    ]);
+    expect(report.unread).toEqual([]);
   });
 
   it('names every held CFD, and only those, as unmodelled when there is no feed', async () => {

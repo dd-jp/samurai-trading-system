@@ -1,6 +1,12 @@
 import type { MarketData } from '../../../contracts/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
-import { EodhdRequestError, type SplitsWindow, SqliteDividendReads } from './data/index.js';
+import { assertDividendHistoryCovers } from './backtest-dividends.js';
+import {
+  EodhdClient,
+  EodhdRequestError,
+  type SplitsWindow,
+  SqliteDividendReads,
+} from './data/index.js';
 import { type DividendsReader, historyDividendFeed } from './dividend-feed.js';
 import { fillDividendHistory } from './dividend-history.js';
 
@@ -21,7 +27,7 @@ function reader(asked: [string, SplitsWindow][]): DividendsReader {
         symbol,
         ...window,
         asOf: '2026-10-23',
-        dividends: [{ exDate: '2024-05-10', perShare: 0.25 }],
+        dividends: [{ exDate: '2024-05-10', perShare: 0.25, currency: 'USD' }],
       });
     },
   };
@@ -70,7 +76,10 @@ describe('fillDividendHistory', () => {
     });
     expect(
       historyDividendFeed(reads).across('AAPL', 'US', { after: '2023-12-29', through: WINDOW.to }),
-    ).toEqual({ kind: 'covered', dividends: [{ exDate: '2024-05-10', perShare: 0.25 }] });
+    ).toEqual({
+      kind: 'covered',
+      dividends: [{ exDate: '2024-05-10', perShare: 0.25, currency: 'USD' }],
+    });
     expect(
       db
         .prepare(
@@ -91,5 +100,35 @@ describe('fillDividendHistory', () => {
     const again = await fillDividendHistory(deps, names, WINDOW);
     expect(asked.map(([symbol]) => symbol)).toEqual(['LIMIT.US', 'BOOM.US']);
     expect(again.held).toEqual(['VOD.LSE', 'AAPL.US', 'NEW.US']);
+  });
+
+  it('stores a USD or EUR line on an LSE name as read, so the history covers the window', async () => {
+    const declared: Record<string, string> = { VUTY: 'USD', SHEL: 'EUR' };
+    const fetchImpl = (async (input: URL) => {
+      const tidm = input.pathname.split('/').at(-1)?.split('.')[0] ?? '';
+      const body = [{ date: '2024-05-10', unadjustedValue: 0.5, currency: declared[tidm] }];
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    const reads = new SqliteDividendReads(migratedMemoryStore());
+    const lse = new Map([
+      ['VUTY', 'LSE'],
+      ['SHEL', 'LSE'],
+    ] as const);
+    const deps = {
+      eodhd: new EodhdClient('key', fetchImpl, () => NOW),
+      reads,
+      clock: { now: () => NOW },
+      market: MARKET,
+    };
+    const report = await fillDividendHistory(deps, lse, WINDOW);
+    expect(report).toEqual({ fetched: ['VUTY.LSE', 'SHEL.LSE'], held: [], failed: [] });
+    const feed = historyDividendFeed(reads);
+    expect(feed.across('SHEL', 'LSE', { after: '2023-12-29', through: WINDOW.to })).toEqual({
+      kind: 'covered',
+      dividends: [{ exDate: '2024-05-10', perShare: 0.5, currency: 'EUR' }],
+    });
+    expect(() =>
+      assertDividendHistoryCovers({ market: MARKET, ...WINDOW, dividends: { feed, names: lse } }),
+    ).not.toThrow();
   });
 });

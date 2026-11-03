@@ -145,6 +145,7 @@ export const ARM2_UK_POOL_CFD_DIVIDENDS = {
   long_withholding: CFD_DIVIDEND_LONG_WITHHOLDING,
   short: 'gross',
   booked: 'ex_date_on_ex_date_minus_1_holding',
+  other_currency: 'converted_at_mark_fx_else_line_refused',
 } as const;
 
 const DIVIDEND_EXCHANGE: Readonly<Record<CfdInstrument['currency'], EodhdExchange>> = {

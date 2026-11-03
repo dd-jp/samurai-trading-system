@@ -53,6 +53,7 @@ import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative
 import {
   addDays,
   CALENDAR_REFERENCE,
+  currencyQuotePerGbp,
   fillFxOf,
   firstSessionOn,
   isFresh,
@@ -60,6 +61,8 @@ import {
   MAX_BAR_AGE_CALENDAR_DAYS,
   type MacroGateVerdict,
   macroGate,
+  type QuoteCurrency,
+  quoteCurrencyOf,
   quotePerGbp,
   type SitOutCode,
   type VenueSessionGate,
@@ -353,7 +356,11 @@ class Cycle {
   ) {}
 
   fxFor(venue: Venue): number {
-    return quotePerGbp(this.deps.market, venue, this.tradingDate);
+    return this.fxForCurrency(quoteCurrencyOf(venue));
+  }
+
+  fxForCurrency(currency: QuoteCurrency): number {
+    return currencyQuotePerGbp(this.deps.market, currency, this.tradingDate);
   }
 
   markGbp(instrument: string, venue: Venue): number | undefined {
@@ -707,7 +714,7 @@ class Cycle {
       feed: this.deps.dividendFeed,
       ledger,
       tradingDate: this.tradingDate,
-      fxFor: (venue) => this.fxFor(venue),
+      fxFor: (currency) => this.fxForCurrency(currency),
       atomically: (work) => this.atomically(work),
     });
     this.reportCfdDividends(report);
@@ -729,6 +736,7 @@ class Cycle {
       );
     }
     for (const unbooked of report.splitBefore) this.refuseSplitDividend(unbooked);
+    for (const unbooked of report.refused) this.refuseDividendCurrency(unbooked);
     for (const unbooked of report.unread) this.#dividendsUnread.push(describeUnbooked([unbooked]));
     if (this.#dividendsUnread.length > 0) {
       const message = `CFD dividend cash unread for ${this.#dividendsUnread.join('; ')}`;
@@ -739,6 +747,15 @@ class Cycle {
 
   refuseSplitDividend(unbooked: UnbookedDividend): void {
     const message = `${unbooked.bookId} ${unbooked.instrument}: dividend from ex-date ${unbooked.detail} not booked, a split precedes it since the last mark and the held qty is not in its units`;
+    this.refuseDividend(unbooked, message, 'v2_cfd_dividend_split_refused');
+  }
+
+  refuseDividendCurrency(unbooked: UnbookedDividend): void {
+    const message = `${unbooked.bookId} ${unbooked.instrument}: dividend on ${unbooked.detail} not booked, no mark FX converts it`;
+    this.refuseDividend(unbooked, message, 'v2_cfd_dividend_currency_refused');
+  }
+
+  refuseDividend(unbooked: UnbookedDividend, message: string, event: string): void {
     this.deps.journal.recordRefusal({
       trading_date: this.tradingDate,
       scope: 'cash',
@@ -749,7 +766,7 @@ class Cycle {
       instrument: unbooked.instrument,
     });
     this.refusals.push(message);
-    this.log('error', 'v2_cfd_dividend_split_refused', message);
+    this.log('error', event, message);
   }
 
   refuseMarkIfDividendUnread(): void {

@@ -61,8 +61,8 @@ function inputs(overrides: Partial<HeldDividendInputs>): HeldDividendInputs {
     tradingDate: '2026-06-05',
     lastMarkDate: '2026-06-03',
     market: market(),
-    source: source([{ exDate: '2026-06-04', perShare: 0.02 }]),
-    fxQuotePerGbp: 1,
+    source: source([{ exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' }]),
+    fxFor: (currency) => (currency === 'USD' ? USD_PER_GBP : 1),
     booked: () => false,
     ...overrides,
   };
@@ -78,8 +78,7 @@ describe('CFD dividend booking rule', () => {
     expect(amounts({})).toEqual([2]);
     const us = amounts({
       held: position('saxo_cfd_usd', 100),
-      source: source([{ exDate: '2026-06-04', perShare: 0.26 }]),
-      fxQuotePerGbp: USD_PER_GBP,
+      source: source([{ exDate: '2026-06-04', perShare: 0.26, currency: 'USD' }]),
     });
     expect(us[0]).toBeCloseTo((100 * 0.26 * 0.7) / USD_PER_GBP, 12);
   });
@@ -89,8 +88,7 @@ describe('CFD dividend booking rule', () => {
     const us = heldDividends(
       inputs({
         held: position('saxo_cfd_usd', -100),
-        source: source([{ exDate: '2026-06-04', perShare: 0.26 }]),
-        fxQuotePerGbp: USD_PER_GBP,
+        source: source([{ exDate: '2026-06-04', perShare: 0.26, currency: 'USD' }]),
       }),
     ).bookings;
     expect(us.map(({ withholding, amount_gbp }) => ({ withholding, amount_gbp }))).toEqual([
@@ -134,8 +132,8 @@ describe('CFD dividend booking rule', () => {
 
   it('opens the window at the booking date when the book last marked before the position opened', () => {
     const dividends = [
-      { exDate: '2026-06-03', perShare: 0.01 },
-      { exDate: '2026-06-05', perShare: 0.02 },
+      { exDate: '2026-06-03', perShare: 0.01, currency: 'GBP' },
+      { exDate: '2026-06-05', perShare: 0.02, currency: 'GBP' },
     ];
     expect(
       amounts({
@@ -149,10 +147,10 @@ describe('CFD dividend booking rule', () => {
 
   it('books each ex-date once, after the bar the last mark took and through the bar marked now', () => {
     const dividends = [
-      { exDate: '2026-06-02', perShare: 0.01 },
-      { exDate: '2026-06-03', perShare: 0.02 },
-      { exDate: '2026-06-04', perShare: 0.04 },
-      { exDate: '2026-06-05', perShare: 0.08 },
+      { exDate: '2026-06-02', perShare: 0.01, currency: 'GBP' },
+      { exDate: '2026-06-03', perShare: 0.02, currency: 'GBP' },
+      { exDate: '2026-06-04', perShare: 0.04, currency: 'GBP' },
+      { exDate: '2026-06-05', perShare: 0.08, currency: 'GBP' },
     ];
     expect(amounts({ source: source(dividends) })).toEqual([2, 4]);
     expect(amounts({ source: source(dividends), booked: (date) => date === '2026-06-03' })).toEqual(
@@ -171,10 +169,66 @@ describe('CFD dividend booking rule', () => {
 
   it('sums a regular and a special dividend on one ex-date into one booking', () => {
     const both = [
-      { exDate: '2026-06-04', perShare: 0.02 },
-      { exDate: '2026-06-04', perShare: 0.5 },
+      { exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' },
+      { exDate: '2026-06-04', perShare: 0.5, currency: 'GBP' },
     ];
     expect(amounts({ source: source(both) })).toEqual([52]);
+  });
+
+  it('converts a line declared in another quote currency into the position quote at the mark FX', () => {
+    const usdOnLse = heldDividends(
+      inputs({ source: source([{ exDate: '2026-06-04', perShare: 0.5, currency: 'USD' }]) }),
+    );
+    expect(usdOnLse).toMatchObject({
+      bookings: [
+        { per_share_native: 0.5 / USD_PER_GBP, fx_quote_per_gbp: 1, amount_gbp: 50 / USD_PER_GBP },
+      ],
+      refused: [],
+    });
+    const [gbpOnUs] = heldDividends(
+      inputs({
+        held: position('saxo_cfd_usd', 100),
+        source: source([{ exDate: '2026-06-04', perShare: 0.4, currency: 'GBP' }]),
+      }),
+    ).bookings;
+    expect(gbpOnUs?.fx_quote_per_gbp).toBe(USD_PER_GBP);
+    expect(gbpOnUs?.per_share_native).toBeCloseTo(0.4 * USD_PER_GBP, 12);
+    expect(gbpOnUs?.amount_gbp).toBeCloseTo(100 * 0.4 * 0.7, 12);
+  });
+
+  it('refuses only a line whose currency no mark FX converts and books the rest', () => {
+    const result = heldDividends(
+      inputs({
+        source: source([
+          { exDate: '2026-06-03', perShare: 0.01, currency: '' },
+          { exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' },
+          { exDate: '2026-06-04', perShare: 0.5, currency: 'EUR' },
+        ]),
+      }),
+    );
+    expect(result.bookings.map((booking) => [booking.ex_date, booking.amount_gbp])).toEqual([
+      ['2026-06-04', 2],
+    ]);
+    expect(result.refused).toEqual([
+      'ex-date 2026-06-03 declared in no currency',
+      'ex-date 2026-06-04 declared in EUR',
+    ]);
+  });
+
+  it('asks the mark FX only for the currencies it converts, and throws when one is missing', () => {
+    const noFix = (currency: string) => {
+      if (currency === 'USD') throw new Error('fx: no GBPUSD observation on or before 2026-01-01');
+      return 1;
+    };
+    expect(amounts({ fxFor: noFix })).toEqual([2]);
+    expect(() =>
+      heldDividends(
+        inputs({
+          fxFor: noFix,
+          source: source([{ exDate: '2026-06-04', perShare: 0.5, currency: 'USD' }]),
+        }),
+      ),
+    ).toThrow('no GBPUSD');
   });
 
   it('books nothing and reports why when the source cannot vouch for the window', () => {
@@ -200,9 +254,9 @@ describe('CFD dividend booking rule', () => {
         lastMarkDate: '2026-06-01',
         market: market('2026-06-03'),
         source: source([
-          { exDate: '2026-06-02', perShare: 0.02 },
-          { exDate: '2026-06-03', perShare: 0.01 },
-          { exDate: '2026-06-04', perShare: 0.01 },
+          { exDate: '2026-06-02', perShare: 0.02, currency: 'GBP' },
+          { exDate: '2026-06-03', perShare: 0.01, currency: 'GBP' },
+          { exDate: '2026-06-04', perShare: 0.01, currency: 'GBP' },
         ]),
       }),
     );

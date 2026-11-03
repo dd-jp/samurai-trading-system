@@ -1,11 +1,11 @@
-import type { BookLedger, MarketData, Position, Venue } from '../../../contracts/index.js';
+import type { BookLedger, MarketData, Position } from '../../../contracts/index.js';
 import {
   type CfdDividendBooking,
   type CfdDividendLedger,
   dividendWindow,
   heldDividends,
 } from './cfd-dividends.js';
-import { isCfdVenue } from './data/index.js';
+import { isCfdVenue, type QuoteCurrency } from './data/index.js';
 import type { CfdDividendFeed, DividendRequest } from './dividend-feed.js';
 import { exchangeOf } from './split-crosscheck.js';
 
@@ -16,7 +16,7 @@ export interface CfdDividendStepDeps {
   readonly feed: CfdDividendFeed | undefined;
   readonly ledger: CfdDividendLedger;
   readonly tradingDate: string;
-  readonly fxFor: (venue: Venue) => number;
+  readonly fxFor: (currency: QuoteCurrency) => number;
   readonly atomically: <T>(work: () => T) => T;
 }
 
@@ -30,6 +30,7 @@ export interface CfdDividendStepReport {
   readonly booked: readonly CfdDividendBooking[];
   readonly unread: readonly UnbookedDividend[];
   readonly splitBefore: readonly UnbookedDividend[];
+  readonly refused: readonly UnbookedDividend[];
   readonly unmodelled: readonly UnbookedDividend[];
 }
 
@@ -77,6 +78,7 @@ interface StepReport {
   readonly booked: CfdDividendBooking[];
   readonly unread: UnbookedDividend[];
   readonly splitBefore: UnbookedDividend[];
+  readonly refused: UnbookedDividend[];
 }
 
 function bookPosition(
@@ -90,7 +92,7 @@ function bookPosition(
     tradingDate: deps.tradingDate,
     market: deps.market,
     source: feed,
-    fxQuotePerGbp: deps.fxFor(position.held.venue),
+    fxFor: deps.fxFor,
     booked: (exDate) => deps.ledger.booked(position.bookId, position.held.instrument, exDate),
   });
   for (const booking of result.bookings) book(deps, booking);
@@ -99,12 +101,13 @@ function bookPosition(
   if (result.splitBefore !== undefined) {
     report.splitBefore.push(unbooked(position, result.splitBefore));
   }
+  for (const detail of result.refused ?? []) report.refused.push(unbooked(position, detail));
 }
 
 // Runs before the cycle books any fill, so each position is the holding at the last mark
 export async function bookCfdDividends(deps: CfdDividendStepDeps): Promise<CfdDividendStepReport> {
   const held = heldCfds(deps);
-  const report: StepReport = { booked: [], unread: [], splitBefore: [] };
+  const report: StepReport = { booked: [], unread: [], splitBefore: [], refused: [] };
   const { feed } = deps;
   if (feed === undefined) {
     return { ...report, unmodelled: held.map((position) => unbooked(position, 'no feed')) };

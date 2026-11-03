@@ -8263,8 +8263,8 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     const deps = withDividends(
       base,
       dividendFeed([
-        { exDate: '2026-09-25', perShare: 0.5 },
-        { exDate: '2026-09-26', perShare: 0.02 },
+        { exDate: '2026-09-25', perShare: 0.5, currency: 'GBP' },
+        { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
       ]),
     );
     await runCycle(deps, '2026-09-25');
@@ -8287,7 +8287,10 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
   it('entitles an exit filled on the ex-date and not one filled on the session before it', async () => {
     const run = async (exitCycle: string) => {
       const base = harness([shortIsf], true);
-      const deps = withDividends(base, dividendFeed([{ exDate: '2026-09-28', perShare: 0.02 }]));
+      const deps = withDividends(
+        base,
+        dividendFeed([{ exDate: '2026-09-28', perShare: 0.02, currency: 'GBP' }]),
+      );
       await runCycle(deps, '2026-09-25');
       base.setDecisions([]);
       await runDays(
@@ -8326,7 +8329,7 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
         logged: logs.filter((entry) => entry.event === 'v2_cfd_dividend_booked'),
       };
     };
-    const paid = await cashAfter([{ exDate: '2026-09-26', perShare: 0.26 }]);
+    const paid = await cashAfter([{ exDate: '2026-09-26', perShare: 0.26, currency: 'USD' }]);
     const none = await cashAfter([]);
     expect(paid.logged).toMatchObject([
       {
@@ -8354,8 +8357,8 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     const deps = withDividends(
       base,
       dividendFeed([
-        { exDate: '2026-09-26', perShare: 0.26 },
-        { exDate: '2026-09-27', perShare: 0.1 },
+        { exDate: '2026-09-26', perShare: 0.26, currency: 'USD' },
+        { exDate: '2026-09-27', perShare: 0.1, currency: 'USD' },
       ]),
     );
     await runCycle(deps, '2026-09-25');
@@ -8378,9 +8381,95 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     copy.close();
   });
 
+  it('books a USD dividend on an LSE CFD at the cycle FX and rebuilds to the same book cash', async () => {
+    const base = harness([shortIsf], true);
+    const deps = withDividends(
+      base,
+      dividendFeed([{ exDate: '2026-09-26', perShare: 0.26, currency: 'USD' }]),
+    );
+    await runCycle(deps, '2026-09-25');
+    base.setDecisions([]);
+    await runDays(deps, ['2026-09-26', '2026-09-27', '2026-09-28']);
+    const qty = base.books.position('debate/primary', 'ISF')?.qty ?? 0;
+    expect(qty).toBeLessThan(0);
+    const [row] = booked(deps.db) as { ex_date: string; amount_gbp: number }[];
+    expect(row?.ex_date).toBe('2026-09-26');
+    expect(row?.amount_gbp).toBeCloseTo((qty * 0.26) / FX, 12);
+    const copy = rewoundCopy(deps.db, '2026-09-29', '2026-09-29T07:30:00.000Z');
+    const books = new PaperBooks(copy, clock, new CapitalConfigStore(copy, clock), '2026-09-01', [
+      base.sleeve,
+    ]);
+    rebuildBooks({
+      copy,
+      books,
+      market: base.market,
+      venueSessions: { entrySitOut: () => undefined, timeStopPausedVenues: () => [] },
+    });
+    for (const bookId of ['debate/primary', 'debate/no-macro-gate']) {
+      expect(books.cash(bookId)).toBeCloseTo(base.books.cash(bookId), 9);
+    }
+    copy.close();
+  });
+
+  it('refuses, journals and logs only a line no mark FX converts, books the rest and marks the date', async () => {
+    const base = harness([shortIsf], true);
+    const feed = dividendFeed([
+      { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
+      { exDate: '2026-09-26', perShare: 0.5, currency: 'XYZ' },
+    ]);
+    await runCycle(withDividends(base, feed), '2026-09-25');
+    base.setDecisions([]);
+    await runCycle(withDividends(base, feed), '2026-09-26');
+    const logs: LogEntry[] = [];
+    const deps = {
+      ...withDividends(base, feed),
+      logger: { log: (entry: LogEntry) => logs.push(entry) },
+    };
+    const report = await runCycle(deps, '2026-09-27');
+    const messages = ['debate/primary', 'debate/no-macro-gate'].map(
+      (bookId) =>
+        `${bookId} ISF: dividend on ex-date 2026-09-26 declared in XYZ not booked, no mark FX converts it`,
+    );
+    expect(base.books.isMarked('2026-09-27')).toBe(true);
+    for (const message of messages) expect(report.refusals).toContain(message);
+    expect(
+      deps.db
+        .prepare(
+          "SELECT scope, parameter, ticket, message, book_id, instrument FROM v2_refusals WHERE parameter = 'CFD_DIVIDEND' ORDER BY refusal_id",
+        )
+        .all(),
+    ).toEqual(
+      messages.map((message, index) => ({
+        scope: 'cash',
+        parameter: 'CFD_DIVIDEND',
+        ticket: '#2143',
+        message,
+        book_id: index === 0 ? 'debate/primary' : 'debate/no-macro-gate',
+        instrument: 'ISF',
+      })),
+    );
+    expect(
+      logs.filter((entry) => entry.event === 'v2_cfd_dividend_currency_refused'),
+    ).toMatchObject(messages.map((message) => ({ level: 'error', message })));
+    const qty = base.books.position('debate/primary', 'ISF')?.qty ?? 0;
+    expect(booked(deps.db)).toEqual([
+      {
+        trading_date: '2026-09-27',
+        instrument: 'ISF',
+        ex_date: '2026-09-26',
+        qty,
+        withholding: 0,
+        amount_gbp: qty * 0.02,
+      },
+    ]);
+  });
+
   it('books each ex-date once when the date is run again', async () => {
     const base = harness([shortIsf], true);
-    const deps = withDividends(base, dividendFeed([{ exDate: '2026-09-26', perShare: 0.02 }]));
+    const deps = withDividends(
+      base,
+      dividendFeed([{ exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' }]),
+    );
     await runCycle(deps, '2026-09-25');
     base.setDecisions([]);
     await runDays(deps, ['2026-09-26', '2026-09-27', '2026-09-27']);
@@ -8420,7 +8509,10 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     expect(base.books.isMarked('2026-09-27')).toBe(false);
 
     base.setDecisions([]);
-    const retry = withDividends(base, dividendFeed([{ exDate: '2026-09-26', perShare: 0.02 }]));
+    const retry = withDividends(
+      base,
+      dividendFeed([{ exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' }]),
+    );
     await runCycle(retry, '2026-09-27');
     expect(base.books.isMarked('2026-09-27')).toBe(true);
     expect(booked(retry.db)).toHaveLength(1);
@@ -8428,7 +8520,7 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
 
   it('blocks entries and leaves the date unmarked when booking a dividend throws, then books it once on the retry', async () => {
     const base = harness([shortIsf], true);
-    const feed = dividendFeed([{ exDate: '2026-09-26', perShare: 0.02 }]);
+    const feed = dividendFeed([{ exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' }]);
     await runCycle(withDividends(base, feed), '2026-09-25');
     base.setDecisions([]);
     await runCycle(withDividends(base, feed), '2026-09-26');
@@ -8519,7 +8611,10 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     });
     const logs: LogEntry[] = [];
     const deps = {
-      ...withDividends(base, dividendFeed([{ exDate: '2026-09-28', perShare: 0.26 }])),
+      ...withDividends(
+        base,
+        dividendFeed([{ exDate: '2026-09-28', perShare: 0.26, currency: 'USD' }]),
+      ),
       market: {
         ...base.market,
         lastBarBefore: (_instrument: string, tradingDate: string) =>

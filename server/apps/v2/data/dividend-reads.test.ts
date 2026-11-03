@@ -7,7 +7,7 @@ const READ = {
   from: '2026-06-01',
   to: '2026-06-08',
   asOf: '2026-06-09',
-  dividends: [{ exDate: '2026-06-04', perShare: 0.02 }],
+  dividends: [{ exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' }],
 };
 
 describe('SqliteDividendReads', () => {

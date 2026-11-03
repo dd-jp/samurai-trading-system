@@ -87,14 +87,20 @@ export function londonDateOf(isoTimestamp: string): string {
   return LONDON_DATE.format(new Date(isoTimestamp));
 }
 
+export function currencyQuotePerGbp(
+  market: Pick<MarketData, 'gbpUsdAtYearStart'>,
+  currency: QuoteCurrency,
+  tradingDate: string,
+): number {
+  return currency === 'USD' ? market.gbpUsdAtYearStart(Number(tradingDate.slice(0, 4))) : 1;
+}
+
 export function quotePerGbp(
   market: Pick<MarketData, 'gbpUsdAtYearStart'>,
   venue: Venue,
   tradingDate: string,
 ): number {
-  return quoteCurrencyOf(venue) === 'USD'
-    ? market.gbpUsdAtYearStart(Number(tradingDate.slice(0, 4)))
-    : 1;
+  return currencyQuotePerGbp(market, quoteCurrencyOf(venue), tradingDate);
 }
 
 export function yearStartCoverageRefusal(

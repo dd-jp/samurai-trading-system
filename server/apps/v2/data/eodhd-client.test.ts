@@ -223,16 +223,16 @@ describe('parseDividendsBody', () => {
       dividendRecord('2026-09-03', 3, 'GBp'),
     ];
     expect(parseDividendsBody(body, 'VOD.LSE', DIVIDEND_WINDOW)).toEqual([
-      { exDate: '2026-02-05', perShare: 0.04 },
-      { exDate: '2026-06-04', perShare: 0.025 },
-      { exDate: '2026-09-03', perShare: 0.03 },
+      { exDate: '2026-02-05', perShare: 0.04, currency: 'GBP' },
+      { exDate: '2026-06-04', perShare: 0.025, currency: 'GBP' },
+      { exDate: '2026-09-03', perShare: 0.03, currency: 'GBP' },
     ]);
   });
 
   it('reads a US dividend in USD per share', () => {
     expect(
       parseDividendsBody([dividendRecord('2026-08-11', 0.26, 'USD')], 'AAPL.US', DIVIDEND_WINDOW),
-    ).toEqual([{ exDate: '2026-08-11', perShare: 0.26 }]);
+    ).toEqual([{ exDate: '2026-08-11', perShare: 0.26, currency: 'USD' }]);
   });
 
   it('keeps a regular and a special dividend that share an ex-date', () => {
@@ -243,17 +243,20 @@ describe('parseDividendsBody', () => {
     expect(parseDividendsBody(body, 'AAPL.US', DIVIDEND_WINDOW)).toHaveLength(2);
   });
 
-  it('refuses a currency the venue does not quote in', () => {
-    const cases: [string, string][] = [
-      ['VOD.LSE', 'USD'],
-      ['VOD.LSE', 'EUR'],
-      ['AAPL.US', 'GBP'],
-      ['AAPL.US', 'GBX'],
+  it('keeps a line in any other currency as declared, and one with no currency as blank', () => {
+    const cases: [string, unknown, string][] = [
+      ['VOD.LSE', 'USD', 'USD'],
+      ['VOD.LSE', 'EUR', 'EUR'],
+      ['AAPL.US', 'GBP', 'GBP'],
+      ['AAPL.US', 'GBX', 'GBX'],
+      ['VOD.LSE', undefined, ''],
+      ['VOD.LSE', 7, ''],
     ];
-    for (const [symbol, currency] of cases) {
-      expect(() =>
-        parseDividendsBody([dividendRecord('2026-08-11', 1, currency)], symbol, DIVIDEND_WINDOW),
-      ).toThrow('bad_currency');
+    for (const [symbol, declared, currency] of cases) {
+      const record = { ...dividendRecord('2026-08-11', 1.5, ''), currency: declared };
+      expect(parseDividendsBody([record], symbol, DIVIDEND_WINDOW)).toEqual([
+        { exDate: '2026-08-11', perShare: 1.5, currency },
+      ]);
     }
   });
 
@@ -299,7 +302,7 @@ describe('EodhdClient.dividends', () => {
       symbol: 'AAPL.US',
       ...DIVIDEND_WINDOW,
       asOf: '2026-10-09',
-      dividends: [{ exDate: '2026-08-11', perShare: 0.26 }],
+      dividends: [{ exDate: '2026-08-11', perShare: 0.26, currency: 'USD' }],
     });
   });
 

@@ -8,6 +8,9 @@ import {
   type EodhdDividend,
   type EodhdExchange,
   isCfdVenue,
+  isQuoteCurrency,
+  type QuoteCurrency,
+  quoteCurrencyOf,
 } from './data/index.js';
 import { splitRatioAcross } from './split.js';
 import { exchangeOf } from './split-crosscheck.js';
@@ -64,6 +67,7 @@ export interface HeldDividends {
   readonly bookings: readonly CfdDividendBooking[];
   readonly unread?: string | undefined;
   readonly splitBefore?: string | undefined;
+  readonly refused?: readonly string[] | undefined;
 }
 
 const NONE: HeldDividends = { bookings: [] };
@@ -75,7 +79,7 @@ export interface HeldDividendInputs {
   readonly lastMarkDate: string | undefined;
   readonly market: Pick<MarketData, 'lastBarBefore' | 'barsBefore'>;
   readonly source: CfdDividendSource;
-  readonly fxQuotePerGbp: number;
+  readonly fxFor: (currency: QuoteCurrency) => number;
   readonly booked: (exDate: string) => boolean;
 }
 
@@ -114,6 +118,36 @@ function perShareByDate(dividends: readonly EodhdDividend[]): Map<string, number
   return byDate;
 }
 
+interface QuotedLines {
+  readonly lines: readonly EodhdDividend[];
+  readonly refused: readonly string[];
+}
+
+// David 2026-11-03 (#2143,
+// https://github.com/dd-jp/samurai-trading-system/issues/2143#issuecomment-6612492738): a line
+// declared in another currency is converted at the mark FX, and one no mark FX converts is refused
+// alone
+function inPositionQuote(
+  inputs: HeldDividendInputs,
+  dividends: readonly EodhdDividend[],
+): QuotedLines {
+  const quote = quoteCurrencyOf(inputs.held.venue);
+  const lines: EodhdDividend[] = [];
+  const refused: string[] = [];
+  for (const line of dividends) {
+    const { currency } = line;
+    if (!isQuoteCurrency(currency)) {
+      refused.push(`ex-date ${line.exDate} declared in ${currency || 'no currency'}`);
+    } else if (currency === quote) {
+      lines.push(line);
+    } else {
+      const perShare = (line.perShare * inputs.fxFor(quote)) / inputs.fxFor(currency);
+      lines.push({ ...line, perShare, currency: quote });
+    }
+  }
+  return { lines, refused };
+}
+
 function bookingOf(
   inputs: HeldDividendInputs,
   exDate: string,
@@ -121,6 +155,7 @@ function bookingOf(
 ): CfdDividendBooking {
   const { held } = inputs;
   const withholding = cfdDividendWithholding(exchangeOf(held.venue), held.qty);
+  const fxQuotePerGbp = inputs.fxFor(quoteCurrencyOf(held.venue));
   return {
     book_id: inputs.bookId,
     trading_date: inputs.tradingDate,
@@ -131,8 +166,8 @@ function bookingOf(
     qty: held.qty,
     per_share_native: perShareNative,
     withholding,
-    fx_quote_per_gbp: inputs.fxQuotePerGbp,
-    amount_gbp: cfdDividendCashGbp(held.qty, perShareNative, withholding, inputs.fxQuotePerGbp),
+    fx_quote_per_gbp: fxQuotePerGbp,
+    amount_gbp: cfdDividendCashGbp(held.qty, perShareNative, withholding, fxQuotePerGbp),
   };
 }
 
@@ -162,13 +197,14 @@ function bookingsAcross(
   window: DividendWindow,
   dividends: readonly EodhdDividend[],
 ): HeldDividends {
+  const { lines, refused } = inPositionQuote(inputs, dividends);
   const bookings: CfdDividendBooking[] = [];
-  for (const [exDate, perShare] of perShareByDate(dividends)) {
+  for (const [exDate, perShare] of perShareByDate(lines)) {
     if (inputs.booked(exDate)) continue;
-    if (splitBefore(inputs, window, exDate)) return { bookings, splitBefore: exDate };
+    if (splitBefore(inputs, window, exDate)) return { bookings, splitBefore: exDate, refused };
     bookings.push(bookingOf(inputs, exDate, perShare));
   }
-  return { bookings };
+  return { bookings, refused };
 }
 
 export interface CfdDividendLedger {

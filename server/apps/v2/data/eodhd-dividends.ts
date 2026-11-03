@@ -12,7 +12,9 @@ function listedOn(read: DividendsRead, date: string): EodhdDividend[] {
 }
 
 function amountsKey(dividends: readonly EodhdDividend[]): string {
-  return JSON.stringify(dividends.map((dividend) => dividend.perShare).sort((a, b) => a - b));
+  return JSON.stringify(
+    dividends.map(({ perShare, currency }) => `${perShare} ${currency}`).sort(),
+  );
 }
 
 // every read covering the date must list the same dividends on it, so a later read that drops or
