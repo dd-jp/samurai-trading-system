@@ -1,23 +1,42 @@
 import type { GbpUsdFix, MarketData, V2Bar, Venue } from '../../../../contracts/index.js';
-import { describeThrownSafely } from '../../../shared/index.js';
+import { describeThrownSafely, readSeededFile } from '../../../shared/index.js';
 import { type BarsSource, barsBefore } from './bars.js';
 import {
+  type BoeFix,
+  FX_EUR_PATH,
   FX_SOURCE_GBP,
   type FxObservation,
   latestGbpUsd,
+  parseBoeGbpEurCsv,
   staleYearStartReason,
   yearStartFix,
   yearStartFxSource,
+  yearStartGbpEur,
 } from './fx.js';
-import { type QuoteCurrency, quoteCurrencyOf } from './venues.js';
+import { type ConvertibleCurrency, type QuoteCurrency, quoteCurrencyOf } from './venues.js';
+
+function noGbpEurSeries(): readonly BoeFix[] {
+  throw new Error('fx: no BoE XUDLERS series is loaded');
+}
+
+export function gbpEurFromFile(path: string = FX_EUR_PATH): () => readonly BoeFix[] {
+  return () => parseBoeGbpEurCsv(readSeededFile(path));
+}
 
 export class BarsMarketData implements MarketData {
   readonly #yearStart = new Map<number, FxObservation>();
+  #gbpEur: readonly BoeFix[] | undefined;
 
   constructor(
     private readonly bars: BarsSource,
     private readonly fx: readonly FxObservation[],
+    private readonly loadGbpEur: () => readonly BoeFix[] = noGbpEurSeries,
   ) {}
+
+  gbpEurAtYearStart(year: number): number {
+    this.#gbpEur ??= this.loadGbpEur();
+    return yearStartGbpEur(this.#gbpEur, year);
+  }
 
   lastBarBefore(instrument: string, tradingDate: string): V2Bar | undefined {
     const series = this.bars.load(instrument);
@@ -88,11 +107,29 @@ export function londonDateOf(isoTimestamp: string): string {
 }
 
 export function currencyQuotePerGbp(
-  market: Pick<MarketData, 'gbpUsdAtYearStart'>,
-  currency: QuoteCurrency,
+  market: Pick<MarketData, 'gbpUsdAtYearStart' | 'gbpEurAtYearStart'>,
+  currency: ConvertibleCurrency,
   tradingDate: string,
 ): number {
-  return currency === 'USD' ? market.gbpUsdAtYearStart(Number(tradingDate.slice(0, 4))) : 1;
+  const year = Number(tradingDate.slice(0, 4));
+  switch (currency) {
+    case 'GBP':
+      return 1;
+    case 'USD':
+      return market.gbpUsdAtYearStart(year);
+    case 'EUR':
+      return gbpEurAtYearStartOf(market, year);
+  }
+}
+
+export function gbpEurAtYearStartOf(
+  market: Pick<MarketData, 'gbpEurAtYearStart'>,
+  year: number,
+): number {
+  if (market.gbpEurAtYearStart === undefined) {
+    throw new Error('fx: this market carries no BoE XUDLERS GBP/EUR rate');
+  }
+  return market.gbpEurAtYearStart(year);
 }
 
 export function quotePerGbp(

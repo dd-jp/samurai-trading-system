@@ -818,6 +818,15 @@ describe('parseReplayArgs', () => {
     ).toMatchObject({ spreadsPath: 'a.csv', saxoSpreadsPath: 'b.csv' });
   });
 
+  it('reads the GBP/EUR series a EUR dividend line converts at (#2170)', () => {
+    expect(parseReplayArgs(['--date', '2026-09-30'])).toMatchObject({
+      gbpEurPath: 'data/bars/fx/gbpeur-boe-xudlers.csv',
+    });
+    expect(parseReplayArgs(['--date', '2026-09-30', '--fx-eur', 'e.csv'])).toMatchObject({
+      gbpEurPath: 'e.csv',
+    });
+  });
+
   it('refuses an unknown flag and a flag without a value', () => {
     expect(() => parseReplayArgs(['--dry-run', 'x'])).toThrow(
       'unknown or valueless argument --dry-run',

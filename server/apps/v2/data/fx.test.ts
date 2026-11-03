@@ -4,9 +4,12 @@ import {
   DAY_FIX_MAX_GAP_DAYS,
   dayFxSource,
   dayGbpUsd,
+  parseBoeGbpEurCsv,
   parseBoeGbpUsdCsv,
+  parseBoeSeriesCsv,
   staleYearStartReason,
   yearStartFxSource,
+  yearStartGbpEur,
   yearStartGbpUsd,
 } from './fx.js';
 
@@ -140,5 +143,34 @@ describe('dayGbpUsd (#1947)', () => {
     expect(dayFxSource('2026-04-02')).toBe('boe-xudluss:2026-04-02');
     expect(yearStartFxSource(2026, '2025-12-31')).toBe('boe-xudluss:year-start:2026@2025-12-31');
     expect(yearStartFxSource(2026, undefined)).toBe('boe-xudluss:year-start:2026@unknown');
+  });
+});
+
+describe('BoE XUDLERS GBP/EUR (#2170)', () => {
+  const EUR_CSV = ['DATE,XUDLERS', '30 Dec 2025,1.1402', '31 Dec 2025,1.1471', ''].join('\n');
+
+  it('parses its own series code and refuses the USD file in its place', () => {
+    expect(parseBoeGbpEurCsv(EUR_CSV)).toEqual([
+      { date: '2025-12-30', rate: 1.1402 },
+      { date: '2025-12-31', rate: 1.1471 },
+    ]);
+    expect(() => parseBoeGbpEurCsv(CSV)).toThrow('fx: unexpected header DATE,XUDLUSS');
+    expect(() => parseBoeGbpUsdCsv(EUR_CSV)).toThrow('fx: unexpected header DATE,XUDLERS');
+    expect(parseBoeSeriesCsv(CSV, 'XUDLUSS')[0]).toEqual({ date: '2025-12-30', rate: 1.34 });
+  });
+
+  it('fixes the year rate at the last fix on or before 1 January', () => {
+    expect(yearStartGbpEur(parseBoeGbpEurCsv(EUR_CSV), 2026)).toBe(1.1471);
+    expect(yearStartGbpEur([{ date: '2026-01-01', rate: 1.2 }], 2026)).toBe(1.2);
+  });
+
+  it('refuses a year with no fix, or a stale one, rather than book cash at it', () => {
+    expect(() => yearStartGbpEur(parseBoeGbpEurCsv(EUR_CSV), 2025)).toThrow(
+      'fx: no BoE XUDLERS fix on or before 2025-01-01',
+    );
+    expect(yearStartGbpEur([{ date: '2026-12-25', rate: 1.2 }], 2027)).toBe(1.2);
+    expect(() => yearStartGbpEur([{ date: '2026-12-24', rate: 1.2 }], 2027)).toThrow(
+      `fx: last BoE XUDLERS fix on or before 2027-01-01 is 2026-12-24, more than ${DAY_FIX_MAX_GAP_DAYS} days before it`,
+    );
   });
 });

@@ -1,9 +1,13 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { V2Bar } from '../../../../contracts/index.js';
 import {
   BarsMarketData,
   currencyQuotePerGbp,
   fillFxOf,
+  gbpEurFromFile,
   londonDateOf,
   quotePerGbp,
   yearStartCoverageRefusal,
@@ -53,6 +57,66 @@ describe('BarsMarketData', () => {
     expect(currencyQuotePerGbp(market, 'USD', '2026-09-25')).toBe(first);
     expect(currencyQuotePerGbp(market, 'GBP', '2026-09-25')).toBe(1);
     expect(() => market.gbpUsdAtYearStart(2024)).toThrow(/no GBPUSD/);
+  });
+});
+
+describe('GBP/EUR at the year start (#2170)', () => {
+  const USD = [{ date: '2025-12-31', gbpUsd: 1.3 }];
+  const EUR = [{ date: '2025-12-31', rate: 1.17 }];
+
+  it('reads the EUR series only when a EUR rate is asked for, then once', () => {
+    const loadEur = vi.fn(() => EUR);
+    const market = new BarsMarketData({ load: () => undefined }, USD, loadEur);
+    expect(currencyQuotePerGbp(market, 'USD', '2026-06-01')).toBe(1.3);
+    expect(currencyQuotePerGbp(market, 'GBP', '2026-06-01')).toBe(1);
+    expect(loadEur).not.toHaveBeenCalled();
+    expect(currencyQuotePerGbp(market, 'EUR', '2026-06-01')).toBe(1.17);
+    expect(market.gbpEurAtYearStart(2026)).toBe(1.17);
+    expect(loadEur).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws on a EUR rate with no series, leaving GBP and USD as they were', () => {
+    const missing = () => {
+      throw new Error("ENOENT: no such file 'gbpeur-boe-xudlers.csv'");
+    };
+    const market = new BarsMarketData({ load: () => undefined }, USD, missing);
+    expect(() => currencyQuotePerGbp(market, 'EUR', '2026-06-01')).toThrow(/ENOENT/);
+    expect(() => currencyQuotePerGbp(market, 'EUR', '2026-06-01')).toThrow(/ENOENT/);
+    expect(currencyQuotePerGbp(market, 'USD', '2026-06-01')).toBe(1.3);
+    expect(() =>
+      new BarsMarketData({ load: () => undefined }, USD).gbpEurAtYearStart(2026),
+    ).toThrow('fx: no BoE XUDLERS series is loaded');
+  });
+
+  it('refuses a market that carries no EUR rate rather than quote EUR at par', () => {
+    expect(() =>
+      currencyQuotePerGbp({ gbpUsdAtYearStart: () => 1.3 }, 'EUR', '2026-06-01'),
+    ).toThrow('fx: this market carries no BoE XUDLERS GBP/EUR rate');
+  });
+
+  it('reads the series from its file, and only throws when a EUR rate is asked of a missing one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gbpeur-'));
+    try {
+      const path = join(dir, 'gbpeur-boe-xudlers.csv');
+      writeFileSync(path, 'DATE,XUDLERS\n31 Dec 2025,1.1471\n');
+      expect(gbpEurFromFile(path)()).toEqual([{ date: '2025-12-31', rate: 1.1471 }]);
+      const absent = new BarsMarketData(
+        { load: () => undefined },
+        USD,
+        gbpEurFromFile(join(dir, 'none.csv')),
+      );
+      expect(currencyQuotePerGbp(absent, 'USD', '2026-06-01')).toBe(1.3);
+      expect(() => absent.gbpEurAtYearStart(2026)).toThrow(/ENOENT/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a stale EUR year-start fix', () => {
+    const market = new BarsMarketData({ load: () => undefined }, USD, () => [
+      { date: '2025-12-20', rate: 1.17 },
+    ]);
+    expect(() => market.gbpEurAtYearStart(2026)).toThrow(/XUDLERS fix on or before 2026-01-01/);
   });
 });
 

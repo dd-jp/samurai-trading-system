@@ -28,6 +28,7 @@ import { type CfdCatalogueTarget, cfdCatalogueRefreshFor } from './cfd-catalogue
 import {
   CALENDAR_REFERENCE,
   currentConstituents,
+  FX_EUR_PATH,
   FX_PATH,
   isFresh,
   loadCfdCatalogue,
@@ -164,7 +165,11 @@ export function barRefreshFor(
   constituentsPath: string,
   logger: Logger,
   cfdCatalogue: CfdCatalogueTarget,
-  fx: { readonly path: string; readonly fetch: FxFetch } = { path: FX_PATH, fetch },
+  fx: { readonly path: string; readonly eurPath: string; readonly fetch: FxFetch } = {
+    path: FX_PATH,
+    eurPath: FX_EUR_PATH,
+    fetch,
+  },
 ): BarRefresh {
   if (dryRun) return NO_BAR_REFRESH;
   const api = new AlpacaBarsApi(credentialsFromEnv(env));
@@ -187,6 +192,7 @@ export function barRefreshFor(
     ukStockBarRefreshFor(env, tradingDate, logger, {
       catalogue: () => loadCfdCatalogue(cfdCatalogue.path),
     }),
-    fxRefreshFor({ ...fx, logger }),
+    fxRefreshFor({ path: fx.path, fetch: fx.fetch, logger }),
+    fxRefreshFor({ path: fx.eurPath, fetch: fx.fetch, logger, series: 'XUDLERS' }),
   ]);
 }

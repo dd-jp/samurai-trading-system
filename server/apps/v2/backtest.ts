@@ -23,6 +23,7 @@ import {
   CALENDAR_REFERENCE,
   type CfdCatalogueArchive,
   type CfdSnapshotIdentity,
+  gbpEurAtYearStartOf,
 } from './data/index.js';
 import { walkForwardPath } from './evidence/index.js';
 import {
@@ -139,6 +140,10 @@ export function fencedMarket(market: MarketData, today: () => string): MarketDat
     gbpUsdYearStartFixDate: (year) => {
       fence(`${year}-01-01`);
       return market.gbpUsdYearStartFixDate?.(year);
+    },
+    gbpEurAtYearStart: (year) => {
+      fence(`${year}-01-01`);
+      return gbpEurAtYearStartOf(market, year);
     },
   };
 }

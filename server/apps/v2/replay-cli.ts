@@ -6,6 +6,8 @@ import { errorMessage, setExitCodeWhenInvoked } from '../../tools/cli-entrypoint
 import {
   BarsMarketData,
   CFD_CATALOGUE_PATH,
+  FX_EUR_PATH,
+  gbpEurFromFile,
   parseBoeGbpUsdCsv,
   type VenueSessionGate,
 } from './data/index.js';
@@ -36,6 +38,7 @@ export interface ReplayCliOptions {
   readonly barStoreRoot: string;
   readonly constituentsPath: string;
   readonly fxPath: string;
+  readonly gbpEurPath?: string;
   readonly cfdCataloguePath: string;
   readonly spreadsPath: string;
   readonly saxoSpreadsPath: string;
@@ -50,6 +53,7 @@ const FLAGS: Readonly<Record<string, FlagOption>> = {
   '--bars': 'barStoreRoot',
   '--constituents': 'constituentsPath',
   '--fx': 'fxPath',
+  '--fx-eur': 'gbpEurPath',
   '--cfd-catalogue': 'cfdCataloguePath',
   '--spreads': 'spreadsPath',
   '--saxo-spreads': 'saxoSpreadsPath',
@@ -60,6 +64,7 @@ const DEFAULTS: Omit<ReplayCliOptions, 'tradingDate'> = {
   barStoreRoot: DEFAULT_BAR_STORE_ROOT,
   constituentsPath: CONSTITUENTS_PATH,
   fxPath: FX_PATH,
+  gbpEurPath: FX_EUR_PATH,
   cfdCataloguePath: CFD_CATALOGUE_PATH,
   spreadsPath: SPREADS_PATH,
   saxoSpreadsPath: SAXO_SPREADS_PATH,
@@ -100,7 +105,11 @@ export async function replayFromFiles(
       tradingDate: options.tradingDate,
       bars,
       constituents: constituentsFromCsv({ constituentsPath: options.constituentsPath }),
-      market: new BarsMarketData(bars, parseBoeGbpUsdCsv(readSeededFile(options.fxPath))),
+      market: new BarsMarketData(
+        bars,
+        parseBoeGbpUsdCsv(readSeededFile(options.fxPath)),
+        gbpEurFromFile(options.gbpEurPath),
+      ),
       catalogue: cfdCatalogueFor({ cfdCataloguePath: options.cfdCataloguePath }, SILENT),
       halfSpreadBps: halfSpreadLookup(options.spreadsPath, options.saxoSpreadsPath),
       venueSessions: options.venueSessions,

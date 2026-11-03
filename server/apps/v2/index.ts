@@ -37,6 +37,7 @@ import {
   currentConstituents,
   EodhdClient,
   FX_PATH,
+  gbpEurFromFile,
   inUkStockUniversePool,
   isUkStock,
   loadCfdCatalogue,
@@ -129,6 +130,7 @@ export interface V2RootOptions {
   readonly spreadsPath?: string | undefined;
   readonly saxoSpreadsPath?: string | undefined;
   readonly fxPath?: string | undefined;
+  readonly gbpEurPath?: string | undefined;
   readonly cfdCataloguePath?: string | undefined;
   readonly cfdCatalogue?: CfdCatalogue | undefined;
   readonly cfdCosts?: CfdCosts | undefined;
@@ -642,6 +644,7 @@ export function composeV2Root(options: V2RootOptions): V2Root {
   const market = new BarsMarketData(
     bars,
     parseBoeGbpUsdCsv(readSeededFile(options.fxPath ?? FX_PATH)),
+    gbpEurFromFile(options.gbpEurPath),
   );
   const cfdGate = cfdGateFor(options);
   const catalogue = cfdCatalogueFor(options, logger);

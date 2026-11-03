@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../shared/index.js';
 import { barRefreshFor } from './bar-refresh.js';
 import { inSequence } from './bar-refresh-core.js';
-import { boeXudlussUrl, type FxFetch } from './fx-refresh.js';
+import { boeFxUrl, type FxFetch } from './fx-refresh.js';
 
 vi.mock('./bar-refresh-core.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./bar-refresh-core.js')>();
@@ -40,13 +40,15 @@ const TARGET = { path: 'x/catalogue.json', storePath: 'x/v2.sqlite' };
 const SILENT: Logger = { log: () => undefined };
 const ENV = { ALPACA_API_KEY: 'k', ALPACA_API_SECRET: 's' };
 
-function fixture(): { constituents: string; fx: string } {
+function fixture(): { constituents: string; fx: string; eurPath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'bar-refresh-fx-'));
   const constituents = join(dir, 'constituents.csv');
   writeFileSync(constituents, 'date,tickers\n2016-01-01,"AAPL,MSFT"\n');
   const fx = join(dir, 'fx.csv');
   writeFileSync(fx, 'DATE,XUDLUSS\n24 Sep 2026,1.322\n');
-  return { constituents, fx };
+  const eurPath = join(dir, 'fx-eur.csv');
+  writeFileSync(eurPath, 'DATE,XUDLERS\n17 Sep 2026,1.17\n');
+  return { constituents, fx, eurPath };
 }
 
 function recordingFetch(): { fetch: FxFetch; urls: string[] } {
@@ -66,23 +68,25 @@ async function runEveryLeg(): Promise<void> {
 }
 
 describe('barRefreshFor BoE FX leg', () => {
-  it('requests XUDLUSS for the given file on a non-dry run', async () => {
-    const { constituents, fx } = fixture();
+  it('requests XUDLUSS and then XUDLERS for their own files on a non-dry run (#2170)', async () => {
+    const { constituents, fx, eurPath } = fixture();
     const boe = recordingFetch();
     barRefreshFor(false, ENV, '2026-09-25', constituents, SILENT, TARGET, {
       path: fx,
+      eurPath,
       fetch: boe.fetch,
     });
     await runEveryLeg();
-    expect(boe.urls).toEqual([boeXudlussUrl('2026-09-10')]);
+    expect(boe.urls).toEqual([boeFxUrl('2026-09-10'), boeFxUrl('2026-09-03', 'XUDLERS')]);
   });
 
   it('requests nothing on a dry run', async () => {
-    const { constituents, fx } = fixture();
+    const { constituents, fx, eurPath } = fixture();
     const boe = recordingFetch();
     vi.mocked(inSequence).mockClear();
     const refresh = barRefreshFor(true, ENV, '2026-09-25', constituents, SILENT, TARGET, {
       path: fx,
+      eurPath,
       fetch: boe.fetch,
     });
     await refresh.run();

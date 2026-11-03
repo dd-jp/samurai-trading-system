@@ -77,6 +77,7 @@ import {
   type DataSanityReport,
   dataSanity,
   EodhdClient,
+  gbpEurFromFile,
   loadCfdCatalogueArchive,
   MultiVenueBarsSource,
   ParquetBarsSource,
@@ -145,6 +146,7 @@ export interface BacktestCliOptions {
   readonly storePath?: string;
   readonly barStoreRoot?: string;
   readonly fxPath?: string;
+  readonly gbpEurPath?: string;
   readonly spreadsPath?: string;
   readonly saxoSpreadsPath?: string;
   readonly constituentsPath?: string;
@@ -173,6 +175,7 @@ const SILENT_LOGGER: Logger = { log: (_entry: LogEntry) => undefined };
 interface ResolvedCliOptions {
   readonly root: string;
   readonly fxPath: string;
+  readonly gbpEurPath: string | undefined;
   readonly spreadsPath: string;
   readonly saxoSpreadsPath: string;
   readonly constituentsPath: string;
@@ -184,6 +187,7 @@ export function resolveCliOptions(options: BacktestCliOptions): ResolvedCliOptio
   return {
     root: options.barStoreRoot ?? DEFAULT_BAR_STORE_ROOT,
     fxPath: options.fxPath ?? FX_PATH,
+    gbpEurPath: options.gbpEurPath,
     spreadsPath: options.spreadsPath ?? SPREADS_PATH,
     saxoSpreadsPath: options.saxoSpreadsPath ?? SAXO_SPREADS_PATH,
     constituentsPath: options.constituentsPath ?? CONSTITUENTS_PATH,
@@ -306,7 +310,7 @@ async function openMultiVenueMarket(
   await alpaca.prime();
   await saxo.prime();
   const bars = new MultiVenueBarsSource([alpaca, saxo]);
-  const market = new BarsMarketData(bars, fx);
+  const market = new BarsMarketData(bars, fx, gbpEurFromFile(options.gbpEurPath));
   return { market, bars };
 }
 

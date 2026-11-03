@@ -28,6 +28,7 @@ export interface MarketData {
   gbpUsdAtYearStart(year: number): number;
   gbpUsdYearStartFixDate?(year: number): string | undefined;
   gbpUsdOnDay?(date: string): GbpUsdFix;
+  gbpEurAtYearStart?(year: number): number;
 }
 
 export type SleeveAction = 'enter_long' | 'enter_short' | 'exit' | 'skip' | 'none';

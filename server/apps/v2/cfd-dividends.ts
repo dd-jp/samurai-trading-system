@@ -4,12 +4,12 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
 import {
   addDays,
+  type ConvertibleCurrency,
   type DividendsAcross,
   type EodhdDividend,
   type EodhdExchange,
   isCfdVenue,
-  isQuoteCurrency,
-  type QuoteCurrency,
+  isConvertibleCurrency,
   quoteCurrencyOf,
 } from './data/index.js';
 import { splitRatioAcross } from './split.js';
@@ -81,7 +81,7 @@ export interface HeldDividendInputs {
   readonly lastMarkDate: string | undefined;
   readonly market: Pick<MarketData, 'lastBarBefore' | 'barsBefore'>;
   readonly source: CfdDividendSource;
-  readonly fxFor: (currency: QuoteCurrency) => number;
+  readonly fxFor: (currency: ConvertibleCurrency) => number;
   readonly booked: (exDate: string) => boolean;
 }
 
@@ -153,8 +153,8 @@ function plausible(inputs: HeldDividendInputs, quoted: readonly EodhdDividend[])
 
 // David 2026-11-03 (#2143,
 // https://github.com/dd-jp/samurai-trading-system/issues/2143#issuecomment-6612492738): a line
-// declared in another currency is converted at the mark FX, and one no mark FX converts is refused
-// alone
+// declared in another currency is converted at its year-start BoE fix, USD or EUR (#2170), and one
+// no fix converts is refused alone
 function inPositionQuote(
   inputs: HeldDividendInputs,
   dividends: readonly EodhdDividend[],
@@ -164,7 +164,7 @@ function inPositionQuote(
   const refused: string[] = [];
   for (const line of dividends) {
     const { currency } = line;
-    if (!isQuoteCurrency(currency)) {
+    if (!isConvertibleCurrency(currency)) {
       refused.push(`ex-date ${line.exDate} declared in ${currency || 'no currency'}`);
     } else if (currency === quote) {
       lines.push(line);

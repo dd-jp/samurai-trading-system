@@ -53,6 +53,7 @@ import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative
 import {
   addDays,
   CALENDAR_REFERENCE,
+  type ConvertibleCurrency,
   currencyQuotePerGbp,
   fillFxOf,
   firstSessionOn,
@@ -61,7 +62,6 @@ import {
   MAX_BAR_AGE_CALENDAR_DAYS,
   type MacroGateVerdict,
   macroGate,
-  type QuoteCurrency,
   quoteCurrencyOf,
   quotePerGbp,
   type SitOutCode,
@@ -359,7 +359,7 @@ class Cycle {
     return this.fxForCurrency(quoteCurrencyOf(venue));
   }
 
-  fxForCurrency(currency: QuoteCurrency): number {
+  fxForCurrency(currency: ConvertibleCurrency): number {
     return currencyQuotePerGbp(this.deps.market, currency, this.tradingDate);
   }
 
@@ -761,7 +761,7 @@ class Cycle {
   }
 
   refuseDividendCurrency(unbooked: UnbookedDividend): void {
-    const message = `${unbooked.bookId} ${unbooked.instrument}: dividend on ${unbooked.detail} not booked, no mark FX converts it`;
+    const message = `${unbooked.bookId} ${unbooked.instrument}: dividend on ${unbooked.detail} not booked, no year-start BoE fix converts it`;
     this.refuseDividend(unbooked, message, 'v2_cfd_dividend_currency_refused');
   }
 

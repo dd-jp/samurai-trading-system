@@ -1,7 +1,7 @@
 import type { MarketData, Sleeve, SleeveDecision } from '../../../contracts/index.js';
 import type { BarSeries } from '../../shared/index.js';
 import type { BacktestTrial } from './backtest.js';
-import type { BarsSource } from './data/index.js';
+import { type BarsSource, gbpEurAtYearStartOf } from './data/index.js';
 
 function delayed<T extends { readonly date: string }>(bars: readonly T[]): T[] {
   return bars.slice(0, -1).map((bar, index) => ({ ...bar, date: (bars[index + 1] as T).date }));
@@ -32,6 +32,7 @@ export function delayedMarket(market: MarketData): MarketData {
       count < 1 ? [] : delayed(market.barsBefore(instrument, tradingDate, count + 1)),
     gbpUsdAtYearStart: (year) => market.gbpUsdAtYearStart(year),
     gbpUsdYearStartFixDate: (year) => market.gbpUsdYearStartFixDate?.(year),
+    gbpEurAtYearStart: (year) => gbpEurAtYearStartOf(market, year),
   };
 }
 

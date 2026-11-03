@@ -86,7 +86,7 @@ export function parseSplitsBody(body: unknown, window: SplitsWindow): readonly E
 }
 
 // GBX and GBp are pence on an LSE line; any other currency is kept as declared for the booking to
-// convert at the mark FX or refuse
+// convert at its year-start BoE fix or refuse
 const PENCE: ReadonlySet<string> = new Set(['GBX', 'GBp']);
 
 function exchangeOfSymbol(symbol: string): EodhdExchange {

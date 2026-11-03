@@ -267,6 +267,18 @@ describe('fencedMarket', () => {
       `backtest: a sleeve read bars before 2025-01-01 on ${DATES[30]} (lookahead)`,
     );
   });
+
+  it('fences the GBP/EUR year-start fix too and passes a missing one through as a throw (#2170)', () => {
+    const withEur = new BarsMarketData({ load: () => undefined }, [], () => [
+      { date: '2023-12-29', rate: 1.15 },
+    ]);
+    const fenced = fencedMarket(withEur, () => DATES[30] as string);
+    expect(fenced.gbpEurAtYearStart?.(2024)).toBe(1.15);
+    expect(() => fenced.gbpEurAtYearStart?.(2025)).toThrow(/lookahead/);
+    expect(() => fencedMarket(market, () => DATES[30] as string).gbpEurAtYearStart?.(2024)).toThrow(
+      'fx: no BoE XUDLERS series is loaded',
+    );
+  });
 });
 
 // CPU-heavy: cases ran up to ~32 s under coverage at load 25
