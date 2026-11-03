@@ -2,6 +2,7 @@ import type { RetryConfig } from '../../../../shared/index.js';
 import {
   fetchWithTimeout,
   nonEmpty,
+  rethrowWithCause,
   truncateForError,
   withRetry,
 } from '../../../../shared/index.js';
@@ -483,14 +484,18 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient, AlpacaQuoteCl
     );
   }
 
+  private fetchVenue(url: string, init: RequestInit): Promise<Response> {
+    return fetchWithTimeout(
+      url,
+      { ...init, headers: this.headers(init), redirect: 'error' },
+      this.timeoutMs,
+    ).catch(rethrowWithCause);
+  }
+
   private async send(url: string, init: AlpacaRequestInit, context: string): Promise<Response> {
     let response: Response;
     try {
-      response = await fetchWithTimeout(
-        url,
-        { ...init, headers: this.headers(init) },
-        this.timeoutMs,
-      );
+      response = await this.fetchVenue(url, init);
     } catch (cause) {
       throw classifyAlpacaBrokerNetworkError(cause, context, init.method);
     }
@@ -543,11 +548,7 @@ export class AlpacaHttpBrokerClient implements AlpacaBrokerClient, AlpacaQuoteCl
       async () => {
         let response: Response;
         try {
-          response = await fetchWithTimeout(
-            `${this.baseUrl}${path}`,
-            { method: 'DELETE', headers: this.headers({ method: 'DELETE' }) },
-            this.timeoutMs,
-          );
+          response = await this.fetchVenue(`${this.baseUrl}${path}`, { method: 'DELETE' });
         } catch (cause) {
           throw classifyAlpacaBrokerNetworkError(cause, 'cancelOrder', 'DELETE');
         }

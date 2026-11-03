@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { startRedirectingServer } from '../../shared/http/redirecting-server.js';
 import type { FetchResult, RawDailyBar } from './index.js';
 import {
   AlpacaBarsApi,
@@ -159,5 +160,20 @@ describe('alpaca bars api', () => {
       0,
     );
     await expect(throttled.getWithRetry('u')).rejects.toThrow(/rate-limited 5 times/);
+  });
+});
+
+describe('alpaca bars api refuses redirects (#2175)', () => {
+  it.each([307, 308])('fails a GET answered %i, sending nothing to the target', async (status) => {
+    const server = await startRedirectingServer(status);
+    try {
+      const api = new AlpacaBarsApi({ apiKey: 'k', apiSecret: 's' }, undefined, async () => {}, 0);
+      await expect(api.getWithRetry(`${server.origin}/v2/stocks/bars`)).rejects.toThrow(
+        /unexpected redirect/,
+      );
+      expect(server.hits).toEqual(['GET /v2/stocks/bars']);
+    } finally {
+      await server.close();
+    }
   });
 });
