@@ -721,6 +721,17 @@ class Cycle {
   }
 
   reportCfdDividends(report: CfdDividendStepReport): void {
+    this.logCfdDividendBookings(report);
+    this.refuseUnbookedDividends(report);
+    for (const unbooked of report.unread) this.#dividendsUnread.push(describeUnbooked([unbooked]));
+    if (this.#dividendsUnread.length > 0) {
+      const message = `CFD dividend cash unread for ${this.#dividendsUnread.join('; ')}`;
+      this.log('error', 'v2_cfd_dividend_unread', message);
+      throw new Error(message);
+    }
+  }
+
+  logCfdDividendBookings(report: CfdDividendStepReport): void {
     for (const booking of report.booked) {
       this.log(
         'info',
@@ -735,16 +746,13 @@ class Cycle {
         `CFD dividend cash not booked for ${describeUnbooked(report.unmodelled)}: the EODHD dividend feed is unset`,
       );
     }
+  }
+
+  refuseUnbookedDividends(report: CfdDividendStepReport): void {
     for (const unbooked of report.splitBefore) this.refuseSplitDividend(unbooked);
     for (const unbooked of report.refused) this.refuseDividendCurrency(unbooked);
     for (const unbooked of report.implausible) this.refuseDividendAmount(unbooked);
     for (const unbooked of report.unverifiable) this.refuseDividendHolding(unbooked);
-    for (const unbooked of report.unread) this.#dividendsUnread.push(describeUnbooked([unbooked]));
-    if (this.#dividendsUnread.length > 0) {
-      const message = `CFD dividend cash unread for ${this.#dividendsUnread.join('; ')}`;
-      this.log('error', 'v2_cfd_dividend_unread', message);
-      throw new Error(message);
-    }
   }
 
   refuseSplitDividend(unbooked: UnbookedDividend): void {

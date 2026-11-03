@@ -3,6 +3,7 @@ import {
   type CfdDividendBooking,
   type CfdDividendLedger,
   dividendWindow,
+  type HeldDividends,
   heldDividends,
 } from './cfd-dividends.js';
 import { isCfdVenue, type QuoteCurrency } from './data/index.js';
@@ -101,16 +102,18 @@ function bookPosition(
   });
   for (const booking of result.bookings) book(deps, booking);
   report.booked.push(...result.bookings);
+  reportUnbooked(result, position, report);
+}
+
+const LISTED_UNBOOKED = ['refused', 'implausible', 'unverifiable'] as const;
+
+function reportUnbooked(result: HeldDividends, position: HeldCfd, report: StepReport): void {
   if (result.unread !== undefined) report.unread.push(unbooked(position, result.unread));
   if (result.splitBefore !== undefined) {
     report.splitBefore.push(unbooked(position, result.splitBefore));
   }
-  for (const detail of result.refused ?? []) report.refused.push(unbooked(position, detail));
-  for (const detail of result.implausible ?? []) {
-    report.implausible.push(unbooked(position, detail));
-  }
-  for (const detail of result.unverifiable ?? []) {
-    report.unverifiable.push(unbooked(position, detail));
+  for (const kind of LISTED_UNBOOKED) {
+    for (const detail of result[kind] ?? []) report[kind].push(unbooked(position, detail));
   }
 }
 
