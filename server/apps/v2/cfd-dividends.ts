@@ -69,6 +69,7 @@ export interface HeldDividends {
   readonly splitBefore?: string | undefined;
   readonly refused?: readonly string[] | undefined;
   readonly implausible?: readonly string[] | undefined;
+  readonly unverifiable?: readonly string[] | undefined;
 }
 
 const NONE: HeldDividends = { bookings: [] };
@@ -84,9 +85,8 @@ export interface HeldDividendInputs {
   readonly booked: (exDate: string) => boolean;
 }
 
-// The cycle on date T marks the last bar before T, so it books every ex-date after the bar its
-// previous mark took, through the bar it marks now; the position is the one held before this
-// cycle books any fill, which is the holding at the close of the day before each such ex-date
+// The cycle on date T marks the last bar before T, so it reads every ex-date after the bar its
+// previous mark took, through the bar it marks now
 export function dividendWindow(
   inputs: Pick<HeldDividendInputs, 'held' | 'tradingDate' | 'lastMarkDate' | 'market'>,
 ): DividendWindow | undefined {
@@ -205,6 +205,13 @@ function readDetail(across: Exclude<DividendsAcross, { kind: 'covered' }>): stri
     : `dividend reads disagree on ${across.date}`;
 }
 
+// #2171: the held position is the ex-date−1 holding only when the window is the one session after
+// the bar the last mark took; across more, a fill journalled since may postdate the ex-date or a
+// fill made before it may not be journalled yet
+function spansOneSession(inputs: HeldDividendInputs, window: DividendWindow): boolean {
+  return inputs.market.lastBarBefore(inputs.held.instrument, window.through)?.date === window.after;
+}
+
 // Ex-dates book in order up to the first one a split precedes; that one and any after it are
 // left for David, since no later cycle can place the qty in their units
 export function heldDividends(inputs: HeldDividendInputs): HeldDividends {
@@ -227,10 +234,18 @@ function bookingsAcross(
 ): HeldDividends {
   const quoted = inPositionQuote(inputs, dividends);
   const { lines, implausible } = plausible(inputs, quoted.lines);
-  const unbooked = { refused: quoted.refused, implausible };
+  const unverifiable: string[] = [];
+  const unbooked = { refused: quoted.refused, implausible, unverifiable };
+  const oneSession = spansOneSession(inputs, window);
   const bookings: CfdDividendBooking[] = [];
   for (const [exDate, perShare] of perShareByDate(lines)) {
     if (inputs.booked(exDate)) continue;
+    if (!oneSession) {
+      unverifiable.push(
+        `ex-date ${exDate} falls in a window from ${window.after} through ${window.through} of more than one session`,
+      );
+      continue;
+    }
     if (splitBefore(inputs, window, exDate)) return { bookings, splitBefore: exDate, ...unbooked };
     bookings.push(bookingOf(inputs, exDate, perShare));
   }

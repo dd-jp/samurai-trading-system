@@ -74,7 +74,7 @@ function deps(overrides: Partial<CfdDividendStepDeps> = {}) {
     books: {
       positions: () => HELD,
       lastDay: () =>
-        ({ tradingDate: '2026-06-03' }) as ReturnType<CfdDividendStepDeps['books']['lastDay']>,
+        ({ tradingDate: '2026-06-04' }) as ReturnType<CfdDividendStepDeps['books']['lastDay']>,
       applyCashAdjustment: (bookId, amount) => {
         cash.push([bookId, amount]);
       },
@@ -98,8 +98,8 @@ describe('bookCfdDividends', () => {
     const report = await bookCfdDividends(step);
     expect(requests).toEqual([
       [
-        { instrument: 'VOD_XLON', exchange: 'LSE', after: '2026-06-02', through: '2026-06-04' },
-        { instrument: 'AAPL', exchange: 'US', after: '2026-06-02', through: '2026-06-04' },
+        { instrument: 'VOD_XLON', exchange: 'LSE', after: '2026-06-03', through: '2026-06-04' },
+        { instrument: 'AAPL', exchange: 'US', after: '2026-06-03', through: '2026-06-04' },
       ],
     ]);
     expect(cash).toEqual([
@@ -111,6 +111,27 @@ describe('bookCfdDividends', () => {
     expect(report.unmodelled).toEqual([]);
     expect(report.refused).toEqual([]);
     expect(report.implausible).toEqual([]);
+    expect(report.unverifiable).toEqual([]);
+  });
+
+  it('reports each held CFD ex-date in a window of more than one session as unverifiable', async () => {
+    const { step, recorded } = deps({
+      books: {
+        ...deps().step.books,
+        lastDay: () =>
+          ({ tradingDate: '2026-06-03' }) as ReturnType<CfdDividendStepDeps['books']['lastDay']>,
+      },
+    });
+    const report = await bookCfdDividends(step);
+    expect(recorded).toEqual([]);
+    expect(report.unverifiable).toEqual(
+      ['VOD_XLON', 'AAPL'].map((instrument) => ({
+        bookId: 'debate-primary',
+        instrument,
+        detail:
+          'ex-date 2026-06-04 falls in a window from 2026-06-02 through 2026-06-04 of more than one session',
+      })),
+    );
   });
 
   it('reports a line over the plausibility bound as implausible and books the rest', async () => {

@@ -64,7 +64,7 @@ function inputs(overrides: Partial<HeldDividendInputs>): HeldDividendInputs {
     bookId: 'debate-primary',
     held: position('saxo_cfd_gbp', 100),
     tradingDate: '2026-06-05',
-    lastMarkDate: '2026-06-03',
+    lastMarkDate: '2026-06-04',
     market: market(),
     source: source([{ exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' }]),
     fxFor: (currency) => (currency === 'USD' ? USD_PER_GBP : 1),
@@ -130,7 +130,7 @@ describe('CFD dividend booking rule', () => {
   });
 
   it('entitles a position booked by the cycle on the ex-date and not one booked the day after', () => {
-    const exDate = { tradingDate: '2026-06-06', lastMarkDate: undefined };
+    const exDate = { tradingDate: '2026-06-05', lastMarkDate: undefined };
     expect(amounts({ ...exDate, held: position('saxo_cfd_gbp', 100, '2026-06-04') })).toEqual([2]);
     expect(amounts({ ...exDate, held: position('saxo_cfd_gbp', 100, '2026-06-05') })).toEqual([]);
   });
@@ -150,17 +150,53 @@ describe('CFD dividend booking rule', () => {
     ).toEqual([2]);
   });
 
-  it('books each ex-date once, after the bar the last mark took and through the bar marked now', () => {
+  it('books the one ex-date after the bar the last mark took, through the bar marked now, once', () => {
     const dividends = [
       { exDate: '2026-06-02', perShare: 0.01, currency: 'GBP' },
       { exDate: '2026-06-03', perShare: 0.02, currency: 'GBP' },
       { exDate: '2026-06-04', perShare: 0.04, currency: 'GBP' },
       { exDate: '2026-06-05', perShare: 0.08, currency: 'GBP' },
     ];
-    expect(amounts({ source: source(dividends) })).toEqual([2, 4]);
-    expect(amounts({ source: source(dividends), booked: (date) => date === '2026-06-03' })).toEqual(
-      [4],
+    expect(amounts({ source: source(dividends) })).toEqual([4]);
+    expect(amounts({ source: source(dividends), booked: (date) => date === '2026-06-04' })).toEqual(
+      [],
     );
+  });
+
+  it('refuses every unbooked ex-date in a window of more than one session as unverifiable', () => {
+    const dividends = [
+      { exDate: '2026-06-02', perShare: 0.01, currency: 'GBP' },
+      { exDate: '2026-06-03', perShare: 0.02, currency: 'GBP' },
+      { exDate: '2026-06-04', perShare: 0.04, currency: 'GBP' },
+    ];
+    const result = heldDividends(
+      inputs({
+        lastMarkDate: '2026-06-02',
+        source: source(dividends),
+        booked: (date) => date === '2026-06-03',
+      }),
+    );
+    expect(result).toEqual({
+      bookings: [],
+      refused: [],
+      implausible: [],
+      unverifiable: [
+        'ex-date 2026-06-02 falls in a window from 2026-06-01 through 2026-06-04 of more than one session',
+        'ex-date 2026-06-04 falls in a window from 2026-06-01 through 2026-06-04 of more than one session',
+      ],
+    });
+  });
+
+  it('reads a window with no bar between the last mark and the bar marked now as one session', () => {
+    const daily = market();
+    const gapped: Pick<MarketData, 'lastBarBefore' | 'barsBefore'> = {
+      ...daily,
+      lastBarBefore: (instrument, date) =>
+        daily.lastBarBefore(instrument, date === '2026-06-04' ? '2026-06-03' : date),
+    };
+    expect(
+      heldDividends(inputs({ lastMarkDate: '2026-06-03', market: gapped })).bookings,
+    ).toMatchObject([{ ex_date: '2026-06-04', amount_gbp: 2 }]);
   });
 
   it('opens no window when the last mark already took the bar this cycle marks', () => {
@@ -205,7 +241,7 @@ describe('CFD dividend booking rule', () => {
     const result = heldDividends(
       inputs({
         source: source([
-          { exDate: '2026-06-03', perShare: 0.01, currency: '' },
+          { exDate: '2026-06-04', perShare: 0.01, currency: '' },
           { exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' },
           { exDate: '2026-06-04', perShare: 0.5, currency: 'EUR' },
         ]),
@@ -215,7 +251,7 @@ describe('CFD dividend booking rule', () => {
       ['2026-06-04', 2],
     ]);
     expect(result.refused).toEqual([
-      'ex-date 2026-06-03 declared in no currency',
+      'ex-date 2026-06-04 declared in no currency',
       'ex-date 2026-06-04 declared in EUR',
     ]);
   });
@@ -253,20 +289,15 @@ describe('CFD dividend booking rule', () => {
     });
   });
 
-  it('books the ex-dates before a split in the window and stops at the first one after it', () => {
+  it('stops at an ex-date a split in the window precedes', () => {
     const result = heldDividends(
       inputs({
-        lastMarkDate: '2026-06-01',
-        market: market('2026-06-03'),
-        source: source([
-          { exDate: '2026-06-02', perShare: 0.02, currency: 'GBP' },
-          { exDate: '2026-06-03', perShare: 0.01, currency: 'GBP' },
-          { exDate: '2026-06-04', perShare: 0.01, currency: 'GBP' },
-        ]),
+        market: market('2026-06-04'),
+        source: source([{ exDate: '2026-06-04', perShare: 0.01, currency: 'GBP' }]),
       }),
     );
-    expect(result.bookings.map((booking) => booking.ex_date)).toEqual(['2026-06-02']);
-    expect(result.splitBefore).toBe('2026-06-03');
+    expect(result.bookings).toEqual([]);
+    expect(result.splitBefore).toBe('2026-06-04');
   });
 });
 
@@ -308,6 +339,7 @@ describe('CFD dividend plausibility bound', () => {
     expect(bounded(5.01)).toEqual({
       bookings: [],
       refused: [],
+      unverifiable: [],
       implausible: [
         'ex-date 2026-06-04 pays 5.01 GBP a share, over 25% of the 2026-06-04 raw close 20',
       ],
@@ -319,13 +351,17 @@ describe('CFD dividend plausibility bound', () => {
       from: '2026-01-01',
       to: '2026-12-31',
     });
-    const result = heldDividends(
-      inputs({
-        lastMarkDate: '2026-06-01',
-        market: market(undefined, 0.75),
-        source: source(dividends),
-      }),
-    );
+    const atClose = (tradingDate: string) =>
+      heldDividends(
+        inputs({
+          tradingDate,
+          lastMarkDate: addDays(tradingDate, -1),
+          market: market(undefined, 0.75),
+          source: source(dividends),
+        }),
+      );
+    const gbx = atClose('2026-06-04');
+    const result = { bookings: gbx.bookings, implausible: atClose('2026-06-05').implausible };
     expect(
       result.bookings.map(({ ex_date, per_share_native, amount_gbp }) => ({
         ex_date,
@@ -362,6 +398,7 @@ describe('CFD dividend plausibility bound', () => {
     expect(result).toEqual({
       bookings: [],
       refused: [],
+      unverifiable: [],
       implausible: ['ex-date 2026-06-04 has no bar to bound its amount'],
     });
   });

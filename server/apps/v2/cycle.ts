@@ -738,6 +738,7 @@ class Cycle {
     for (const unbooked of report.splitBefore) this.refuseSplitDividend(unbooked);
     for (const unbooked of report.refused) this.refuseDividendCurrency(unbooked);
     for (const unbooked of report.implausible) this.refuseDividendAmount(unbooked);
+    for (const unbooked of report.unverifiable) this.refuseDividendHolding(unbooked);
     for (const unbooked of report.unread) this.#dividendsUnread.push(describeUnbooked([unbooked]));
     if (this.#dividendsUnread.length > 0) {
       const message = `CFD dividend cash unread for ${this.#dividendsUnread.join('; ')}`;
@@ -759,6 +760,11 @@ class Cycle {
   refuseDividendAmount(unbooked: UnbookedDividend): void {
     const message = `${unbooked.bookId} ${unbooked.instrument}: dividend not booked, implausible_amount: ${unbooked.detail}`;
     this.refuseDividend(unbooked, message, 'v2_cfd_dividend_implausible_amount');
+  }
+
+  refuseDividendHolding(unbooked: UnbookedDividend): void {
+    const message = `${unbooked.bookId} ${unbooked.instrument}: dividend not booked, holding_unverifiable: ${unbooked.detail}, so the journal cannot vouch for the ex-date−1 holding (#2171)`;
+    this.refuseDividend(unbooked, message, 'v2_cfd_dividend_holding_unverifiable');
   }
 
   refuseDividend(unbooked: UnbookedDividend, message: string, event: string): void {

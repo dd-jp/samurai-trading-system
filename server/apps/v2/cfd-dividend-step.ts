@@ -32,6 +32,7 @@ export interface CfdDividendStepReport {
   readonly splitBefore: readonly UnbookedDividend[];
   readonly refused: readonly UnbookedDividend[];
   readonly implausible: readonly UnbookedDividend[];
+  readonly unverifiable: readonly UnbookedDividend[];
   readonly unmodelled: readonly UnbookedDividend[];
 }
 
@@ -81,6 +82,7 @@ interface StepReport {
   readonly splitBefore: UnbookedDividend[];
   readonly refused: UnbookedDividend[];
   readonly implausible: UnbookedDividend[];
+  readonly unverifiable: UnbookedDividend[];
 }
 
 function bookPosition(
@@ -107,6 +109,9 @@ function bookPosition(
   for (const detail of result.implausible ?? []) {
     report.implausible.push(unbooked(position, detail));
   }
+  for (const detail of result.unverifiable ?? []) {
+    report.unverifiable.push(unbooked(position, detail));
+  }
 }
 
 // Runs before the cycle books any fill, so each position is the holding at the last mark
@@ -118,6 +123,7 @@ export async function bookCfdDividends(deps: CfdDividendStepDeps): Promise<CfdDi
     splitBefore: [],
     refused: [],
     implausible: [],
+    unverifiable: [],
   };
   const { feed } = deps;
   if (feed === undefined) {

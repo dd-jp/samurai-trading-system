@@ -150,6 +150,7 @@ export const ARM2_UK_POOL_CFD_DIVIDENDS = {
   booked: 'ex_date_on_ex_date_minus_1_holding',
   other_currency: 'converted_at_mark_fx_else_line_refused',
   line_refused_above_share_of_raw_close: CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE,
+  window_over_one_session: 'line_refused',
 } as const;
 
 const DIVIDEND_EXCHANGE: Readonly<Record<CfdInstrument['currency'], EodhdExchange>> = {
