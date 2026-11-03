@@ -6,7 +6,7 @@ import {
   type HeldDividends,
   heldDividends,
 } from './cfd-dividends.js';
-import { isCfdVenue, type QuoteCurrency } from './data/index.js';
+import { type ConvertibleCurrency, isCfdVenue } from './data/index.js';
 import type { CfdDividendFeed, DividendRequest } from './dividend-feed.js';
 import { exchangeOf } from './split-crosscheck.js';
 
@@ -17,7 +17,7 @@ export interface CfdDividendStepDeps {
   readonly feed: CfdDividendFeed | undefined;
   readonly ledger: CfdDividendLedger;
   readonly tradingDate: string;
-  readonly fxFor: (currency: QuoteCurrency) => number;
+  readonly fxFor: (currency: ConvertibleCurrency) => number;
   readonly atomically: <T>(work: () => T) => T;
 }
 

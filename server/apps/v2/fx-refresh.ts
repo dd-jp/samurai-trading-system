@@ -8,7 +8,7 @@ import {
   withinTimeLimit,
 } from './bar-refresh-core.js';
 import { writeAtomically } from './cfd-catalogue-refresh.js';
-import { addDays, type FxObservation, parseBoeGbpUsdCsv } from './data/index.js';
+import { addDays, type BoeFix, type BoeSeries, parseBoeSeriesCsv } from './data/index.js';
 
 export type FxFetch = (
   url: string,
@@ -50,16 +50,16 @@ function boeQueryDate(iso: string): string {
   return `${day}/${BOE_MONTHS[Number(month) - 1]}/${year}`;
 }
 
-export function boeXudlussUrl(from: string): string {
+export function boeFxUrl(from: string, series: BoeSeries = 'XUDLUSS'): string {
   return (
     'https://www.bankofengland.co.uk/boeapps/iadb/fromshowcolumns.asp?csv.x=yes' +
-    `&Datefrom=${boeQueryDate(from)}&Dateto=now&SeriesCodes=XUDLUSS&CSVF=TN&UsingCodes=Y&VPD=Y&VFD=N`
+    `&Datefrom=${boeQueryDate(from)}&Dateto=now&SeriesCodes=${series}&CSVF=TN&UsingCodes=Y&VPD=Y&VFD=N`
   );
 }
 
 export interface FxAppend {
   readonly text: string;
-  readonly added: readonly FxObservation[];
+  readonly added: readonly BoeFix[];
 }
 
 function dataLines(text: string): string[] {
@@ -71,12 +71,9 @@ function dataLines(text: string): string[] {
 }
 
 // Counted from BoE's first row, not the requested start, so it holds whether Datefrom is inclusive
-function assertOverlapAgrees(
-  existing: readonly FxObservation[],
-  fetched: readonly FxObservation[],
-): void {
+function assertOverlapAgrees(existing: readonly BoeFix[], fetched: readonly BoeFix[]): void {
   const last = existing.at(-1)?.date ?? '';
-  const known = new Map(existing.map((row) => [row.date, row.gbpUsd]));
+  const known = new Map(existing.map((row) => [row.date, row.rate]));
   const overlap = fetched.filter((row) => row.date <= last);
   const from = overlap[0]?.date;
   if (from === undefined) {
@@ -88,23 +85,27 @@ function assertOverlapAgrees(
       `fx refresh: BoE returned ${overlap.length} rows from ${from} to ${last}, the file holds ${expected}`,
     );
   }
-  const revised = overlap.find((row) => known.get(row.date) !== row.gbpUsd);
+  const revised = overlap.find((row) => known.get(row.date) !== row.rate);
   if (revised !== undefined) {
     throw new Error(
-      `fx refresh: BoE ${revised.date} is ${revised.gbpUsd}, the file holds ${known.get(revised.date)}`,
+      `fx refresh: BoE ${revised.date} is ${revised.rate}, the file holds ${known.get(revised.date)}`,
     );
   }
 }
 
-export function overlapStart(existing: readonly FxObservation[]): string {
+export function overlapStart(existing: readonly BoeFix[]): string {
   const last = existing.at(-1);
   if (last === undefined) throw new Error('fx refresh: the file holds no rows to extend');
   return addDays(last.date, -OVERLAP_DAYS);
 }
 
-export function appendBoeRows(existingText: string, fetchedText: string): FxAppend {
-  const existing = parseBoeGbpUsdCsv(existingText);
-  const fetched = parseBoeGbpUsdCsv(fetchedText);
+export function appendBoeRows(
+  existingText: string,
+  fetchedText: string,
+  series: BoeSeries = 'XUDLUSS',
+): FxAppend {
+  const existing = parseBoeSeriesCsv(existingText, series);
+  const fetched = parseBoeSeriesCsv(fetchedText, series);
   if (!fetchedText.endsWith('\n')) {
     throw new Error('fx refresh: the BoE response ends mid-row, so its last fix may be cut short');
   }
@@ -115,7 +116,7 @@ export function appendBoeRows(existingText: string, fetchedText: string): FxAppe
   if (newIndexes.length === 0) return { text: existingText, added: [] };
   const appended = newIndexes.map((index) => fetchedLines[index]).join('\n');
   const text = `${existingText.trimEnd()}\n${appended}\n`;
-  parseBoeGbpUsdCsv(text);
+  parseBoeSeriesCsv(text, series);
   return { text, added: newIndexes.flatMap((index) => fetched[index] ?? []) };
 }
 
@@ -123,6 +124,7 @@ export interface FxRefreshLeg {
   readonly path: string;
   readonly logger: Logger;
   readonly fetch: FxFetch;
+  readonly series?: BoeSeries;
   readonly timeLimitMs?: number;
 }
 
@@ -130,27 +132,34 @@ export async function refreshBoeFx(
   leg: FxRefreshLeg,
   limit: TimeLimit = UNLIMITED,
 ): Promise<FxAppend> {
+  const series = leg.series ?? 'XUDLUSS';
   const existingText = readSeededFile(leg.path);
-  const from = overlapStart(parseBoeGbpUsdCsv(existingText));
-  const response = await leg.fetch(boeXudlussUrl(from), {
+  const from = overlapStart(parseBoeSeriesCsv(existingText, series));
+  const response = await leg.fetch(boeFxUrl(from, series), {
     signal: limit.signal,
     headers: { 'User-Agent': BOE_USER_AGENT },
   });
   if (!response.ok) throw new Error(`fx refresh: BoE IADB answered HTTP ${response.status}`);
-  const result = appendBoeRows(existingText, await response.text());
+  const result = appendBoeRows(existingText, await response.text(), series);
   if (result.added.length > 0)
     await limit.atomic(async () => writeAtomically(leg.path, result.text));
   return result;
 }
 
-function summary(added: readonly FxObservation[]): string {
+const STALE_FILE_CONSEQUENCE: Readonly<Record<BoeSeries, string>> = {
+  XUDLUSS: "the tax log holds out every USD fill after the file's last fix",
+  XUDLERS: 'a EUR CFD dividend line leaves its date unmarked once the year-start fix is missing',
+};
+
+function summary(series: BoeSeries, added: readonly BoeFix[]): string {
   const last = added.at(-1);
   return last === undefined
-    ? 'BoE XUDLUSS has no fix after the file'
-    : `BoE XUDLUSS appended ${added.length} fixes to ${last.date}`;
+    ? `BoE ${series} has no fix after the file`
+    : `BoE ${series} appended ${added.length} fixes to ${last.date}`;
 }
 
 export function fxRefreshFor(leg: FxRefreshLeg): BarRefresh {
+  const series = leg.series ?? 'XUDLUSS';
   return {
     run: async () => {
       try {
@@ -162,13 +171,13 @@ export function fxRefreshFor(leg: FxRefreshLeg): BarRefresh {
             throw new Error(`fx refresh: BoE IADB gave no answer within ${limitMs / 1000} s`);
           },
         );
-        logRefresh(leg.logger, 'info', 'v2_fx_refresh_summary', summary(added));
+        logRefresh(leg.logger, 'info', 'v2_fx_refresh_summary', summary(series, added));
       } catch (error) {
         logRefresh(
           leg.logger,
           'warn',
           'v2_fx_refresh_failed',
-          `${messageOf(error)}; the tax log holds out every USD fill after the file's last fix`,
+          `${messageOf(error)}; ${STALE_FILE_CONSEQUENCE[series]}`,
         );
       }
       return { attempted: 0, updated: [], noNewBars: [], failed: [] };

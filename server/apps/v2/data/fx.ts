@@ -29,21 +29,38 @@ function parseBoeDate(raw: string): string {
   return `${year}-${mm}-${day.padStart(2, '0')}`;
 }
 
-export function parseBoeGbpUsdCsv(text: string): readonly FxObservation[] {
+export type BoeSeries = 'XUDLUSS' | 'XUDLERS';
+
+export interface BoeFix {
+  readonly date: string;
+  readonly rate: number;
+}
+
+export function parseBoeSeriesCsv(text: string, series: BoeSeries): readonly BoeFix[] {
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
   const header = lines.shift();
-  if (header?.trim() !== 'DATE,XUDLUSS') throw new Error(`fx: unexpected header ${header}`);
+  if (header?.trim() !== `DATE,${series}`) throw new Error(`fx: unexpected header ${header}`);
   return assertAscending(
     lines.map((line) => {
-      const [date, rate] = line.split(',');
-      const gbpUsd = Number(rate);
-      if (!(gbpUsd > 0)) throw new Error(`fx: bad row ${line}`);
-      return { date: parseBoeDate(date ?? ''), gbpUsd };
+      const [date, raw] = line.split(',');
+      const rate = Number(raw);
+      if (!(rate > 0)) throw new Error(`fx: bad row ${line}`);
+      return { date: parseBoeDate(date ?? ''), rate };
     }),
   );
 }
 
-function assertAscending(observations: readonly FxObservation[]): readonly FxObservation[] {
+export function parseBoeGbpUsdCsv(text: string): readonly FxObservation[] {
+  return parseBoeSeriesCsv(text, 'XUDLUSS').map(({ date, rate }) => ({ date, gbpUsd: rate }));
+}
+
+export function parseBoeGbpEurCsv(text: string): readonly BoeFix[] {
+  return parseBoeSeriesCsv(text, 'XUDLERS');
+}
+
+function assertAscending<T extends { readonly date: string }>(
+  observations: readonly T[],
+): readonly T[] {
   for (const [index, row] of observations.entries()) {
     const previous = observations[index - 1];
     if (previous !== undefined && previous.date >= row.date) {
@@ -68,6 +85,8 @@ export function yearStartGbpUsd(observations: readonly FxObservation[], year: nu
 export const FX_PATH = 'data/bars/fx/gbpusd-boe-xudluss.csv';
 
 export const FX_SNAPSHOT_PATH = 'data/bars/fx/gbpusd-boe-xudluss.snapshot.csv';
+
+export const FX_EUR_PATH = 'data/bars/fx/gbpeur-boe-xudlers.csv';
 
 export const FX_SOURCE_GBP = 'gbp';
 
@@ -94,10 +113,25 @@ function daysBetween(from: string, to: string): number {
 
 // Exits, fills and marks keep pricing at a stale year-start fix, named in fx_source (#1947);
 // only entries refuse it (#2009)
-export function staleYearStartReason(year: number, fixDate: string): string | undefined {
+export function staleYearStartReason(
+  year: number,
+  fixDate: string,
+  series: BoeSeries = 'XUDLUSS',
+): string | undefined {
   const cutoff = `${year}-01-01`;
   if (daysBetween(fixDate, cutoff) <= DAY_FIX_MAX_GAP_DAYS) return undefined;
-  return `last BoE XUDLUSS fix on or before ${cutoff} is ${fixDate}, more than ${DAY_FIX_MAX_GAP_DAYS} days before it`;
+  return `last BoE ${series} fix on or before ${cutoff} is ${fixDate}, more than ${DAY_FIX_MAX_GAP_DAYS} days before it`;
+}
+
+// Unlike a stale USD fix, which marks and exits keep using (#2009), a stale EUR fix refuses:
+// its only use is cash written once into the append-only dividend ledger (#2170)
+export function yearStartGbpEur(fixes: readonly BoeFix[], year: number): number {
+  const cutoff = `${year}-01-01`;
+  const fix = fixes.findLast((row) => row.date <= cutoff);
+  if (fix === undefined) throw new Error(`fx: no BoE XUDLERS fix on or before ${cutoff}`);
+  const stale = staleYearStartReason(year, fix.date, 'XUDLERS');
+  if (stale !== undefined) throw new Error(`fx: ${stale}`);
+  return fix.rate;
 }
 
 export function dayGbpUsd(observations: readonly FxObservation[], date: string): DayFix {

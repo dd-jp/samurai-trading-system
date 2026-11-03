@@ -8411,7 +8411,7 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     copy.close();
   });
 
-  it('refuses, journals and logs only a line no mark FX converts, books the rest and marks the date', async () => {
+  it('refuses, journals and logs only a line no year-start fix converts, books the rest and marks the date', async () => {
     const base = harness([shortIsf], true);
     const feed = dividendFeed([
       { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
@@ -8428,7 +8428,7 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     const report = await runCycle(deps, '2026-09-27');
     const messages = ['debate/primary', 'debate/no-macro-gate'].map(
       (bookId) =>
-        `${bookId} ISF: dividend on ex-date 2026-09-26 declared in XYZ not booked, no mark FX converts it`,
+        `${bookId} ISF: dividend on ex-date 2026-09-26 declared in XYZ not booked, no year-start BoE fix converts it`,
     );
     expect(base.books.isMarked('2026-09-27')).toBe(true);
     for (const message of messages) expect(report.refusals).toContain(message);
@@ -8462,6 +8462,66 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
         amount_gbp: qty * 0.02,
       },
     ]);
+  });
+
+  describe('a EUR line (#2170)', () => {
+    const EUR_PER_GBP = 1.16;
+    const eurFeed = () => dividendFeed([{ exDate: '2026-09-26', perShare: 0.58, currency: 'EUR' }]);
+
+    function withEurFix(deps: Harness, gbpEurAtYearStart: (year: number) => number) {
+      return { ...withDividends(deps, eurFeed()), market: { ...deps.market, gbpEurAtYearStart } };
+    }
+
+    it('books at the year-start GBP/EUR fix and marks the date', async () => {
+      const base = harness([shortIsf], true);
+      await runCycle(withDividends(base, eurFeed()), '2026-09-25');
+      base.setDecisions([]);
+      await runCycle(withDividends(base, eurFeed()), '2026-09-26');
+      const years: number[] = [];
+      const deps = withEurFix(base, (year) => {
+        years.push(year);
+        return EUR_PER_GBP;
+      });
+      const report = await runCycle(deps, '2026-09-27');
+      expect(base.books.isMarked('2026-09-27')).toBe(true);
+      expect(report.refusals.filter((message) => message.includes('dividend'))).toEqual([]);
+      expect(years).toContain(2026);
+      const qty = base.books.position('debate/primary', 'ISF')?.qty ?? 0;
+      const [row] = booked(deps.db) as { ex_date: string; amount_gbp: number }[];
+      expect(row?.ex_date).toBe('2026-09-26');
+      expect(row?.amount_gbp).toBeCloseTo((qty * 0.58) / EUR_PER_GBP, 12);
+    });
+
+    it('leaves the date unmarked while no GBP/EUR fix is held, then books once it is', async () => {
+      const base = harness([shortIsf], true);
+      await runCycle(withDividends(base, eurFeed()), '2026-09-25');
+      base.setDecisions([]);
+      await runCycle(withDividends(base, eurFeed()), '2026-09-26');
+      const logs: LogEntry[] = [];
+      const missing = {
+        ...withEurFix(base, () => {
+          throw new Error('fx: no BoE XUDLERS fix on or before 2026-01-01');
+        }),
+        logger: { log: (entry: LogEntry) => logs.push(entry) },
+      };
+      await expect(runCycle(missing, '2026-09-27')).rejects.toThrow(
+        'CFD dividend booking threw; the date stays unmarked for a retry',
+      );
+      expect(logs.filter((entry) => entry.level === 'error')).toMatchObject([
+        {
+          event: 'v2_cfd_dividend_threw',
+          message: 'CFD dividend booking threw: fx: no BoE XUDLERS fix on or before 2026-01-01',
+        },
+        { event: 'v2_cfd_dividend_unmarked' },
+      ]);
+      expect(base.books.isMarked('2026-09-27')).toBe(false);
+      expect(booked(missing.db)).toEqual([]);
+
+      const deps = withEurFix(base, () => EUR_PER_GBP);
+      await runCycle(deps, '2026-09-27');
+      expect(base.books.isMarked('2026-09-27')).toBe(true);
+      expect(booked(deps.db)).toHaveLength(1);
+    });
   });
 
   it('refuses, journals and logs a line over a quarter of the ex-date raw close as implausible_amount, books the rest and marks the date', async () => {

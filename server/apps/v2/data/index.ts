@@ -50,14 +50,16 @@ export { EodhdClient, EodhdRequestError, eodhdSymbol } from './eodhd-client.js';
 export type { DividendsAcross } from './eodhd-dividends.js';
 export { dividendsAcross } from './eodhd-dividends.js';
 export { splitsAcross } from './eodhd-splits.js';
-export type { FxObservation } from './fx.js';
+export type { BoeFix, BoeSeries, FxObservation } from './fx.js';
 export {
   dayFxSource,
   dayGbpUsd,
+  FX_EUR_PATH,
   FX_PATH,
   FX_SNAPSHOT_PATH,
   FX_SOURCE_GBP,
   parseBoeGbpUsdCsv,
+  parseBoeSeriesCsv,
 } from './fx.js';
 export { journalledNewsSource } from './journalled-news.js';
 export type { MacroGateVerdict } from './macro-calendar.js';
@@ -66,6 +68,8 @@ export {
   BarsMarketData,
   currencyQuotePerGbp,
   fillFxOf,
+  gbpEurAtYearStartOf,
+  gbpEurFromFile,
   londonDateOf,
   quotePerGbp,
   yearStartCoverageRefusal,
@@ -104,5 +108,5 @@ export {
   sessionDay,
   TABLE_VENUE_SESSIONS,
 } from './venue-sessions.js';
-export type { QuoteCurrency } from './venues.js';
-export { isCfdVenue, isQuoteCurrency, quoteCurrencyOf } from './venues.js';
+export type { ConvertibleCurrency, QuoteCurrency } from './venues.js';
+export { isCfdVenue, isConvertibleCurrency, quoteCurrencyOf } from './venues.js';

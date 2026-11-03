@@ -10,7 +10,7 @@ import { reloadingFx } from './api/main.js';
 import { TaxReader } from './api/tax.js';
 import {
   appendBoeRows,
-  boeXudlussUrl,
+  boeFxUrl,
   type FxFetch,
   fxRefreshFor,
   overlapStart,
@@ -74,18 +74,25 @@ function answering(
   };
 }
 
-describe('boeXudlussUrl', () => {
+describe('boeFxUrl', () => {
   it('asks the IADB for XUDLUSS from the given day to now, in the committed file format', () => {
-    expect(boeXudlussUrl('2026-09-03')).toBe(
+    expect(boeFxUrl('2026-09-03')).toBe(
       'https://www.bankofengland.co.uk/boeapps/iadb/fromshowcolumns.asp?csv.x=yes' +
         '&Datefrom=03/Sep/2026&Dateto=now&SeriesCodes=XUDLUSS&CSVF=TN&UsingCodes=Y&VPD=Y&VFD=N',
+    );
+  });
+
+  it('asks for XUDLERS the same way (#2170)', () => {
+    expect(boeFxUrl('2026-09-03', 'XUDLERS')).toBe(
+      'https://www.bankofengland.co.uk/boeapps/iadb/fromshowcolumns.asp?csv.x=yes' +
+        '&Datefrom=03/Sep/2026&Dateto=now&SeriesCodes=XUDLERS&CSVF=TN&UsingCodes=Y&VPD=Y&VFD=N',
     );
   });
 });
 
 describe('overlapStart', () => {
   it('re-reads the two weeks before the last fix and refuses an empty file', () => {
-    expect(overlapStart([{ date: '2026-09-24', gbpUsd: 1.322 }])).toBe(FROM);
+    expect(overlapStart([{ date: '2026-09-24', rate: 1.322 }])).toBe(FROM);
     expect(() => overlapStart([])).toThrow(/no rows/);
   });
 });
@@ -96,8 +103,8 @@ describe('appendBoeRows', () => {
   it('appends only the fixes after the last row, as BoE wrote them', () => {
     const result = appendBoeRows(FILE, overlap);
     expect(result.added).toEqual([
-      { date: '2026-09-25', gbpUsd: 1.3301 },
-      { date: '2026-09-29', gbpUsd: 1.34 },
+      { date: '2026-09-25', rate: 1.3301 },
+      { date: '2026-09-29', rate: 1.34 },
     ]);
     expect(result.text).toBe(`${FILE}25 Sep 2026,1.3301\n29 Sep 2026,1.34\n`);
   });
@@ -136,7 +143,7 @@ describe('appendBoeRows', () => {
     expect(() => appendBoeRows(FILE, `${overlap}30 Sep 2026,1.3`)).toThrow(/ends mid-row/);
     expect(appendBoeRows(FILE, `${overlap}30 Sep 2026,1.3\r\n`).added.at(-1)).toEqual({
       date: '2026-09-30',
-      gbpUsd: 1.3,
+      rate: 1.3,
     });
   });
 
@@ -153,10 +160,10 @@ describe('refreshBoeFx', () => {
     const path = fxFile();
     const boe = answering(`${FILE}25 Sep 2026,1.3301\n`);
     const result = await refreshBoeFx({ path, fetch: boe.fetch, logger: recorder().logger });
-    expect(boe.urls).toEqual([boeXudlussUrl(FROM)]);
+    expect(boe.urls).toEqual([boeFxUrl(FROM)]);
     expect(boe.inits[0]?.headers['User-Agent']).toMatch(/^Mozilla\/5\.0 /);
     expect(boe.inits[0]?.signal.aborted).toBe(false);
-    expect(result.added).toEqual([{ date: '2026-09-25', gbpUsd: 1.3301 }]);
+    expect(result.added).toEqual([{ date: '2026-09-25', rate: 1.3301 }]);
     expect(readFileSync(path, 'utf8')).toBe(`${FILE}25 Sep 2026,1.3301\n`);
   });
 
@@ -191,6 +198,35 @@ describe('fxRefreshFor', () => {
     await fxRefreshFor({ path: fxFile(), fetch: answering(FILE).fetch, logger }).run();
     expect(entries.map((entry) => entry.message)).toEqual([
       'BoE XUDLUSS has no fix after the file',
+    ]);
+  });
+
+  it('extends the XUDLERS file from its own series and names it (#2170)', async () => {
+    const eurFile = FILE.replace('XUDLUSS', 'XUDLERS');
+    const path = fxFile(eurFile);
+    const { entries, logger } = recorder();
+    const boe = answering(`${eurFile}25 Sep 2026,1.1501\n`);
+    await fxRefreshFor({ path, fetch: boe.fetch, logger, series: 'XUDLERS' }).run();
+    expect(boe.urls).toEqual([boeFxUrl(FROM, 'XUDLERS')]);
+    expect(readFileSync(path, 'utf8')).toBe(`${eurFile}25 Sep 2026,1.1501\n`);
+    expect(entries.map((entry) => entry.message)).toEqual([
+      'BoE XUDLERS appended 1 fixes to 2026-09-25',
+    ]);
+  });
+
+  it('refuses a XUDLUSS answer for the XUDLERS file and warns what that leaves unbooked', async () => {
+    const eurFile = FILE.replace('XUDLUSS', 'XUDLERS');
+    const path = fxFile(eurFile);
+    const { entries, logger } = recorder();
+    const boe = answering(`${FILE}25 Sep 2026,1.3301\n`);
+    await fxRefreshFor({ path, fetch: boe.fetch, logger, series: 'XUDLERS' }).run();
+    expect(readFileSync(path, 'utf8')).toBe(eurFile);
+    expect(entries.map(({ level, event, message }) => [level, event, message])).toEqual([
+      [
+        'warn',
+        'v2_fx_refresh_failed',
+        'fx: unexpected header DATE,XUDLUSS; a EUR CFD dividend line leaves its date unmarked once the year-start fix is missing',
+      ],
     ]);
   });
 

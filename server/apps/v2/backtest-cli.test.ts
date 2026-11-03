@@ -75,6 +75,7 @@ describe('resolveCliOptions', () => {
     const resolved = resolveCliOptions({});
     expect(resolved.root).toBe(DEFAULT_BAR_STORE_ROOT);
     expect(resolved.fxPath).toBe(FX_PATH);
+    expect(resolved.gbpEurPath).toBeUndefined();
     expect(resolved.spreadsPath).toBe(SPREADS_PATH);
     expect(resolved.saxoSpreadsPath).toBe(SAXO_SPREADS_PATH);
     expect(resolved.constituentsPath).toBe(CONSTITUENTS_PATH);
@@ -89,6 +90,7 @@ describe('resolveCliOptions', () => {
     const resolved = resolveCliOptions({
       barStoreRoot: 'root',
       fxPath: 'fx',
+      gbpEurPath: 'fx-eur',
       spreadsPath: 'spreads',
       saxoSpreadsPath: 'saxo-spreads',
       constituentsPath: 'constituents',
@@ -98,6 +100,7 @@ describe('resolveCliOptions', () => {
     expect(resolved).toEqual({
       root: 'root',
       fxPath: 'fx',
+      gbpEurPath: 'fx-eur',
       spreadsPath: 'spreads',
       saxoSpreadsPath: 'saxo-spreads',
       constituentsPath: 'constituents',
@@ -698,7 +701,11 @@ describe('runArm2UkPoolTrialAgainst', () => {
           long_withholding: { LSE: 0, US: 0.3 },
           short: 'gross',
           booked: 'ex_date_on_ex_date_minus_1_holding',
-          other_currency: 'converted_at_mark_fx_else_line_refused',
+          other_currency: {
+            USD: 'boe_xudluss_year_start',
+            EUR: 'boe_xudlers_year_start',
+            other: 'line_refused',
+          },
           line_refused_above_share_of_raw_close: 0.25,
           window_over_one_session: 'line_refused',
         },
@@ -956,7 +963,7 @@ describe('candidate trial hashes', () => {
         ),
       1,
     );
-    expect(hashes, NEW_TRIAL).toEqual(['fd7aa013f763d2f8']);
+    expect(hashes, NEW_TRIAL).toEqual(['72d8d79891a6a169']);
   });
 
   it('#2105: makes an archived CFD catalogue inside the window a new vol-target trial', async () => {

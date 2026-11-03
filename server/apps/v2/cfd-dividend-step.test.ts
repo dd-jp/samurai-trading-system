@@ -148,21 +148,30 @@ describe('bookCfdDividends', () => {
     expect(report.refused).toEqual([]);
   });
 
-  it('converts a USD line on an LSE CFD at the mark FX and reports a line in EUR as refused', async () => {
+  it('converts a USD or EUR line on an LSE CFD at its year-start fix and refuses any other (#2170)', async () => {
     const usd = deps({ feed: feed([], 'USD') });
     await bookCfdDividends(usd.step);
     expect(usd.cash).toEqual([
       ['debate-primary', 2 / USD_PER_GBP],
       ['debate-primary', (-10 * 0.26) / USD_PER_GBP],
     ]);
-    const eur = deps({ feed: feed([], 'EUR') });
-    const report = await bookCfdDividends(eur.step);
-    expect(eur.recorded.map((booking) => booking.instrument)).toEqual(['AAPL']);
+    const eurPerGbp = 1.16;
+    const eur = deps({
+      feed: feed([], 'EUR'),
+      fxFor: (currency) => ({ GBP: 1, USD: USD_PER_GBP, EUR: eurPerGbp })[currency],
+    });
+    const eurReport = await bookCfdDividends(eur.step);
+    expect(eurReport.refused).toEqual([]);
+    expect(eur.cash).toHaveLength(2);
+    expect(eur.cash[0]?.[1]).toBeCloseTo(2 / eurPerGbp, 12);
+    const chf = deps({ feed: feed([], 'CHF') });
+    const report = await bookCfdDividends(chf.step);
+    expect(chf.recorded.map((booking) => booking.instrument)).toEqual(['AAPL']);
     expect(report.refused).toEqual([
       {
         bookId: 'debate-primary',
         instrument: 'VOD_XLON',
-        detail: 'ex-date 2026-06-04 declared in EUR',
+        detail: 'ex-date 2026-06-04 declared in CHF',
       },
     ]);
     expect(report.unread).toEqual([]);

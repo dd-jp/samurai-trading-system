@@ -78,6 +78,10 @@ describe('delayedMarket', () => {
       gbpUsdAtYearStart: () => 1.3,
     };
     expect(delayedMarket(bare).gbpUsdYearStartFixDate?.(2024)).toBeUndefined();
+    expect(
+      delayedMarket({ ...bare, gbpEurAtYearStart: () => 1.15 }).gbpEurAtYearStart?.(2024),
+    ).toBe(1.15);
+    expect(() => delayedMarket(bare).gbpEurAtYearStart?.(2024)).toThrow(/no BoE XUDLERS/);
   });
 });
 

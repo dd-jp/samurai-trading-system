@@ -10,9 +10,20 @@ import {
   SqliteCfdDividends,
 } from './cfd-dividends.js';
 import { parseDividendsBody } from './data/eodhd-client.js';
-import { addDays, type DividendsRead, dividendsAcross } from './data/index.js';
+import {
+  addDays,
+  type ConvertibleCurrency,
+  type DividendsRead,
+  dividendsAcross,
+} from './data/index.js';
 
 const USD_PER_GBP = 1.25;
+const EUR_PER_GBP = 1.16;
+
+function withEur(currency: ConvertibleCurrency): number {
+  if (currency === 'EUR') return EUR_PER_GBP;
+  return currency === 'USD' ? USD_PER_GBP : 1;
+}
 
 function dailyBars(splitOn?: string, rawClose = 20): MarketData['barsBefore'] {
   return (_instrument, tradingDate, count) =>
@@ -237,13 +248,15 @@ describe('CFD dividend booking rule', () => {
     expect(gbpOnUs?.amount_gbp).toBeCloseTo(100 * 0.4 * 0.7, 12);
   });
 
-  it('refuses only a line whose currency no mark FX converts and books the rest', () => {
+  it('refuses only a line no year-start fix converts and books the rest', () => {
     const result = heldDividends(
       inputs({
+        fxFor: withEur,
         source: source([
           { exDate: '2026-06-04', perShare: 0.01, currency: '' },
           { exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' },
-          { exDate: '2026-06-04', perShare: 0.5, currency: 'EUR' },
+          { exDate: '2026-06-04', perShare: 0.03, currency: 'CHF' },
+          { exDate: '2026-06-04', perShare: 0.04, currency: 'eur' },
         ]),
       }),
     );
@@ -252,24 +265,46 @@ describe('CFD dividend booking rule', () => {
     ]);
     expect(result.refused).toEqual([
       'ex-date 2026-06-04 declared in no currency',
-      'ex-date 2026-06-04 declared in EUR',
+      'ex-date 2026-06-04 declared in CHF',
+      'ex-date 2026-06-04 declared in eur',
     ]);
   });
 
-  it('asks the mark FX only for the currencies it converts, and throws when one is missing', () => {
+  it('converts a EUR line at the year-start GBP/EUR into either position quote (#2170)', () => {
+    const eur = source([{ exDate: '2026-06-04', perShare: 0.58, currency: 'EUR' }]);
+    const onLse = heldDividends(inputs({ fxFor: withEur, source: eur }));
+    expect(onLse.refused).toEqual([]);
+    expect(onLse.bookings).toHaveLength(1);
+    expect(onLse.bookings[0]?.per_share_native).toBeCloseTo(0.58 / EUR_PER_GBP, 12);
+    expect(onLse.bookings[0]?.fx_quote_per_gbp).toBe(1);
+    expect(onLse.bookings[0]?.amount_gbp).toBeCloseTo(50, 12);
+    const [onUs] = heldDividends(
+      inputs({ fxFor: withEur, source: eur, held: position('saxo_cfd_usd', -100) }),
+    ).bookings;
+    expect(onUs?.per_share_native).toBeCloseTo((0.58 * USD_PER_GBP) / EUR_PER_GBP, 12);
+    expect(onUs?.fx_quote_per_gbp).toBe(USD_PER_GBP);
+    expect(onUs?.amount_gbp).toBeCloseTo(-50, 12);
+  });
+
+  it('asks for a fix only for the currencies it converts, and throws when one is missing', () => {
+    const asked: string[] = [];
     const noFix = (currency: string) => {
-      if (currency === 'USD') throw new Error('fx: no GBPUSD observation on or before 2026-01-01');
+      asked.push(currency);
+      if (currency !== 'GBP') throw new Error(`fx: no ${currency} fix on or before 2026-01-01`);
       return 1;
     };
     expect(amounts({ fxFor: noFix })).toEqual([2]);
-    expect(() =>
-      heldDividends(
-        inputs({
-          fxFor: noFix,
-          source: source([{ exDate: '2026-06-04', perShare: 0.5, currency: 'USD' }]),
-        }),
-      ),
-    ).toThrow('no GBPUSD');
+    expect(asked).not.toContain('EUR');
+    for (const currency of ['USD', 'EUR']) {
+      expect(() =>
+        heldDividends(
+          inputs({
+            fxFor: noFix,
+            source: source([{ exDate: '2026-06-04', perShare: 0.5, currency }]),
+          }),
+        ),
+      ).toThrow(`fx: no ${currency} fix`);
+    }
   });
 
   it('books nothing and reports why when the source cannot vouch for the window', () => {

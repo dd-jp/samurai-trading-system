@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Venue } from '../../../../contracts/index.js';
-import { homeBarVenue, isCfdVenue, isQuoteCurrency, quoteCurrencyOf } from './venues.js';
+import { homeBarVenue, isCfdVenue, isConvertibleCurrency, quoteCurrencyOf } from './venues.js';
 
 const CASES: readonly (readonly [Venue, 'GBP' | 'USD', boolean])[] = [
   ['alpaca', 'USD', false],
@@ -27,8 +27,12 @@ describe('homeBarVenue', () => {
   });
 });
 
-describe('isQuoteCurrency', () => {
-  it('names only the currencies a venue quotes in', () => {
-    expect(['GBP', 'USD', 'EUR', 'GBX', 'usd', ''].filter(isQuoteCurrency)).toEqual(['GBP', 'USD']);
+describe('isConvertibleCurrency', () => {
+  it('names the venue currencies and EUR, which a BoE year-start fix converts (#2170)', () => {
+    expect(['GBP', 'USD', 'EUR', 'GBX', 'CHF', 'eur', ''].filter(isConvertibleCurrency)).toEqual([
+      'GBP',
+      'USD',
+      'EUR',
+    ]);
   });
 });
