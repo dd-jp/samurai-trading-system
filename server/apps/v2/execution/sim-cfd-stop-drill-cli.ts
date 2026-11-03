@@ -1,8 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Logger } from '../../../shared/index.js';
+import type { CapitalYear } from '../../../../contracts/index.js';
+import { type Logger, SystemClock } from '../../../shared/index.js';
+import { openReadOnlyStore } from '../../../shared/store/index.js';
 import { exitCodeOrOne, flagPairs, isMainModule } from '../../../tools/cli-entrypoint.js';
+import { V2_STORE_PATH } from '../index.js';
+import { CapitalConfigStore } from '../risk/index.js';
 import { SaxoHttpBrokerClient } from './saxo/saxo-http-client.js';
 import { type FetchLike, resolveSaxoOAuthConfig } from './saxo/saxo-oauth.js';
 import { readTokenFile, tokenFilePath } from './saxo/saxo-token-file.js';
@@ -17,7 +21,7 @@ import {
   SaxoSimGateway,
   SimOnlyRefusal,
 } from './saxo-sim-gateway.js';
-import type { CashEtfBroker } from './sim-cash-etf-drill.js';
+import type { CashEtfBroker, CashEtfDeps } from './sim-cash-etf-drill.js';
 import {
   type DrillEvidence,
   type DrillExit,
@@ -183,6 +187,16 @@ export interface DrillDeps {
   readonly tokens: (env: NodeJS.ProcessEnv, logger: Logger) => SimTokenChoice;
   readonly onInterrupt: (handler: () => void) => () => void;
   readonly simBroker: (options: SimBrokerOptions) => CashEtfBroker;
+  readonly capital: (tradingDate: string) => CapitalYear | undefined;
+}
+
+function storeCapital(tradingDate: string): CapitalYear | undefined {
+  const db = openReadOnlyStore(V2_STORE_PATH);
+  try {
+    return new CapitalConfigStore(db, new SystemClock()).inForce(tradingDate);
+  } finally {
+    db.close();
+  }
 }
 
 export interface SimBrokerOptions {
@@ -218,6 +232,7 @@ const DEFAULT_DEPS: DrillDeps = {
     return () => process.off('SIGINT', handler);
   },
   simBroker: simHttpBroker,
+  capital: storeCapital,
 };
 
 function log(logger: Logger, event: string, message: string, payload?: unknown): void {
@@ -238,6 +253,7 @@ export async function main(
 ): Promise<number> {
   const args = parseDrillArgs(argv);
   const placed = args.resume === undefined ? undefined : placedRecord(args.resume);
+  const capital = cashEtfCapital(deps, args.targets);
   const baseUrl = env.SAXO_SIM_GATEWAY?.trim() || SAXO_SIM_GATEWAY;
   assertSimGateway(baseUrl);
   const tokens = deps.tokens(env, deps.logger);
@@ -265,18 +281,36 @@ export async function main(
     phase: args.phase,
     runId: String(deps.clock.now().getTime()),
   };
-  const cashBroker = (account: SimAccount) =>
-    deps.simBroker({
-      baseUrl,
-      tokenSource: tokens.source,
-      accountKey: account.accountKey,
-      logger: deps.logger,
-    });
+  const cashEtf: CashEtfDeps | undefined =
+    capital === undefined
+      ? undefined
+      : {
+          capital,
+          broker: (account: SimAccount) =>
+            deps.simBroker({
+              baseUrl,
+              tokenSource: tokens.source,
+              accountKey: account.accountKey,
+              logger: deps.logger,
+            }),
+        };
   const run =
     placed === undefined
-      ? runSimCfdStopDrill(gateway, options, deps.clock, interrupt.signal, cashBroker)
+      ? runSimCfdStopDrill(gateway, options, deps.clock, interrupt.signal, cashEtf)
       : resumeSimCfdDrill(gateway, placed, options, deps.clock, interrupt.signal);
   return settle(deps.logger, args, tokens, await run.finally(release));
+}
+
+function cashEtfCapital(deps: DrillDeps, targets: readonly DrillTarget[]): CapitalYear | undefined {
+  if (!targets.some((target) => target.assetType === 'Etf')) return undefined;
+  const tradingDate = deps.clock.now().toISOString().slice(0, 10);
+  const capital = deps.capital(tradingDate);
+  if (capital === undefined) {
+    throw new Error(
+      `--cash-etf: no capital year in force on ${tradingDate}; set one with npm run v2:capital (doc 66 D8)`,
+    );
+  }
+  return capital;
 }
 
 function cashLabelOf(targets: readonly DrillTarget[]): string {

@@ -1,5 +1,5 @@
 import { SAXO_SIM_GATEWAY, type SaxoSimGateway } from './saxo-sim-gateway.js';
-import { type CashEtfBroker, type CashEtfLeg, drillCashEtf } from './sim-cash-etf-drill.js';
+import { type CashEtfDeps, type CashEtfLeg, drillCashEtf } from './sim-cash-etf-drill.js';
 import {
   type AccountFlatness,
   type DrillEvidence,
@@ -89,7 +89,7 @@ interface Drill {
   readonly evidence: DrillEvidence;
   readonly account: SimAccount;
   readonly interrupt: AbortSignal;
-  readonly cashBroker?: ((account: SimAccount) => CashEtfBroker) | undefined;
+  readonly cashEtf?: CashEtfDeps | undefined;
 }
 
 const FILLED_STATUSES = new Set(['FinalFill', 'Filled']);
@@ -628,10 +628,11 @@ async function exitThroughMarket(
 }
 
 function cashLegOf(drill: Drill, record: InstrumentEvidence): CashEtfLeg {
-  if (drill.cashBroker === undefined) fail(record, 'cash_etf_broker_missing');
+  if (drill.cashEtf === undefined) fail(record, 'cash_etf_broker_missing');
   return {
     gateway: drill.gateway,
-    broker: drill.cashBroker(drill.account),
+    broker: drill.cashEtf.broker(drill.account),
+    capital: drill.cashEtf.capital,
     runId: drill.options.runId,
     fillTimeoutMs: drill.options.fillTimeoutMs,
     now: drill.clock.now,
@@ -817,11 +818,11 @@ export async function runSimCfdStopDrill(
   options: DrillOptions,
   clock: DrillClock,
   interrupt: AbortSignal = new AbortController().signal,
-  cashBroker?: (account: SimAccount) => CashEtfBroker,
+  cashEtf?: CashEtfDeps,
 ): Promise<{ evidence: DrillEvidence; account: SimAccount | undefined }> {
   const evidence = newEvidence(clock, modeOf(options));
   const account = await onTrialAccount(gateway, clock, evidence, (trial) =>
-    runDrill({ gateway, options, clock, evidence, account: trial, interrupt, cashBroker }),
+    runDrill({ gateway, options, clock, evidence, account: trial, interrupt, cashEtf }),
   );
   return { evidence, account };
 }

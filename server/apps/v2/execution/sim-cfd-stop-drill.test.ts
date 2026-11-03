@@ -1133,6 +1133,9 @@ function cliDeps(
     simBroker: () => {
       throw new Error('no cash ETF leg in this test');
     },
+    capital: () => {
+      throw new Error('no cash ETF leg in this test');
+    },
   };
 }
 

@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EntryApproval } from '../../../../contracts/index.js';
+import type { CapitalYear, EntryApproval } from '../../../../contracts/index.js';
 import { TokenBucket } from '../../../shared/index.js';
 import { V2RiskGate } from '../risk/index.js';
 import type { SaxoOrderActivity, SaxoOrderRequest } from './saxo/saxo-client.js';
@@ -196,6 +196,13 @@ class FakeClock {
 
 const CASH_ISF = { symbol: 'ISF:xlon', assetType: 'Etf', side: 'long' } as const;
 
+const DRILL_TEST_CAPITAL: CapitalYear = {
+  year: 2026,
+  effectiveFrom: '2026-01-01',
+  startCapitalGbp: 10_000,
+  lossCapGbp: 1_500,
+};
+
 const OPTIONS: DrillOptions = {
   ...DEFAULT_DRILL_OPTIONS,
   targets: [CASH_ISF],
@@ -241,7 +248,7 @@ async function drill(options: DrillOptions = OPTIONS, withBroker = true) {
     options,
     clock,
     signal,
-    withBroker ? brokerFor : undefined,
+    withBroker ? { broker: brokerFor, capital: DRILL_TEST_CAPITAL } : undefined,
   );
   return { ...result, gateway, record: result.evidence.instruments[0] };
 }
@@ -538,6 +545,7 @@ describe('--cash-etf', () => {
   it('runs from main through the injected SIM broker and writes a -cash-etf record', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sim-cash-etf-'));
     const brokers: string[] = [];
+    const capitalReads: string[] = [];
     const deps: DrillDeps = {
       fetch: fake.fetch,
       clock: new FakeClock(),
@@ -552,11 +560,16 @@ describe('--cash-etf', () => {
         brokers.push(`${options.baseUrl} ${options.accountKey === ACCOUNT_KEY}`);
         return brokerFor({ accountKey: options.accountKey, clientKey: '', currency: '' });
       },
+      capital: (tradingDate) => {
+        capitalReads.push(tradingDate);
+        return DRILL_TEST_CAPITAL;
+      },
     };
     try {
       const argv = ['--stock', 'none', '--etf', 'none', '--uk-long', 'none', '--cash-etf', 'ISF'];
       expect(await main([...argv, '--out-dir', dir], {}, deps)).toBe(0);
       expect(brokers).toEqual([`${SAXO_SIM_GATEWAY} true`]);
+      expect(capitalReads).toEqual(['2026-10-01']);
       const files = readdirSync(dir).sort();
       expect(files).toEqual([
         'sim-cfd-stop-drill-2026-10-01T090000Z-cash-etf.json',
@@ -568,5 +581,25 @@ describe('--cash-etf', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('refuses before any SIM order when no capital year is in force', async () => {
+    const deps: DrillDeps = {
+      fetch: fake.fetch,
+      clock: new FakeClock(),
+      logger: { log: () => {} },
+      tokens: () => ({
+        source: new StaticSaxoTokenSource(TOKEN),
+        origin: 'env_token',
+        secrets: async () => [TOKEN],
+      }),
+      onInterrupt: () => () => {},
+      simBroker: (options) =>
+        brokerFor({ accountKey: options.accountKey, clientKey: '', currency: '' }),
+      capital: () => undefined,
+    };
+    const argv = ['--stock', 'none', '--etf', 'none', '--uk-long', 'none', '--cash-etf', 'ISF'];
+    await expect(main(argv, {}, deps)).rejects.toThrow(/no capital year in force on 2026-10-01/);
+    expect(fake.trades()).toEqual([]);
   });
 });

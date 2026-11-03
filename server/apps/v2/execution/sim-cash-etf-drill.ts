@@ -28,6 +28,7 @@ import {
   isOn,
   netPositions,
   quoteOf,
+  type SimAccount,
   type SimQuote,
 } from './sim-cfd-drill-reads.js';
 
@@ -36,9 +37,15 @@ export type CashEtfBroker = Pick<
   'getInstrumentDetails' | 'placeOrder' | 'listOrderActivities'
 >;
 
+export interface CashEtfDeps {
+  readonly broker: (account: SimAccount) => CashEtfBroker;
+  readonly capital: CapitalYear;
+}
+
 export interface CashEtfLeg {
   readonly gateway: SaxoSimGateway;
   readonly broker: CashEtfBroker;
+  readonly capital: CapitalYear;
   readonly runId: string;
   readonly fillTimeoutMs: number;
   readonly now: () => Date;
@@ -65,9 +72,6 @@ const FINAL_FILLS = new Set(['FinalFill', 'Filled']);
 // fill; the band still catches a fill read back 100x off the quoted unit (doc 44 §2.1a)
 export const FILL_PRICE_BAND = 0.05;
 
-// Drill-only sizing inputs, not a capital setting (D8): they only have to let an unbreached book
-// approve a few shares of an LSE ETF so the pair isolates the loss-budget halt
-const DRILL_CAPITAL = { startCapitalGbp: 10_000, lossCapGbp: 1_500 } as const;
 const DRILL_ATR_FRACTION = 0.02;
 const DRILL_ADV_SHARES = 1_000_000;
 const DRILL_BOOK: BookSpec = {
@@ -224,12 +228,10 @@ function entryRequest(leg: CashEtfLeg, record: InstrumentEvidence, prepared: Pre
     decision,
     clientOrderId: `drill-${leg.runId}-${prepared.instrument.uic}`,
     tradingDate,
-    equityGbp: DRILL_CAPITAL.startCapitalGbp,
+    equityGbp: leg.capital.startCapitalGbp,
     macroDay: false,
   };
-  const year = Number(tradingDate.slice(0, 4));
-  const capital: CapitalYear = { year, effectiveFrom: `${year}-01-01`, ...DRILL_CAPITAL };
-  return { request, capital };
+  return { request, capital: leg.capital };
 }
 
 function gateCheck(approval: EntryApproval, book: LossBudgetState): GateCheck {
