@@ -103,6 +103,7 @@ async function postTokenGrant(
   try {
     return await fetchImpl(config.tokenUrl, {
       method: 'POST',
+      redirect: 'error',
       headers: {
         authorization: `Basic ${basic}`,
         'content-type': 'application/x-www-form-urlencoded',

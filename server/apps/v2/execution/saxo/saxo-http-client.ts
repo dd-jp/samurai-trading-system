@@ -551,7 +551,11 @@ export class SaxoHttpBrokerClient implements SaxoOpenApiClient, SaxoAccountBalan
   private async send(path: string, init: SaxoRequestInit, context: string): Promise<Response> {
     let response: Response;
     try {
-      response = await fetchWithTimeout(`${this.baseUrl}${path}`, init, this.timeoutMs);
+      response = await fetchWithTimeout(
+        `${this.baseUrl}${path}`,
+        { ...init, redirect: 'error' },
+        this.timeoutMs,
+      );
     } catch (cause) {
       throw classifySaxoBrokerNetworkError(cause, context, init.method);
     }

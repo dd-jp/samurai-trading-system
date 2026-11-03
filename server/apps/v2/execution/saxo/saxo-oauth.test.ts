@@ -40,6 +40,7 @@ describe('requestSaxoToken', () => {
     });
     expect(fetchImpl).toHaveBeenCalledWith(CONFIG.tokenUrl, {
       method: 'POST',
+      redirect: 'error',
       headers: {
         authorization: `Basic ${Buffer.from('test-app-key:test-app-secret').toString('base64')}`,
         'content-type': 'application/x-www-form-urlencoded',

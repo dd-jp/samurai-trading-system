@@ -451,6 +451,12 @@ describe('verifyToken', () => {
     );
     expect(result).toEqual({ ok: false, status: 401 });
   });
+
+  it('refuses to follow a redirect with the bearer', async () => {
+    const fetchImpl = vi.fn<FetchLike>(async () => jsonResponse({ UserId: 'u1' }, 200));
+    await verifyToken('https://gateway.example/sim/openapi', FAKE_ACCESS_TOKEN, fetchImpl);
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' });
+  });
 });
 
 describe('printSafely', () => {
