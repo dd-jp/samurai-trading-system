@@ -1,6 +1,6 @@
 import { type SaxoSimGateway, SimOnlyRefusal } from './saxo-sim-gateway.js';
 
-export type DrillAssetType = 'CfdOnStock' | 'CfdOnEtf';
+export type DrillAssetType = 'CfdOnStock' | 'CfdOnEtf' | 'Etf';
 
 export interface SimAccount {
   readonly accountKey: string;
@@ -15,6 +15,7 @@ export interface DrillInstrument {
 
 export interface InstrumentRules {
   readonly isTradable: boolean;
+  readonly isComplex: unknown;
   readonly minimumAmount: number;
   readonly supportedOrderTypes: readonly string[];
   readonly tickSize: (price: number) => number;
@@ -142,6 +143,7 @@ export async function instrumentRules(
   const supported = Array.isArray(row.SupportedOrderTypes) ? row.SupportedOrderTypes : [];
   return {
     isTradable: row.IsTradable === true,
+    isComplex: row.IsComplex,
     minimumAmount: num(row.MinimumTradeSize) ?? 1,
     supportedOrderTypes: supported.map(String),
     tickSize: tickSizer(row),

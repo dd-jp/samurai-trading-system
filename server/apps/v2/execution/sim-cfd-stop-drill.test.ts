@@ -1130,6 +1130,12 @@ function cliDeps(
     logger: { log: (entry) => entries.push(entry) },
     tokens,
     onInterrupt: () => () => {},
+    simBroker: () => {
+      throw new Error('no cash ETF leg in this test');
+    },
+    capital: () => {
+      throw new Error('no cash ETF leg in this test');
+    },
   };
 }
 

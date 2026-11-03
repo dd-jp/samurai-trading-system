@@ -57,9 +57,14 @@ async function readBody(response: Response): Promise<unknown> {
 export class SaxoSimGateway {
   private lastTradeAt = Number.NEGATIVE_INFINITY;
   private requests = 0;
+  private trades = 0;
 
   constructor(private readonly deps: SaxoSimGatewayDeps) {
     assertSimGateway(deps.baseUrl);
+  }
+
+  get tradeRequests(): number {
+    return this.trades;
   }
 
   async send(method: SaxoMethod, path: string, body?: unknown): Promise<SaxoReply> {
@@ -95,6 +100,7 @@ export class SaxoSimGateway {
   }
 
   private async paceTrade(): Promise<void> {
+    this.trades += 1;
     const wait = this.lastTradeAt + TRADE_SPACING_MS - this.deps.now();
     if (wait > 0) await this.deps.sleep(wait);
     this.lastTradeAt = this.deps.now();

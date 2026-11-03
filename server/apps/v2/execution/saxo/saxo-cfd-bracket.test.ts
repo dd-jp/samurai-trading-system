@@ -7,7 +7,6 @@ import {
   type CfdBracketOrderIds,
   type CfdShortBracket,
   cfdShortBracketRequest,
-  cfdWireReference,
   settleCfdShortBracket,
   submitCfdShortBracket,
 } from './saxo-cfd-bracket.js';
@@ -18,6 +17,7 @@ import type {
   SaxoOrderPlacement,
   SaxoOrderRequest,
 } from './saxo-client.js';
+import { saxoWireReference } from './saxo-wire-reference.js';
 
 const BRACKET: CfdShortBracket = {
   clientOrderId: 'debate-2026-10-05-AAPL-short',
@@ -29,7 +29,7 @@ const BRACKET: CfdShortBracket = {
   target: 180,
 };
 
-const REF = cfdWireReference(BRACKET.clientOrderId);
+const REF = saxoWireReference(BRACKET.clientOrderId);
 const IDS: CfdBracketOrderIds = { entry: 'E1', stop: 'S1', target: 'T1' };
 const SINCE = new Date('2026-10-05T13:00:00Z');
 
@@ -151,8 +151,8 @@ describe('cfdShortBracketRequest (#1916)', () => {
 
   it('hashes the client order id into a 40-hex reference whose leg refs fit Saxo', () => {
     expect(REF).toMatch(/^[0-9a-f]{40}$/);
-    expect(cfdWireReference(BRACKET.clientOrderId)).toBe(REF);
-    expect(cfdWireReference('other')).not.toBe(REF);
+    expect(saxoWireReference(BRACKET.clientOrderId)).toBe(REF);
+    expect(saxoWireReference('other')).not.toBe(REF);
     expect(`${REF}:target`.length).toBeLessThanOrEqual(50);
   });
 
