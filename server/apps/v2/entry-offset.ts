@@ -9,7 +9,7 @@ export interface CloseAnchor {
 
 // David ruled 2026-09-30 on #1815: the paper sample splits at the offset change. A bracket leg
 // shares its entry's order id, so a close takes that entry; any other close takes the latest
-// entry fill on its book and instrument before it. SQL expressions in, the entry's column out
+// entry fill on its book and instrument before it
 export function entryColumnOfClose(
   close: CloseAnchor,
   column: 'payload' | 'client_order_id',

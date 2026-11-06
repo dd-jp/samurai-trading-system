@@ -1,6 +1,7 @@
 -- #2146: one row per closed trade, keyed like evidence.ts counts closed trades (a book's close
--- fills grouped by client_order_id). Written only once the close is final, so no column carries a
--- wall-clock time: rebuilding from the same journal and bars writes identical rows
+-- fills grouped by client_order_id). Written only once the close is final, and every column comes
+-- from the journal and the bars (the fill times are the journalled ones), so rebuilding from the
+-- same journal and bars writes identical rows
 CREATE TABLE IF NOT EXISTS v2_decision_outcomes (
   outcome_id             INTEGER PRIMARY KEY,
   decision_id            TEXT NOT NULL REFERENCES v2_decisions(decision_id),

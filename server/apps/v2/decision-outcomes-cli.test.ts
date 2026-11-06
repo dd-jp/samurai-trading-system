@@ -26,7 +26,7 @@ function emptyStoreFile(): string {
 const NO_BARS: BarsSource = { load: () => undefined };
 
 describe('formatOutcomeRebuild', () => {
-  it('prints the settled count, then each pending and unmatched close', () => {
+  it('prints the settled count, then each pending, anomalous and unmatched close', () => {
     expect(
       formatOutcomeRebuild({
         written: 1,
@@ -40,11 +40,20 @@ describe('formatOutcomeRebuild', () => {
           },
         ],
         unmatched: ['debate/primary|x-2'],
+        anomalous: [
+          {
+            bookId: 'debate/primary',
+            instrument: 'BBB',
+            exitOrderId: 'x-3',
+            reason: 'close_side',
+          },
+        ],
       }),
     ).toBe(
       [
         'settled 3 closed trades (1 new)',
         'pending debate/primary AAA x-1: position_open',
+        'anomalous debate/primary BBB x-3: close_side',
         'unmatched debate/primary|x-2: no entry decision in the journal',
       ].join('\n'),
     );

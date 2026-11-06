@@ -1079,18 +1079,23 @@ David ruled G11 one question at a time in chat on 2026-10-22, each recorded on [
 
 ## Rulings of 2026-10-22 — decision outcome ledger (#2146)
 
-David ruled two design questions for the ledger G11's loop reads, in chat on 2026-10-22, each recorded on [#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6344726410).
+David ruled the design questions for the ledger G11's loop reads, the first two in chat on 2026-10-22, each recorded on [#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6344726410).
 
 1. **Writer ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6344726410)):** "(b) Post-cycle rebuild". A step after the cycle rebuilds `v2_decision_outcomes` from the journal, so `cycle.ts` is not touched (#1942); the backfill runs the same code.
 2. **Benchmark ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6345327251)):** "Index by venue". SPY for `alpaca` and `saxo_cfd_usd`, ISF for `saxo` and `saxo_cfd_gbp`, from the entry bar's open to the exit bar's close; the excess return is net of the trade's direction.
-
 3. **Simulated fill bar ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6360828584), 2026-10-23):** "Re-run simulator". A simulated fill journals no date, so the ledger dates it by the bar the cycle priced it on. A limit entry with more than one bar between its order and the fill cycle (missed cycles) is re-run through the cycle's own `simulateLimitEntry` to find its bar. `cycle.ts` stays unchanged, and the row stays pending if a split falls in the window.
 4. **Fill times ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6360841294), 2026-10-23):** "Dates + broker times". `settled_at` stays the close's cycle date, so a rebuild stays deterministic. Nullable `entry_filled_at` and `exit_filled_at` carry the broker's fill time where there is one.
+5. **Verify by rebuild agreement ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6680132478), 2026-11-06, go-with-recommended):** the ticket's "replaying a past day reproduces identical rows" is replaced by "independent rebuilds agree": a from-scratch backfill on a fresh copy writes rows identical to the cycle-by-cycle run.
+6. **Price-only ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6680132478)):** the ledger's P&L and R are price-only by design. CFD dividend cash books in `v2_cfd_dividends` (#2169).
+7. **Fix before merge ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6680132478)):** the round-two review's S1 to S6 are fixed, not recorded, since the table is append-only and the first cycle after merge backfills all history. A close on the entry's side, or a set of closes whose quantity is not the entry's quantity times the split ratio, is reported anomalous and not settled.
+8. **Migration ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6680132478)):** the table's migration is 0106, after #2169's 0105.
 
 *Built 2026-10-22 (#2146).* Build notes (not rulings): `docs/specs/debate-sleeve-spec.md` §9 describes the table, its finality rule and the fault code. Results on the 2026-10-23 paper snapshot:
 - The rebuild settled all 29 closed trades the evidence panel counts, book by book (arm 2 11, no-macro-gate 12, primary 6), with none pending and none unmatched.
 - A second run wrote nothing.
 - Two independent rebuilds wrote identical rows. R is null for entries journalled before migration 0085, which carry no native price.
+
+Build notes for rulings 5 to 8 (not rulings), 2026-11-06: an entry's closes are walked in journal order and converted to the entry's units by the `v2_rescales` ratios before each, so each verdict reads only the journal up to its close and a later stray close cannot change a written row. Cash in lieu joins the next close's P&L at its journalled estimate; the broker's later correction in `v2_cash_in_lieu_adjustments` is left out, since it can land after the row is written. A split bracket leg is `unclassified`. The entry-window split guard now reads the window's own bars, as the cycle does. An absent index series, or an index bar still missing three of the trade's sessions after the exit, is warned. A root-level cycle test books a missed-cycle limit entry, a fill-bar stop, a flatten and a bracket target, and checks each row's dates against the bar the cycle priced.
 
 ## Ruling of 2026-10-23 — SIM drill scope for #1400
 
