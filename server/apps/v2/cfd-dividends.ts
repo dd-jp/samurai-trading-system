@@ -61,6 +61,9 @@ export interface CfdDividendBooking {
   readonly withholding: number;
   readonly fx_quote_per_gbp: number;
   readonly amount_gbp: number;
+  readonly declared_per_share: number | null;
+  readonly declared_currency: ConvertibleCurrency | null;
+  readonly fx_declared_per_gbp: number | null;
 }
 
 export interface HeldDividends {
@@ -111,16 +114,53 @@ function splitBefore(inputs: HeldDividendInputs, window: DividendWindow, exDate:
   return splitRatioAcross(bars).steps.length > 0;
 }
 
-function perShareByDate(dividends: readonly EodhdDividend[]): Map<string, number> {
-  const byDate = new Map<string, number>();
-  for (const { exDate, perShare } of dividends) {
-    byDate.set(exDate, (byDate.get(exDate) ?? 0) + perShare);
+interface DeclaredLine {
+  readonly perShare: number;
+  readonly currency: ConvertibleCurrency;
+  readonly fxPerGbp: number;
+}
+
+interface QuotedLine extends EodhdDividend {
+  readonly declared: DeclaredLine;
+}
+
+interface ExDateDividend {
+  readonly perShare: number;
+  readonly declared: readonly DeclaredLine[];
+}
+
+function byExDate(lines: readonly QuotedLine[]): Map<string, ExDateDividend> {
+  const byDate = new Map<string, ExDateDividend>();
+  for (const { exDate, perShare, declared } of lines) {
+    const held = byDate.get(exDate) ?? { perShare: 0, declared: [] };
+    byDate.set(exDate, {
+      perShare: held.perShare + perShare,
+      declared: [...held.declared, declared],
+    });
   }
   return byDate;
 }
 
+type DeclaredColumns = Pick<
+  CfdDividendBooking,
+  'declared_per_share' | 'declared_currency' | 'fx_declared_per_gbp'
+>;
+
+// One row per ex-date holds one declared currency, so lines declared in two leave it undeclared
+function declaredColumns(declared: readonly DeclaredLine[]): DeclaredColumns {
+  const first = declared[0] as DeclaredLine;
+  if (declared.some((line) => line.currency !== first.currency)) {
+    return { declared_per_share: null, declared_currency: null, fx_declared_per_gbp: null };
+  }
+  return {
+    declared_per_share: declared.reduce((total, line) => total + line.perShare, 0),
+    declared_currency: first.currency,
+    fx_declared_per_gbp: first.fxPerGbp,
+  };
+}
+
 interface QuotedLines {
-  readonly lines: readonly EodhdDividend[];
+  readonly lines: readonly QuotedLine[];
   readonly refused: readonly string[];
 }
 
@@ -129,7 +169,7 @@ interface QuotedLines {
 export const CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE = 0.25;
 
 interface PlausibleLines {
-  readonly lines: readonly EodhdDividend[];
+  readonly lines: readonly QuotedLine[];
   readonly implausible: readonly string[];
 }
 
@@ -140,8 +180,8 @@ function implausibility(inputs: HeldDividendInputs, line: EodhdDividend): string
   return `ex-date ${line.exDate} pays ${line.perShare} ${line.currency} a share, over ${CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE * 100}% of the ${bar.date} raw close ${bar.rawClose}`;
 }
 
-function plausible(inputs: HeldDividendInputs, quoted: readonly EodhdDividend[]): PlausibleLines {
-  const lines: EodhdDividend[] = [];
+function plausible(inputs: HeldDividendInputs, quoted: readonly QuotedLine[]): PlausibleLines {
+  const lines: QuotedLine[] = [];
   const implausible: string[] = [];
   for (const line of quoted) {
     const why = implausibility(inputs, line);
@@ -160,18 +200,19 @@ function inPositionQuote(
   dividends: readonly EodhdDividend[],
 ): QuotedLines {
   const quote = quoteCurrencyOf(inputs.held.venue);
-  const lines: EodhdDividend[] = [];
+  const lines: QuotedLine[] = [];
   const refused: string[] = [];
   for (const line of dividends) {
     const { currency } = line;
     if (!isConvertibleCurrency(currency)) {
       refused.push(`ex-date ${line.exDate} declared in ${currency || 'no currency'}`);
-    } else if (currency === quote) {
-      lines.push(line);
-    } else {
-      const perShare = (line.perShare * inputs.fxFor(quote)) / inputs.fxFor(currency);
-      lines.push({ ...line, perShare, currency: quote });
+      continue;
     }
+    const fxPerGbp = inputs.fxFor(currency);
+    const declared = { perShare: line.perShare, currency, fxPerGbp };
+    const perShare =
+      currency === quote ? line.perShare : (line.perShare * inputs.fxFor(quote)) / fxPerGbp;
+    lines.push({ ...line, perShare, currency: quote, declared });
   }
   return { lines, refused };
 }
@@ -179,9 +220,10 @@ function inPositionQuote(
 function bookingOf(
   inputs: HeldDividendInputs,
   exDate: string,
-  perShareNative: number,
+  dividend: ExDateDividend,
 ): CfdDividendBooking {
   const { held } = inputs;
+  const perShareNative = dividend.perShare;
   const withholding = cfdDividendWithholding(exchangeOf(held.venue), held.qty);
   const fxQuotePerGbp = inputs.fxFor(quoteCurrencyOf(held.venue));
   return {
@@ -196,6 +238,7 @@ function bookingOf(
     withholding,
     fx_quote_per_gbp: fxQuotePerGbp,
     amount_gbp: cfdDividendCashGbp(held.qty, perShareNative, withholding, fxQuotePerGbp),
+    ...declaredColumns(dividend.declared),
   };
 }
 
@@ -238,7 +281,7 @@ function bookingsAcross(
   const unbooked = { refused: quoted.refused, implausible, unverifiable };
   const oneSession = spansOneSession(inputs, window);
   const bookings: CfdDividendBooking[] = [];
-  for (const [exDate, perShare] of perShareByDate(lines)) {
+  for (const [exDate, dividend] of byExDate(lines)) {
     if (inputs.booked(exDate)) continue;
     if (!oneSession) {
       unverifiable.push(
@@ -247,7 +290,7 @@ function bookingsAcross(
       continue;
     }
     if (splitBefore(inputs, window, exDate)) return { bookings, splitBefore: exDate, ...unbooked };
-    bookings.push(bookingOf(inputs, exDate, perShare));
+    bookings.push(bookingOf(inputs, exDate, dividend));
   }
   return { bookings, ...unbooked };
 }
@@ -278,10 +321,11 @@ export class SqliteCfdDividends implements CfdDividendLedger {
       .prepare(
         `INSERT INTO v2_cfd_dividends (book_id, trading_date, instrument, venue, client_order_id,
            ex_date, qty, per_share_native, withholding, fx_quote_per_gbp, amount_gbp, fills_before,
-           recorded_at)
+           recorded_at, declared_per_share, declared_currency, fx_declared_per_gbp)
          VALUES (@book_id, @trading_date, @instrument, @venue, @client_order_id, @ex_date, @qty,
            @per_share_native, @withholding, @fx_quote_per_gbp, @amount_gbp,
-           (SELECT COUNT(*) FROM v2_fills WHERE trading_date = @trading_date), @recorded_at)`,
+           (SELECT COUNT(*) FROM v2_fills WHERE trading_date = @trading_date), @recorded_at,
+           @declared_per_share, @declared_currency, @fx_declared_per_gbp)`,
       )
       .run({ ...booking, recorded_at: toStoredTimestamp(this.clock.now()) });
   }
