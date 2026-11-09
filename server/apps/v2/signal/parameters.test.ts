@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { SAXO_CFD_COMMISSION, SAXO_CFD_FINANCING, SAXO_CFD_SPREAD } from '../data/index.js';
 import { CROSS_ASSET_TREND_CANDIDATE_ID } from './cross-asset-trend.js';
 import { MEAN_REVERSION_CANDIDATE_ID } from './mean-reversion.js';
-import { ALL_PINS, DEBATER_PINS, JUDGE_PIN, PRE_DIGEST_ALL_PINS, pinDigest } from './models.js';
+import {
+  ALL_PINS,
+  DATED_JUDGE_PIN,
+  DEBATER_PINS,
+  JUDGE_PIN,
+  PRE_DIGEST_ALL_PINS,
+  pinDigest,
+} from './models.js';
 import {
   ALPACA_SHORT_EQUITY_FLOOR_USD,
   ARM2_ENTRY_THRESHOLDS,
@@ -353,9 +360,21 @@ describe('pins before #2110 (David 2026-10-12, #2121)', () => {
     );
   });
 
+  it('keeps undigested entries off the re-pinned judge and debaters (#2185)', () => {
+    expect(PRE_DIGEST_ALL_PINS.map((pin) => pin.canonicalSlug)).toEqual([
+      undefined,
+      'openai/gpt-5.5-20260423',
+      'deepseek/deepseek-v4-pro-20260813',
+      'anthropic/claude-opus-5.5-20260921',
+    ]);
+    expect(bookPreDigestPinDigest(SIGNALS_SLEEVE_ID, 'primary')).toBe(pinDigest([DATED_JUDGE_PIN]));
+    expect(bookPreDigestPinDigest(SIGNALS_SLEEVE_ID, 'primary')).not.toBe(
+      bookPinDigest(SIGNALS_SLEEVE_ID, 'primary'),
+    );
+  });
+
   it('matches the current pins wherever they have not changed', () => {
     for (const [sleeve, variant] of [
-      [SIGNALS_SLEEVE_ID, 'primary'],
       [SIGNALS_SLEEVE_ID, 'no-veto'],
       [ARM2_SLEEVE_ID, 'technical-only'],
       [DEBATE_SLEEVE_ID, 'no-veto'],

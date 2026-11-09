@@ -16,19 +16,23 @@ const RETIRED_SONNET_5_PIN: ModelPin = {
   canonicalSlug: undefined,
 };
 
+// David 2026-11-09 (#2185): Nous flips these canonical slugs between dated and undated, as it did
+// for Sonnet 5 (#1787). The id must stay listed, but a snapshot swap on these seats goes undetected.
 export const SONNET_5_5_PIN: ModelPin = {
   seat: 'sonnet',
   wire: 'anthropic/claude-sonnet-5.5',
   priced: 'anthropic/claude-sonnet-5.5',
-  canonicalSlug: 'anthropic/claude-sonnet-5.5-20260928',
+  canonicalSlug: undefined,
 };
 
 const GPT_5_5_PIN: ModelPin = {
   seat: 'gpt',
   wire: 'openai/gpt-5.5',
   priced: 'openai/gpt-5.5',
-  canonicalSlug: 'openai/gpt-5.5-20260423',
+  canonicalSlug: undefined,
 };
+
+const DATED_GPT_5_5_PIN: ModelPin = { ...GPT_5_5_PIN, canonicalSlug: 'openai/gpt-5.5-20260423' };
 
 export const DEEPSEEK_V4_PRO_PIN: ModelPin = {
   seat: 'deepseek',
@@ -41,6 +45,11 @@ export const JUDGE_PIN: ModelPin = {
   seat: 'judge',
   wire: 'anthropic/claude-opus-5.5',
   priced: 'anthropic/claude-opus-5.5',
+  canonicalSlug: undefined,
+};
+
+export const DATED_JUDGE_PIN: ModelPin = {
+  ...JUDGE_PIN,
   canonicalSlug: 'anthropic/claude-opus-5.5-20260921',
 };
 
@@ -51,9 +60,9 @@ export const ALL_PINS: readonly ModelPin[] = [...DEBATER_PINS, JUDGE_PIN];
 // Entries journalled before #2110 carry no pin_digest and ran under these pins (David 2026-10-12, #2121)
 export const PRE_DIGEST_ALL_PINS: readonly ModelPin[] = [
   RETIRED_SONNET_5_PIN,
-  GPT_5_5_PIN,
+  DATED_GPT_5_5_PIN,
   DEEPSEEK_V4_PRO_PIN,
-  JUDGE_PIN,
+  DATED_JUDGE_PIN,
 ];
 
 // David 2026-10-10 (#1747): the configured slug only, never the one observed at the pin check
