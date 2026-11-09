@@ -288,10 +288,21 @@ describe('fillBarsOf', () => {
 });
 
 describe('benchmarkWindowOf', () => {
-  it('needs a bar on or after the exit bar', () => {
+  it('needs a bar on the exit bar', () => {
     const short: BarSeries = { symbol: 'SPY', bars: SPY.bars.slice(0, 3) };
     expect(benchmarkWindowOf(short, DATES)).toBeUndefined();
     expect(benchmarkWindowOf(SPY, DATES)).toMatchObject({ sessions: 2 });
+  });
+
+  it.each([
+    ['entry', DATES.entry],
+    ['exit', DATES.exit],
+  ])('takes no neighbouring bar for a missing %s day', (_day, missing) => {
+    const gapped: BarSeries = {
+      symbol: 'SPY',
+      bars: SPY.bars.filter((candidate) => candidate.date !== missing),
+    };
+    expect(benchmarkWindowOf(gapped, DATES)).toBeUndefined();
   });
 
   it('refuses an entry after the last bar or a window with no index session', () => {
@@ -867,5 +878,44 @@ describe('rebuildDecisionOutcomes across splits, strays and missing index bars',
       );
     expect(reasonAfter(BENCHMARK_PENDING_MAX_SESSIONS - 1)).toEqual(['benchmark_bars']);
     expect(reasonAfter(BENCHMARK_PENDING_MAX_SESSIONS)).toEqual(['benchmark_stale']);
+  });
+
+  it.each([
+    ['entry', '2026-10-06'],
+    ['exit', '2026-10-07'],
+  ])('writes no row across an index gap on the %s day, and goes stale', (_day, missing) => {
+    const db = journal();
+    const leg = { instrument: 'HOL', qty: 1, priceGbp: 10 } as const;
+    enter(db, 'hol-entry', { ...leg, side: 'buy', date: '2026-10-06' });
+    exit(db, 'hol-exit', { ...leg, side: 'sell', date: '2026-10-07' });
+    const rebuild = rebuildDecisionOutcomes(
+      db,
+      source({
+        SPY: { symbol: 'SPY', bars: SPY.bars.filter((candidate) => candidate.date !== missing) },
+        HOL: { symbol: 'HOL', bars: [...SPY.bars, bar('2026-10-12', 105, 106)] },
+      }),
+    );
+    expect(rows(db)).toEqual([]);
+    expect(rebuild.pending.map((row) => row.reason)).toEqual(['benchmark_stale']);
+  });
+
+  it.each([
+    ['saxo_cfd_usd', 'SPY'],
+    ['saxo_cfd_gbp', 'ISF'],
+  ])('scores a %s trade against %s', (venue, benchmark) => {
+    const db = journal();
+    const leg = { instrument: 'CFD', venue, qty: 1, priceGbp: 10 } as const;
+    enter(db, 'cfd-entry', { ...leg, side: 'buy', date: '2026-10-06' });
+    exit(db, 'cfd-exit', { ...leg, side: 'sell', date: '2026-10-07' });
+    const rebuild = rebuildDecisionOutcomes(
+      db,
+      source({
+        SPY,
+        ISF: { symbol: 'ISF', bars: SPY.bars },
+        CFD: { symbol: 'CFD', bars: SPY.bars },
+      }),
+    );
+    expect(rebuild.settled).toBe(1);
+    expect(rows(db)).toMatchObject([{ benchmark_symbol: benchmark }]);
   });
 });

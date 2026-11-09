@@ -266,15 +266,15 @@ export function fillBarsOf(
   return entry === undefined || exit === undefined ? undefined : { entry, exit };
 }
 
-// Final once the index has a bar on or after the exit bar, so newer bars cannot move the window
+// A venue's index shares its instruments' calendar, so a missing bar on either date is a gap in
+// the index series: a neighbouring bar would write a wrong return that a gap fill could not correct
 export function benchmarkWindowOf(
   series: BarSeries | undefined,
   dates: FillBars,
 ): BenchmarkWindow | undefined {
   const bars = series?.bars ?? [];
-  if ((bars.at(-1)?.date ?? '') < dates.exit) return undefined;
-  const firstIndex = bars.findIndex((bar) => bar.date >= dates.entry);
-  const lastIndex = bars.findLastIndex((bar) => bar.date <= dates.exit);
+  const firstIndex = bars.findIndex((bar) => bar.date === dates.entry);
+  const lastIndex = bars.findLastIndex((bar) => bar.date === dates.exit);
   const first = bars[firstIndex];
   const last = bars[lastIndex];
   if (first === undefined || last === undefined || lastIndex < firstIndex) return undefined;

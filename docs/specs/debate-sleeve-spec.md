@@ -174,7 +174,7 @@ Decision outcomes (#2146, doc 66 rulings of 2026-10-22, 2026-10-23 and 2026-11-0
 - a flatten exits on the first bar after its order, or on the latest bar when a split block froze it;
 - a bracket leg or an ended series exits on the last bar before its cycle.
 
-A row is written only when it is final: the book no longer holds that entry, its closes account for the entry, both fill bars are known, and the venue's index (SPY for Alpaca and US CFDs, ISF for LSE lines and UK CFDs) has a bar on or after the exit bar. Until then the close is reported pending.
+A row is written only when it is final: the book no longer holds that entry, its closes account for the entry, both fill bars are known, and the venue's index (SPY for Alpaca and US CFDs, ISF for LSE lines and UK CFDs) has a bar on exactly the entry date and the exit date. Until then the close is reported pending.
 
 An entry's closes are walked in journal order. Each close, and the cash in lieu a split paid before it, is converted to the entry's own units by the `v2_rescales` ratios that applied before it. The closes settle once they account for exactly the entry's quantity. A close on the entry's side, a close after the entry is accounted for, or a set of closes that misses or passes the entry's quantity is reported anomalous and is never written. Each verdict reads only the journal up to its close, so a from-scratch backfill on a fresh copy writes the same rows as the cycle-by-cycle runs (doc 66 ruling 1 of 2026-11-06).
 
@@ -186,10 +186,10 @@ A row carries:
 - the fill-bar dates, plus the broker's fill times where it gave them;
 - the index sessions held;
 - quantities, prices, fees and CFD carry;
-- realised GBP P&L: closing value plus any cash in lieu carried to that close, less the entry's opening value pro rata to the entry units the close accounts for, less fees and carry. A simulated fill's price already carries its modelled cost. Cash in lieu is taken at the journalled estimate; a later broker correction in `v2_cash_in_lieu_adjustments` is left out, since it lands after the row may be written. P&L and R are price-only: CFD dividend cash books in `v2_cfd_dividends` (#2169), not here (doc 66 ruling 2 of 2026-11-06);
+- realised GBP P&L: closing value plus any cash in lieu carried to that close, less the entry's opening value pro rata to the entry units the close accounts for, less fees and carry. A simulated fill's price already carries its modelled cost. Cash in lieu is taken at the journalled estimate; a later broker correction in `v2_cash_in_lieu_adjustments` is left out, since it lands after the row may be written. P&L excludes dividends and includes carry; R is price-only. CFD dividend cash books in `v2_cfd_dividends` (#2169), not here ([#2146 ruling of 2026-11-03](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6738227373));
 - the return;
 - R, which is null without native prices, without a stop, or across a split with ratio other than 1;
-- the index's price-only return from the entry bar's open to the exit bar's close, and the excess return net of direction;
+- the index's price-only return from the entry bar's open to the exit bar's close, and the excess return net of direction. The index needs a bar on exactly the entry date and the exit date; with either missing the row stays pending and is not written ([#2146](https://github.com/dd-jp/samurai-trading-system/issues/2146#issuecomment-6738227373));
 - the pin digest and the entry offset.
 
 `settled_at` is the close's cycle date, so a rebuild from the same journal and bars writes the same rows. A failed rebuild does not fail the cycle; it is ledgered as a `refused_cycle` fault with code `v2_decision_outcomes_failed`. The replay does not read the table and empties it in its copy. `npm run v2:outcomes [store] [bar root]` runs the same rebuild by hand.
