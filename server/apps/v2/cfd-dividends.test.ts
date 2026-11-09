@@ -136,6 +136,9 @@ describe('CFD dividend booking rule', () => {
         withholding: 0,
         fx_quote_per_gbp: 1,
         amount_gbp: 2,
+        declared_per_share: 0.02,
+        declared_currency: 'GBP',
+        fx_declared_per_gbp: 1,
       },
     ]);
   });
@@ -233,7 +236,14 @@ describe('CFD dividend booking rule', () => {
     );
     expect(usdOnLse).toMatchObject({
       bookings: [
-        { per_share_native: 0.5 / USD_PER_GBP, fx_quote_per_gbp: 1, amount_gbp: 50 / USD_PER_GBP },
+        {
+          per_share_native: 0.5 / USD_PER_GBP,
+          fx_quote_per_gbp: 1,
+          amount_gbp: 50 / USD_PER_GBP,
+          declared_per_share: 0.5,
+          declared_currency: 'USD',
+          fx_declared_per_gbp: USD_PER_GBP,
+        },
       ],
       refused: [],
     });
@@ -246,6 +256,68 @@ describe('CFD dividend booking rule', () => {
     expect(gbpOnUs?.fx_quote_per_gbp).toBe(USD_PER_GBP);
     expect(gbpOnUs?.per_share_native).toBeCloseTo(0.4 * USD_PER_GBP, 12);
     expect(gbpOnUs?.amount_gbp).toBeCloseTo(100 * 0.4 * 0.7, 12);
+    expect(gbpOnUs).toMatchObject({
+      declared_per_share: 0.4,
+      declared_currency: 'GBP',
+      fx_declared_per_gbp: 1,
+    });
+  });
+
+  it('keeps a line declared in the position quote exactly, with no round trip through GBP', () => {
+    const [usdOnUs] = heldDividends(
+      inputs({
+        held: position('saxo_cfd_usd', 100),
+        fxFor: (currency) => (currency === 'USD' ? 1.3 : 1),
+        source: source([{ exDate: '2026-06-04', perShare: 0.123, currency: 'USD' }]),
+      }),
+    ).bookings;
+    expect(usdOnUs).toMatchObject({
+      per_share_native: 0.123,
+      declared_per_share: 0.123,
+      declared_currency: 'USD',
+      fx_declared_per_gbp: 1.3,
+      fx_quote_per_gbp: 1.3,
+    });
+  });
+
+  it('sums the declared lines of one ex-date in one currency and declares none across two', () => {
+    const declared = (...currencies: string[]) =>
+      heldDividends(
+        inputs({
+          fxFor: withEur,
+          source: source(
+            currencies.map((currency, index) => ({
+              exDate: '2026-06-04',
+              perShare: 0.25 * (index + 1),
+              currency,
+            })),
+          ),
+        }),
+      ).bookings.map(
+        ({ per_share_native, declared_per_share, declared_currency, fx_declared_per_gbp }) => ({
+          per_share_native,
+          declared_per_share,
+          declared_currency,
+          fx_declared_per_gbp,
+        }),
+      );
+    expect(declared('EUR', 'EUR')).toEqual([
+      {
+        per_share_native: 0.25 / EUR_PER_GBP + 0.5 / EUR_PER_GBP,
+        declared_per_share: 0.75,
+        declared_currency: 'EUR',
+        fx_declared_per_gbp: EUR_PER_GBP,
+      },
+    ]);
+    expect(declared('GBP', 'USD')).toEqual([
+      {
+        per_share_native: 0.25 + 0.5 / USD_PER_GBP,
+        declared_per_share: null,
+        declared_currency: null,
+        fx_declared_per_gbp: null,
+      },
+    ]);
+    expect(declared('USD', 'GBP', 'USD')).toMatchObject([{ declared_currency: null }]);
   });
 
   it('refuses only a line no year-start fix converts and books the rest', () => {
@@ -278,12 +350,18 @@ describe('CFD dividend booking rule', () => {
     expect(onLse.bookings[0]?.per_share_native).toBeCloseTo(0.58 / EUR_PER_GBP, 12);
     expect(onLse.bookings[0]?.fx_quote_per_gbp).toBe(1);
     expect(onLse.bookings[0]?.amount_gbp).toBeCloseTo(50, 12);
+    expect(onLse.bookings[0]).toMatchObject({
+      declared_per_share: 0.58,
+      declared_currency: 'EUR',
+      fx_declared_per_gbp: EUR_PER_GBP,
+    });
     const [onUs] = heldDividends(
       inputs({ fxFor: withEur, source: eur, held: position('saxo_cfd_usd', -100) }),
     ).bookings;
     expect(onUs?.per_share_native).toBeCloseTo((0.58 * USD_PER_GBP) / EUR_PER_GBP, 12);
     expect(onUs?.fx_quote_per_gbp).toBe(USD_PER_GBP);
     expect(onUs?.amount_gbp).toBeCloseTo(-50, 12);
+    expect(onUs).toMatchObject({ declared_per_share: 0.58, fx_declared_per_gbp: EUR_PER_GBP });
   });
 
   it('asks for a fix only for the currencies it converts, and throws when one is missing', () => {
@@ -503,5 +581,45 @@ describe('SqliteCfdDividends', () => {
       amount_gbp: 2,
     });
     expect(() => ledger.record(booking)).toThrow();
+  });
+
+  it('records the declared line beside the quoted one, or none of it', () => {
+    const db = migratedMemoryStore();
+    const ledger = new SqliteCfdDividends(db, { now: () => new Date('2026-06-05T06:30:00Z') });
+    const [usd] = heldDividends(
+      inputs({ source: source([{ exDate: '2026-06-04', perShare: 0.5, currency: 'USD' }]) }),
+    ).bookings;
+    if (usd === undefined) throw new Error('no booking');
+    ledger.record(usd);
+    ledger.record({
+      ...usd,
+      ex_date: '2026-06-03',
+      declared_per_share: null,
+      declared_currency: null,
+      fx_declared_per_gbp: null,
+    });
+    expect(
+      db
+        .prepare(
+          `SELECT ex_date, per_share_native, declared_per_share, declared_currency,
+             fx_declared_per_gbp FROM v2_cfd_dividends ORDER BY ex_date`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        ex_date: '2026-06-03',
+        per_share_native: 0.5 / USD_PER_GBP,
+        declared_per_share: null,
+        declared_currency: null,
+        fx_declared_per_gbp: null,
+      },
+      {
+        ex_date: '2026-06-04',
+        per_share_native: 0.5 / USD_PER_GBP,
+        declared_per_share: 0.5,
+        declared_currency: 'USD',
+        fx_declared_per_gbp: USD_PER_GBP,
+      },
+    ]);
   });
 });

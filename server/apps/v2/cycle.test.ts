@@ -8491,6 +8491,16 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
       const [row] = booked(deps.db) as { ex_date: string; amount_gbp: number }[];
       expect(row?.ex_date).toBe('2026-09-26');
       expect(row?.amount_gbp).toBeCloseTo((qty * 0.58) / EUR_PER_GBP, 12);
+      expect(
+        deps.db
+          .prepare(
+            `SELECT declared_per_share, declared_currency, fx_declared_per_gbp FROM v2_cfd_dividends
+              WHERE book_id = 'debate/primary'`,
+          )
+          .all(),
+      ).toEqual([
+        { declared_per_share: 0.58, declared_currency: 'EUR', fx_declared_per_gbp: EUR_PER_GBP },
+      ]);
     });
 
     it('leaves the date unmarked while no GBP/EUR fix is held, then books once it is', async () => {

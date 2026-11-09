@@ -95,7 +95,7 @@ const CONSOLIDATED_SCHEMA_TABLE_COUNT = 76;
 
 const MIGRATIONS = listMigrations(MIGRATIONS_DIR);
 const MIGRATION_VERSIONS = MIGRATIONS.map((migration) => migration.version);
-const HIGHEST_KNOWN_MIGRATION_VERSION = 106;
+const HIGHEST_KNOWN_MIGRATION_VERSION = 107;
 
 function copyMigrationsUpTo(throughVersion: number): string {
   const dir = mkdtempSync(join(tmpdir(), `samurai-migrations-through-${throughVersion}-`));
@@ -699,6 +699,67 @@ describe('openSharedStore', () => {
           )
           .run(),
       ).toThrow(/CHECK constraint/);
+    } finally {
+      raw.close();
+      rmSync(preCutoverDir, { recursive: true, force: true });
+    }
+  });
+
+  it('migration 0107 leaves a dividend booked before it with no declared line, all or none after (#2177)', () => {
+    const raw = new BetterSqlite3(':memory:');
+    const preCutoverVersion = 106;
+    const preCutoverDir = copyMigrationsUpTo(preCutoverVersion);
+    const book = (exDate: string, declared: readonly unknown[]) =>
+      raw
+        .prepare(
+          `INSERT INTO v2_cfd_dividends (book_id, trading_date, instrument, venue, client_order_id,
+             ex_date, qty, per_share_native, withholding, fx_quote_per_gbp, amount_gbp,
+             fills_before, recorded_at, declared_per_share, declared_currency, fx_declared_per_gbp)
+           VALUES ('debate/primary', '2026-11-03', 'VOD_XLON', 'saxo_cfd_gbp', 'o-1', ?, 100, 0.4,
+             0, 1, 40, 0, 't', ?, ?, ?)`,
+        )
+        .run(exDate, ...declared);
+    try {
+      runMigrations(raw, preCutoverDir);
+      raw.exec(
+        `INSERT INTO v2_cfd_dividends (book_id, trading_date, instrument, venue, client_order_id,
+           ex_date, qty, per_share_native, withholding, fx_quote_per_gbp, amount_gbp, fills_before,
+           recorded_at)
+         VALUES ('debate/primary', '2026-11-03', 'VOD_XLON', 'saxo_cfd_gbp', 'o-1', '2026-11-02',
+           100, 0.4, 0, 1, 40, 0, 't')`,
+      );
+
+      expect(runMigrations(raw, MIGRATIONS_DIR)).toEqual(
+        MIGRATION_VERSIONS.filter((version) => version > preCutoverVersion),
+      );
+
+      expect(
+        raw
+          .prepare(
+            'SELECT declared_per_share, declared_currency, fx_declared_per_gbp FROM v2_cfd_dividends',
+          )
+          .all(),
+      ).toEqual([{ declared_per_share: null, declared_currency: null, fx_declared_per_gbp: null }]);
+      book('2026-10-01', [0.5, 'USD', 1.25]);
+      book('2026-10-02', [null, null, null]);
+      for (const partial of [
+        [0.5, null, null],
+        [null, 'USD', null],
+        [null, null, 1.25],
+        [0.5, 'USD', null],
+      ]) {
+        expect(() => book('2026-10-03', partial)).toThrow(
+          'v2_cfd_dividends declares the per-share amount, currency and rate together or not at all',
+        );
+      }
+      expect(() => book('2026-10-03', [0.5, 'CHF', 1.1])).toThrow(/CHECK constraint/);
+      expect(() => book('2026-10-03', [0.5, 'USD', 0])).toThrow(/CHECK constraint/);
+      expect(() =>
+        raw.prepare('UPDATE v2_cfd_dividends SET declared_currency = NULL').run(),
+      ).toThrow('v2_cfd_dividends is append-only');
+      expect(() => raw.prepare('DELETE FROM v2_cfd_dividends').run()).toThrow(
+        'v2_cfd_dividends is append-only',
+      );
     } finally {
       raw.close();
       rmSync(preCutoverDir, { recursive: true, force: true });

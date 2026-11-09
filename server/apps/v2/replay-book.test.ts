@@ -667,6 +667,53 @@ describe('replay of CFD dividend cash (#2143)', () => {
     ]);
     journal.close();
   });
+
+  function declaredJournal(declared: readonly unknown[], appliedAt: string) {
+    const db = journalWith([]);
+    db.prepare(
+      `INSERT INTO v2_cfd_dividends (book_id, trading_date, instrument, venue, client_order_id,
+         ex_date, qty, per_share_native, withholding, fx_quote_per_gbp, amount_gbp, fills_before,
+         recorded_at, declared_per_share, declared_currency, fx_declared_per_gbp)
+       VALUES ('debate/primary', ?, 'ISF', 'saxo_cfd_gbp', 'short-1', '2026-10-02', -3, 0.4, 0, 1,
+         -1.2, 0, ?, ?, ?, ?)`,
+    ).run(DAY, `${DAY}T07:31:00.000Z`, ...declared);
+    db.prepare('UPDATE schema_migrations SET applied_at = ? WHERE version = 107').run(appliedAt);
+    return db;
+  }
+
+  it('holds a day run after migration 0107 to the declared line, amount, currency and rate (#2177)', () => {
+    const after = '2026-01-01T00:00:00.000Z';
+    const journal = declaredJournal([0.5, 'USD', 1.25], after);
+    expect(compare(journal, declaredJournal([0.5, 'USD', 1.25], after))).toEqual([]);
+    for (const [field, replayed] of [
+      ['declared_per_share', [0.6, 'USD', 1.25]],
+      ['declared_currency', [0.5, 'EUR', 1.25]],
+      ['fx_declared_per_gbp', [0.5, 'USD', 1.3]],
+    ] as const) {
+      expect(compare(journal, declaredJournal(replayed, after))).toMatchObject([
+        { kind: 'row_field', stage: 'dividends', key: KEY, field },
+      ]);
+    }
+    const unDeclared = declaredJournal([null, null, null], after);
+    expect(compare(unDeclared, declaredJournal([0.5, 'USD', 1.25], after))).toMatchObject([
+      { field: 'declared_per_share', journalled: null, replayed: 0.5 },
+    ]);
+    journal.close();
+    unDeclared.close();
+  });
+
+  it('holds a day run before migration 0107 to its dividend but not to the line it never declared', () => {
+    const later = `${DAY}T22:00:00.000Z`;
+    const journal = declaredJournal([null, null, null], later);
+    expect(compare(journal, declaredJournal([0.5, 'USD', 1.25], later))).toEqual([]);
+    const replayed = declaredJournal([0.5, 'USD', 1.25], later);
+    replayed.exec('DROP TRIGGER v2_cfd_dividends_no_delete');
+    replayed.exec('DELETE FROM v2_cfd_dividends');
+    expect(compare(journal, replayed)).toEqual([
+      { kind: 'row_missing', stage: 'dividends', key: KEY },
+    ]);
+    journal.close();
+  });
 });
 
 describe('journalledDay', () => {
