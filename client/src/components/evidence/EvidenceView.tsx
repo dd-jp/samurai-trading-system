@@ -1,6 +1,7 @@
 import type { EvidenceWire } from '@contracts';
 import { type PollOptions, usePoll } from '../../hooks/usePoll.ts';
 import { FeedPanel, OwnedPanel } from '../Panel.tsx';
+import { ClosedTradesPanel } from './ClosedTradesPanel.tsx';
 import { PerformancePanel } from './PerformancePanel.tsx';
 import { TradeCountPanel } from './TradeCountPanel.tsx';
 
@@ -15,6 +16,7 @@ export function EvidenceView({ token, options }: { token: string | null; options
           <>
             <PerformancePanel evidence={served} note={note} />
             <TradeCountPanel evidence={served} />
+            <ClosedTradesPanel panel={served.closed_trade_ledger} />
             <OwnedPanel title="Live-vs-backtest band" panel={served.band}>
               <p className="panel-note">
                 The debate sleeve is forward paper with no backtest band; G1 progress is its

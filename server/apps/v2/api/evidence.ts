@@ -17,6 +17,7 @@ import { CLOSE_LEGS_SQL, entryOffsetOfPayload, entryPayloadOfClose } from '../en
 import { annualisedSharpe, maxDrawdown, moments } from '../evidence/index.js';
 import { ENTRY_LIMIT_OFFSET } from '../risk/index.js';
 import { bookPinDigest, bookPreDigestPinDigest } from '../signal/index.js';
+import { readClosedTradeLedger } from './closed-trade-ledger.js';
 
 const G1_CLOSED_TRADES = 100;
 
@@ -134,6 +135,7 @@ export class EvidenceReader {
       vs_arm2: ARM2,
       vs_benchmark: STEP_1B,
       trade_count: tradeCount,
+      closed_trade_ledger: readClosedTradeLedger(this.db),
       arm2_test: ARM2,
       band: STEP_1B,
       gate: GATE,

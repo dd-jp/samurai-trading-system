@@ -43,7 +43,7 @@ One page, three hash views, no router library. A left rail beside every view car
 |---|---|---|
 | **Glance** (`#glance`, default) | P&L of the last cycle · open risk (distance to stop, share of entry-to-stop used) · verdict seals · loss-budget gauge per sleeve · positions and cash | Can it lose more, what does it hold, what did it just decide? |
 | **Live** (`#live`) | Today's decisions · trace of the selected decision (judge synthesis, reason, size, orders and fills, payload, from the journal) | What did it do today, and why? |
-| **Review** (`#review`), evidence panels | Sleeve vs benchmark (risk-adjusted) · debate G1 progress vs arm 2 · live-vs-backtest band (backtest-validated sleeves) · gate statistics | Is it doing what it was validated to do? |
+| **Review** (`#review`), evidence panels | Sleeve vs benchmark (risk-adjusted) · debate G1 progress vs arm 2 · closed trades (per-book totals and the newest 50, primary books, from `v2_decision_outcomes`) · live-vs-backtest band (backtest-validated sleeves) · gate statistics | Is it doing what it was validated to do? |
 | **Review**, records panels | Decision journal (search) · research loop · LLM spend · reconcile diffs · tax export | What happened, what did it cost, what do I owe? |
 
 Width: the rail stacks above the view under 720 px; panels take one column under 1100 px, two above. Every panel has three states: **fed** (data), **empty** (fed, nothing yet: "no closed trades"), **not yet fed** (the server says which step or ruling owns the data, with its ticket). A panel never reads a field nobody writes; "not yet fed" is itself a served value (§6).

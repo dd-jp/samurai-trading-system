@@ -340,6 +340,37 @@ export interface TradeCountWire {
   readonly books: readonly ClosedTradesBookWire[];
 }
 
+export interface ClosedTradeWire {
+  readonly decision_id: string;
+  readonly exit_client_order_id: string;
+  readonly book_id: string;
+  readonly instrument: string;
+  readonly direction: string;
+  readonly entry_date: string;
+  readonly exit_date: string;
+  readonly exit_reason: string;
+  readonly holding_days: number;
+  readonly realised_pnl_gbp: number;
+  readonly trade_return: number;
+  readonly r_multiple: number | null;
+  readonly benchmark_symbol: string;
+  readonly excess_return: number;
+}
+
+export interface ClosedTradeStatsWire {
+  readonly book_id: string;
+  readonly trades: number;
+  readonly win_rate: number;
+  readonly expectancy_gbp: number;
+  readonly profit_factor: number | null;
+  readonly net_gbp: number;
+}
+
+export interface ClosedTradeLedgerWire {
+  readonly stats: readonly ClosedTradeStatsWire[];
+  readonly newest: readonly ClosedTradeWire[];
+}
+
 export interface EvidenceWire {
   readonly contract_version: string;
   readonly generated_at: string;
@@ -347,6 +378,7 @@ export interface EvidenceWire {
   readonly vs_arm2: NotYetFedWire;
   readonly vs_benchmark: NotYetFedWire;
   readonly trade_count: PanelWire<TradeCountWire>;
+  readonly closed_trade_ledger: PanelWire<ClosedTradeLedgerWire>;
   readonly arm2_test: NotYetFedWire;
   readonly band: NotYetFedWire;
   readonly gate: NotYetFedWire;
@@ -659,6 +691,31 @@ export const V2_WIRE_FIELD_NAMES = {
   entryOffsetTrades: fieldsOf<EntryOffsetTradesWire>()(['entry_offset_bps', 'closed_trades']),
   modelPinsTrades: fieldsOf<ModelPinsTradesWire>()(['pin_digest', 'closed_trades']),
   tradeCount: fieldsOf<TradeCountWire>()(['target', 'books']),
+  closedTrade: fieldsOf<ClosedTradeWire>()([
+    'decision_id',
+    'exit_client_order_id',
+    'book_id',
+    'instrument',
+    'direction',
+    'entry_date',
+    'exit_date',
+    'exit_reason',
+    'holding_days',
+    'realised_pnl_gbp',
+    'trade_return',
+    'r_multiple',
+    'benchmark_symbol',
+    'excess_return',
+  ]),
+  closedTradeStats: fieldsOf<ClosedTradeStatsWire>()([
+    'book_id',
+    'trades',
+    'win_rate',
+    'expectancy_gbp',
+    'profit_factor',
+    'net_gbp',
+  ]),
+  closedTradeLedger: fieldsOf<ClosedTradeLedgerWire>()(['stats', 'newest']),
   evidence: fieldsOf<EvidenceWire>()([
     'contract_version',
     'generated_at',
@@ -666,6 +723,7 @@ export const V2_WIRE_FIELD_NAMES = {
     'vs_arm2',
     'vs_benchmark',
     'trade_count',
+    'closed_trade_ledger',
     'arm2_test',
     'band',
     'gate',
