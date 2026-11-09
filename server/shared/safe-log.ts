@@ -45,12 +45,3 @@ export function logCaughtFailure(
   }
   safeLog(logger, { ...template, payload: { ...extraPayload, error: errorText } });
 }
-
-export function logFailureIfPresent(
-  logger: Logger | undefined,
-  template: CaughtFailureLogTemplate,
-  error: unknown,
-  extraPayload?: Record<string, unknown>,
-): void {
-  if (logger !== undefined) logCaughtFailure(logger, template, error, extraPayload);
-}
