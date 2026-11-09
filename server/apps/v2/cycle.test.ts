@@ -59,6 +59,7 @@ import {
   SqliteSplitReads,
   TABLE_VENUE_SESSIONS,
 } from './data/index.js';
+import { rebuildDecisionOutcomes } from './decision-outcomes.js';
 import type { CfdDividendFeed } from './dividend-feed.js';
 import { ProtectiveReplaceError } from './execution/alpaca/protective-replace-error.js';
 import { DryRunBrokerAdapter } from './execution/dry-run-broker.js';
@@ -8840,5 +8841,124 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
       },
     ]);
     expect(booked(deps.db)).toEqual([]);
+  });
+});
+
+describe('the outcome ledger dates each simulated fill by the bar the cycle priced (#2146)', () => {
+  const SESSIONS = [
+    '2026-09-21',
+    '2026-09-22',
+    '2026-09-23',
+    '2026-09-24',
+    '2026-09-25',
+    '2026-09-28',
+    '2026-09-29',
+    '2026-09-30',
+    '2026-10-01',
+    '2026-10-02',
+  ];
+
+  function sessions(overrides: Readonly<Record<string, Partial<DailyBar>>>): DailyBar[] {
+    return SESSIONS.map((date) => bar(date, overrides[date]));
+  }
+
+  function onSessions(deps: Harness, bars: readonly DailyBar[]): CycleDeps {
+    const prior = (tradingDate: string) => bars.filter((dated) => dated.date < tradingDate);
+    return {
+      ...deps,
+      market: {
+        ...deps.market,
+        lastBarBefore: (_instrument, tradingDate) => prior(tradingDate).at(-1),
+        barsBefore: (_instrument, tradingDate, count) => prior(tradingDate).slice(-count),
+      },
+    };
+  }
+
+  function settled(deps: Harness, bars: readonly DailyBar[]) {
+    const db = (deps.journal as unknown as { db: StoreHandle }).db;
+    const series = (symbol: string) => ({ symbol, bars });
+    const { pending, anomalous, unmatched } = rebuildDecisionOutcomes(db, { load: series });
+    const rows = db
+      .prepare(
+        `SELECT book_id, entry_date, exit_date, exit_reason, entry_price_native, exit_price_native
+           FROM v2_decision_outcomes ORDER BY book_id`,
+      )
+      .all();
+    return { unsettled: [...pending, ...anomalous, ...unmatched], rows };
+  }
+
+  const BOOKS = ['debate/no-macro-gate', 'debate/primary'];
+  const sold = (price: number) => expect.closeTo(price * (1 - HALF_SPREAD_BPS / 10_000), 9);
+  const bought = (price: number) => expect.closeTo(price * (1 + HALF_SPREAD_BPS / 10_000), 9);
+
+  it('a limit entry filled on a bar a missed cycle skipped, then a bracket target', async () => {
+    const bars = sessions({
+      '2026-09-24': { open: 21, high: 21.1, low: 20.6, close: 20.9, rawClose: 20.9 },
+      '2026-09-25': { open: 19.9, high: 20.1, low: 19.7, close: 19.9, rawClose: 19.9 },
+      '2026-09-29': { open: 20.4, high: 21.3, low: 20.3, close: 21, rawClose: 21 },
+    });
+    const deps = harness([longAapl], true);
+    await runCycle(onSessions(deps, bars), '2026-09-24');
+    deps.setDecisions([]);
+    await runCycle(onSessions(deps, bars), '2026-09-28');
+    expect(deps.books.position('debate/primary', 'AAPL')).toBeDefined();
+    await runCycle(onSessions(deps, bars), '2026-09-30');
+    expect(settled(deps, bars)).toEqual({
+      unsettled: [],
+      rows: BOOKS.map((book_id) => ({
+        book_id,
+        entry_date: '2026-09-25',
+        exit_date: '2026-09-29',
+        exit_reason: 'target',
+        entry_price_native: bought(19.9),
+        exit_price_native: expect.closeTo(21.2, 9),
+      })),
+    });
+  });
+
+  it('a stop the fill bar also reaches, booked cycles later', async () => {
+    const bars = sessions({
+      '2026-09-25': { open: 20, high: 20.2, low: 19, close: 19.1, rawClose: 19.1 },
+    });
+    const deps = harness([longAapl], true);
+    await runCycle(onSessions(deps, bars), '2026-09-25');
+    deps.setDecisions([]);
+    await runCycle(onSessions(deps, bars), '2026-09-29');
+    expect(settled(deps, bars)).toEqual({
+      unsettled: [],
+      rows: BOOKS.map((book_id) => ({
+        book_id,
+        entry_date: '2026-09-25',
+        exit_date: '2026-09-25',
+        exit_reason: 'stop',
+        entry_price_native: bought(20),
+        exit_price_native: sold(19.2),
+      })),
+    });
+  });
+
+  it('a flatten filled on the first bar after its order, cycles later', async () => {
+    const bars = sessions({
+      '2026-09-28': { open: 19.5, high: 19.8, low: 19.4, close: 19.6, rawClose: 19.6 },
+      '2026-09-29': { open: 18, high: 18.2, low: 17.9, close: 18, rawClose: 18 },
+    });
+    const deps = harness([longAapl], true);
+    await runCycle(onSessions(deps, bars), '2026-09-24');
+    deps.setDecisions([]);
+    await runCycle(onSessions(deps, bars), '2026-09-25');
+    deps.setControl('halt');
+    await runCycle(onSessions(deps, bars), '2026-09-28');
+    await runCycle(onSessions(deps, bars), '2026-10-01');
+    expect(settled(deps, bars)).toEqual({
+      unsettled: [],
+      rows: BOOKS.map((book_id) => ({
+        book_id,
+        entry_date: '2026-09-24',
+        exit_date: '2026-09-28',
+        exit_reason: 'manual_halt',
+        entry_price_native: bought(20),
+        exit_price_native: sold(19.5),
+      })),
+    });
   });
 });
