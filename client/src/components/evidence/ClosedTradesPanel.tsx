@@ -32,7 +32,7 @@ function Trades({ ledger }: { ledger: ClosedTradeLedgerWire }) {
       />
       <tbody>
         {ledger.newest.map((trade) => (
-          <tr key={trade.decision_id}>
+          <tr key={`${trade.book_id}/${trade.exit_client_order_id}`}>
             <th scope="row">
               {trade.instrument} <small>{trade.direction}</small>
             </th>

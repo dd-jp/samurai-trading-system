@@ -342,6 +342,7 @@ export interface TradeCountWire {
 
 export interface ClosedTradeWire {
   readonly decision_id: string;
+  readonly exit_client_order_id: string;
   readonly book_id: string;
   readonly instrument: string;
   readonly direction: string;
@@ -692,6 +693,7 @@ export const V2_WIRE_FIELD_NAMES = {
   tradeCount: fieldsOf<TradeCountWire>()(['target', 'books']),
   closedTrade: fieldsOf<ClosedTradeWire>()([
     'decision_id',
+    'exit_client_order_id',
     'book_id',
     'instrument',
     'direction',

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { ClosedTradeLedgerWire } from '@contracts';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ClosedTradesPanel } from './ClosedTradesPanel.tsx';
 
 const LEDGER: ClosedTradeLedgerWire = {
@@ -18,6 +18,7 @@ const LEDGER: ClosedTradeLedgerWire = {
   newest: [
     {
       decision_id: 'd-1',
+      exit_client_order_id: 'x-1',
       book_id: 'debate/primary',
       instrument: 'AAPL',
       direction: 'short',
@@ -46,6 +47,17 @@ describe('ClosedTradesPanel', () => {
     expect(trades?.textContent).toBe(
       'AAPL shortdebate/primary2026-10-02 to 2026-10-05, 3 dstop−£12.50−5.0%—−6.0% SPY',
     );
+  });
+
+  it('shows two closes of one decision as two rows without a key clash', () => {
+    const error = vi.spyOn(console, 'error');
+    const [trade] = LEDGER.newest;
+    if (trade === undefined) throw new Error('fixture changed');
+    const newest = [trade, { ...trade, exit_client_order_id: 'x-2' }];
+    render(<ClosedTradesPanel panel={{ status: 'fed', ...LEDGER, newest }} />);
+    expect(region().querySelectorAll('tbody tr')).toHaveLength(3);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 
   it('says no losses instead of an infinite profit factor', () => {

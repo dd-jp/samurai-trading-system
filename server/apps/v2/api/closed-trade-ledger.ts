@@ -12,7 +12,7 @@ const PRIMARY_OUTCOMES = `
   v2_decision_outcomes o JOIN v2_books b ON b.book_id = o.book_id WHERE b.variant = 'primary'`;
 
 const NEWEST_TRADES = `
-  SELECT o.decision_id, o.book_id, o.instrument, o.direction, o.entry_date, o.exit_date,
+  SELECT o.decision_id, o.exit_client_order_id, o.book_id, o.instrument, o.direction, o.entry_date, o.exit_date,
          o.exit_reason, o.holding_days, o.realised_pnl_gbp, o.trade_return, o.r_multiple,
          o.benchmark_symbol, o.excess_return
     FROM ${PRIMARY_OUTCOMES}

@@ -88,6 +88,7 @@ describe('readClosedTradeLedger', () => {
     expect(ledger.newest).toHaveLength(50);
     expect(ledger.newest[0]).toEqual({
       decision_id: `d-${nextId}`,
+      exit_client_order_id: `x-d-${nextId}`,
       book_id: 'debate/primary',
       instrument: 'AAPL',
       direction: 'long',
