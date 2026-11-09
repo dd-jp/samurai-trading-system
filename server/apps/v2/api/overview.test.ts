@@ -440,6 +440,7 @@ describe('OverviewReader decisions (P4)', () => {
           vetoed: false,
           reason: 'strong',
           confidence: 0.7,
+          size_shares: 0,
         },
         expect.objectContaining({ instrument: 'MSFT', action: 'skip', vetoed: true }),
         expect.objectContaining({ instrument: 'NVDA', action: 'skip', vetoed: false }),

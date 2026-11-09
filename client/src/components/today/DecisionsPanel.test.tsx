@@ -14,6 +14,7 @@ const BASE: DecisionWire = {
   vetoed: false,
   reason: 'consensus',
   confidence: 0.71,
+  size_shares: 2,
 };
 
 function text() {

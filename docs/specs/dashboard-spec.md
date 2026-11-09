@@ -42,7 +42,7 @@ One page, three hash views, no router library. A left rail beside every view car
 | View | Panels (top to bottom) | Question it answers |
 |---|---|---|
 | **Glance** (`#glance`, default) | P&L of the last cycle · open risk (distance to stop, share of entry-to-stop used) · verdict seals · loss-budget gauge per sleeve · positions and cash | Can it lose more, what does it hold, what did it just decide? |
-| **Live** (`#live`) | Today's decisions | What did it do today? |
+| **Live** (`#live`) | Today's decisions · trace of the selected decision (judge synthesis, reason, size, orders and fills, payload, from the journal) | What did it do today, and why? |
 | **Review** (`#review`), evidence panels | Sleeve vs benchmark (risk-adjusted) · debate G1 progress vs arm 2 · live-vs-backtest band (backtest-validated sleeves) · gate statistics | Is it doing what it was validated to do? |
 | **Review**, records panels | Decision journal (search) · research loop · LLM spend · reconcile diffs · tax export | What happened, what did it cost, what do I owe? |
 

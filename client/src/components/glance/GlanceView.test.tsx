@@ -36,6 +36,7 @@ function decision(changes: Partial<DecisionWire>): DecisionWire {
     vetoed: false,
     reason: 'because',
     confidence: 0.6,
+    size_shares: 2,
     ...changes,
   };
 }
@@ -101,7 +102,7 @@ describe('GlanceView', () => {
   });
 
   it('measures a short the same way, with its stop above entry', () => {
-    show(withPositions([{ ...AAPL, stop_gbp: 160, mark: freshAt(155, -15) }]));
+    show(withPositions([{ ...AAPL, qty: -3, stop_gbp: 160, mark: freshAt(155, -15) }]));
     const line = region('Open risk').querySelector<HTMLElement>('.risk-line');
     expect(line?.textContent).toContain('3.2% to stop');
     expect(line?.querySelector<HTMLElement>('.rail-track div')?.style.width).toBe('50%');
@@ -121,16 +122,21 @@ describe('GlanceView', () => {
   });
 
   it.each([
-    ['long', 140, 130],
-    ['long at the stop', 140, 140],
-    ['short', 160, 170],
-  ])('warns when a %s is through its stop, never showing a distance', (_name, stop_gbp, price) => {
-    show(withPositions([{ ...AAPL, stop_gbp, mark: freshAt(price, -30) }]));
-    const line = region('Open risk').querySelector<HTMLElement>('.risk-line');
-    expect(line?.textContent).toContain('through stop');
-    expect(line?.textContent).not.toContain('to stop');
-    expect(line?.dataset.warn).toBe('true');
-  });
+    ['long', 3, 150, 140, 130],
+    ['long at the stop', 3, 150, 140, 140],
+    ['short', -3, 150, 160, 170],
+    ['short at the stop', -3, 150, 160, 160],
+    ['long that filled below its stop', 3, 95, 96, 94],
+  ])(
+    'warns when a %s is through its stop, never showing a distance',
+    (_name, qty, entry_gbp, stop_gbp, price) => {
+      show(withPositions([{ ...AAPL, qty, entry_gbp, stop_gbp, mark: freshAt(price, -30) }]));
+      const line = region('Open risk').querySelector<HTMLElement>('.risk-line');
+      expect(line?.textContent).toContain('through stop');
+      expect(line?.textContent).not.toContain('to stop');
+      expect(line?.dataset.warn).toBe('true');
+    },
+  );
 
   it('flags a position with no stop or no fresh mark and draws no track', () => {
     show(
@@ -155,6 +161,8 @@ describe('GlanceView', () => {
     [{ action: 'enter_long' }, '可', 'go', 'entered long'],
     [{ action: 'enter_short' }, '可', 'go', 'entered short'],
     [{ action: 'enter_long', vetoed: true }, '否', 'nogo', 'vetoed'],
+    [{ action: 'enter_long', size_shares: 0 }, '略', 'skip', 'not entered (size 0)'],
+    [{ action: 'enter_short', size_shares: 0 }, '略', 'skip', 'not entered (size 0)'],
     [{ action: 'exit' }, '止', 'stop', 'exited'],
     [{ action: 'skip' }, '略', 'skip', 'skipped'],
     [{ action: 'none' }, '略', 'skip', 'none'],

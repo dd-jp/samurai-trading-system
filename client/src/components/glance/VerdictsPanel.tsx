@@ -1,6 +1,6 @@
 import type { DecisionsWire, DecisionWire, PanelWire, SleeveAction } from '@contracts';
 import { percent } from '../../lib/format.ts';
-import { outcomeOf } from '../../lib/journal.ts';
+import { enteredNothing, outcomeOf } from '../../lib/journal.ts';
 import { Panel } from '../Panel.tsx';
 
 const SEALS: Readonly<Record<SleeveAction, readonly [string, string]>> = {
@@ -11,8 +11,13 @@ const SEALS: Readonly<Record<SleeveAction, readonly [string, string]>> = {
   none: ['略', 'skip'],
 };
 
+function sealOf(decision: DecisionWire): readonly [string, string] {
+  if (decision.vetoed) return ['否', 'nogo'];
+  return enteredNothing(decision) ? SEALS.skip : SEALS[decision.action];
+}
+
 function Seal({ decision }: { decision: DecisionWire }) {
-  const [kanji, kind] = decision.vetoed ? ['否', 'nogo'] : SEALS[decision.action];
+  const [kanji, kind] = sealOf(decision);
   return (
     <span className="seal" data-seal={kind} lang="ja" aria-hidden="true">
       {kanji}

@@ -100,7 +100,9 @@ export function App(options: PollOptions = {}) {
       </div>
       <main>
         {view === 'glance' && overview.data !== null && <GlanceView overview={overview.data} />}
-        {view === 'live' && overview.data !== null && <LiveView overview={overview.data} />}
+        {view === 'live' && overview.data !== null && (
+          <LiveView overview={overview.data} token={token} options={options} />
+        )}
         {view === 'review' && (
           <>
             <EvidenceView token={token} options={options} />

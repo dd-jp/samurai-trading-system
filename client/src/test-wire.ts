@@ -111,6 +111,7 @@ export function overview(overrides: Partial<V2OverviewWire> = {}): V2OverviewWir
           vetoed: false,
           reason: 'debate consensus',
           confidence: 0.71,
+          size_shares: 3,
         },
       ],
     },

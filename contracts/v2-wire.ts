@@ -62,6 +62,7 @@ export interface DecisionWire {
   readonly vetoed: boolean;
   readonly reason: string;
   readonly confidence: number;
+  readonly size_shares: number;
 }
 
 export interface DecisionsWire {
@@ -547,6 +548,7 @@ export const V2_WIRE_FIELD_NAMES = {
     'vetoed',
     'reason',
     'confidence',
+    'size_shares',
   ]),
   llmSpend: fieldsOf<LlmSpendWire>()([
     'month_start',
