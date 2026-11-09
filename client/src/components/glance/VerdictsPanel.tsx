@@ -1,6 +1,6 @@
 import type { DecisionsWire, DecisionWire, PanelWire, SleeveAction } from '@contracts';
 import { percent } from '../../lib/format.ts';
-import { outcomeOf } from '../../lib/journal.ts';
+import { enteredNothing, outcomeOf } from '../../lib/journal.ts';
 import { Panel } from '../Panel.tsx';
 
 const SEALS: Readonly<Record<SleeveAction, readonly [string, string]>> = {
@@ -11,8 +11,13 @@ const SEALS: Readonly<Record<SleeveAction, readonly [string, string]>> = {
   none: ['略', 'skip'],
 };
 
+function sealOf(decision: DecisionWire): readonly [string, string] {
+  if (decision.vetoed) return ['否', 'nogo'];
+  return enteredNothing(decision) ? SEALS.skip : SEALS[decision.action];
+}
+
 function Seal({ decision }: { decision: DecisionWire }) {
-  const [kanji, kind] = decision.vetoed ? ['否', 'nogo'] : SEALS[decision.action];
+  const [kanji, kind] = sealOf(decision);
   return (
     <span className="seal" data-seal={kind} lang="ja" aria-hidden="true">
       {kanji}
@@ -26,7 +31,7 @@ function Verdicts({ decisions }: { decisions: DecisionsWire }) {
       <p className="panel-note">Cycle {decisions.trading_date}, primary books</p>
       <ul className="verdicts">
         {decisions.decisions.map((decision) => (
-          <li key={`${decision.book_id}/${decision.instrument}`} data-outcome={outcomeOf(decision)}>
+          <li key={decision.decision_id} data-outcome={outcomeOf(decision)}>
             <Seal decision={decision} />
             <strong className="verdict-name">{decision.instrument}</strong>
             <span>{percent(decision.confidence, 0)}</span>

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { DecisionsPanel } from './DecisionsPanel.tsx';
 
 const BASE: DecisionWire = {
+  decision_id: 'd-1',
   book_id: 'debate/primary',
   trading_date: '2026-10-05',
   instrument: 'AAPL',
@@ -14,6 +15,7 @@ const BASE: DecisionWire = {
   vetoed: false,
   reason: 'consensus',
   confidence: 0.71,
+  size_shares: 2,
 };
 
 function text() {

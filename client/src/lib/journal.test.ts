@@ -24,6 +24,17 @@ describe('outcomeOf', () => {
     ['none', false, 'none'],
     ['skip', true, 'vetoed'],
   ] as const)('reads %s (vetoed %s) as %s', (action, vetoed, label) => {
-    expect(outcomeOf({ action, vetoed })).toBe(label);
+    expect(outcomeOf({ action, vetoed, size_shares: 1 })).toBe(label);
+  });
+
+  it('does not call an entry sized zero entered, and leaves an exit of size zero alone', () => {
+    expect(outcomeOf({ action: 'enter_long', vetoed: false, size_shares: 0 })).toBe(
+      'not entered (size 0)',
+    );
+    expect(outcomeOf({ action: 'enter_short', vetoed: false, size_shares: 0 })).toBe(
+      'not entered (size 0)',
+    );
+    expect(outcomeOf({ action: 'enter_long', vetoed: true, size_shares: 0 })).toBe('vetoed');
+    expect(outcomeOf({ action: 'exit', vetoed: false, size_shares: 0 })).toBe('exited');
   });
 });

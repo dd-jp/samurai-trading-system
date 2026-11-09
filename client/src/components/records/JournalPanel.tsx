@@ -59,14 +59,17 @@ function Order({ order }: { order: JournalOrderWire }) {
   );
 }
 
-function Decision({ decision }: { decision: JournalDecisionWire }) {
+function synthesisOf(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null || !('synthesis' in payload)) return null;
+  return typeof payload.synthesis === 'string' ? payload.synthesis : null;
+}
+
+export function DecisionTrace({ decision }: { decision: JournalDecisionWire }) {
+  const synthesis = synthesisOf(decision.payload);
   return (
-    <details className="entry" data-outcome={outcomeOf(decision)}>
-      <summary>
-        {decision.instrument} {decision.direction}, {decision.book_id}: {outcomeOf(decision)},{' '}
-        {percent(decision.confidence, 0)}
-      </summary>
+    <>
       <dl>
+        {synthesis !== null && <Fact label="Judge">{synthesis}</Fact>}
         <Fact label="Reason">{decision.reason}</Fact>
         {decision.veto !== null && <Fact label="Veto category">{decision.veto}</Fact>}
         <Fact label="Size">
@@ -88,6 +91,18 @@ function Decision({ decision }: { decision: JournalDecisionWire }) {
           ))}
         </ul>
       )}
+    </>
+  );
+}
+
+function Decision({ decision }: { decision: JournalDecisionWire }) {
+  return (
+    <details className="entry" data-outcome={outcomeOf(decision)}>
+      <summary>
+        {decision.instrument} {decision.direction}, {decision.book_id}: {outcomeOf(decision)},{' '}
+        {percent(decision.confidence, 0)}
+      </summary>
+      <DecisionTrace decision={decision} />
     </details>
   );
 }

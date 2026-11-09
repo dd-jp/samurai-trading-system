@@ -39,6 +39,18 @@ const OUTCOMES: Readonly<Record<SleeveAction, string>> = {
   none: 'none',
 };
 
-export function outcomeOf(decision: { readonly action: SleeveAction; readonly vetoed: boolean }) {
-  return decision.vetoed ? 'vetoed' : OUTCOMES[decision.action];
+export function enteredNothing(decision: {
+  readonly action: SleeveAction;
+  readonly size_shares: number;
+}): boolean {
+  return decision.action.startsWith('enter_') && decision.size_shares === 0;
+}
+
+export function outcomeOf(decision: {
+  readonly action: SleeveAction;
+  readonly vetoed: boolean;
+  readonly size_shares: number;
+}) {
+  if (decision.vetoed) return 'vetoed';
+  return enteredNothing(decision) ? 'not entered (size 0)' : OUTCOMES[decision.action];
 }

@@ -2,15 +2,15 @@ import type { PanelWire, PositionsWire, PositionWire } from '@contracts';
 import { gbp, percent } from '../../lib/format.ts';
 import { Panel } from '../Panel.tsx';
 
-function riskUsed(entry: number, stop: number, price: number): number {
+function riskUsed({ qty, entry_gbp: entry }: PositionWire, stop: number, price: number): number {
   if (entry === stop) return 0;
-  return Math.min(Math.max((entry - price) / (entry - stop), 0), 1);
+  return Math.min(Math.max((Math.sign(qty) * (entry - price)) / Math.abs(entry - stop), 0), 1);
 }
 
-function stopReading({ mark, stop_gbp: stop, entry_gbp: entry }: PositionWire) {
+function stopReading({ mark, stop_gbp: stop, qty }: PositionWire) {
   if (stop === null) return { detail: 'no stop', warn: true };
   if (mark.status !== 'fresh') return { detail: 'no fresh mark', warn: true };
-  const distance = (Math.sign(entry - stop) * (mark.price_gbp - stop)) / mark.price_gbp;
+  const distance = (Math.sign(qty) * (mark.price_gbp - stop)) / mark.price_gbp;
   if (distance <= 0) return { detail: 'through stop', warn: true };
   return { detail: `${percent(distance)} to stop`, warn: false };
 }
@@ -26,7 +26,7 @@ function RiskLine({ position }: { position: PositionWire }) {
       <span>{detail}</span>
       {fresh && stop !== null && (
         <div className="rail-track" aria-hidden="true">
-          <div style={{ width: `${riskUsed(position.entry_gbp, stop, mark.price_gbp) * 100}%` }} />
+          <div style={{ width: `${riskUsed(position, stop, mark.price_gbp) * 100}%` }} />
         </div>
       )}
     </li>

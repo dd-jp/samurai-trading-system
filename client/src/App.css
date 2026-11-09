@@ -502,3 +502,17 @@
 .seal[data-seal="skip"] {
   color: var(--muted);
 }
+
+.pick {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--cyan);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.pick[aria-pressed="true"] {
+  color: var(--gold);
+}

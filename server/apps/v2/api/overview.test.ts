@@ -431,6 +431,7 @@ describe('OverviewReader decisions (P4)', () => {
       trading_date: '2026-10-05',
       decisions: [
         {
+          decision_id: 'debate/primary-2026-10-05-AAPL',
           book_id: 'debate/primary',
           trading_date: '2026-10-05',
           instrument: 'AAPL',
@@ -440,6 +441,7 @@ describe('OverviewReader decisions (P4)', () => {
           vetoed: false,
           reason: 'strong',
           confidence: 0.7,
+          size_shares: 0,
         },
         expect.objectContaining({ instrument: 'MSFT', action: 'skip', vetoed: true }),
         expect.objectContaining({ instrument: 'NVDA', action: 'skip', vetoed: false }),
