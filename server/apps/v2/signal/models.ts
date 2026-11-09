@@ -16,8 +16,8 @@ const RETIRED_SONNET_5_PIN: ModelPin = {
   canonicalSlug: undefined,
 };
 
-// David 2026-11-09 (#2185): Nous flips these canonical slugs between dated and undated, as it did
-// for Sonnet 5 (#1787). The id must stay listed, but a snapshot swap on these seats goes undetected.
+// #2185: Nous flips the Sonnet, GPT and judge canonical slugs between dated and undated (as Sonnet 5
+// did, #1787), so a strict pin would refuse; a snapshot swap on those seats goes undetected.
 export const SONNET_5_5_PIN: ModelPin = {
   seat: 'sonnet',
   wire: 'anthropic/claude-sonnet-5.5',
