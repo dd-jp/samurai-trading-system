@@ -63,19 +63,19 @@ describe('verifyNousPins', () => {
       event: 'v2_llm_pins_verified',
       level: 'info',
       message:
-        'anthropic/claude-sonnet-5.5 = anthropic/claude-sonnet-5.5-20260928, openai/gpt-5.5 = openai/gpt-5.5-20260423, deepseek/deepseek-v4-pro-0813 = deepseek/deepseek-v4-pro-20260813, anthropic/claude-opus-5.5 = anthropic/claude-opus-5.5-20260921',
+        'anthropic/claude-sonnet-5.5 = anthropic/claude-sonnet-5.5-20260928 (slug unverified), openai/gpt-5.5 = openai/gpt-5.5-20260423 (slug unverified), deepseek/deepseek-v4-pro-0813 = deepseek/deepseek-v4-pro-20260813, anthropic/claude-opus-5.5 = anthropic/claude-opus-5.5-20260921 (slug unverified)',
       payload: [
         {
           seat: 'sonnet',
           wire: 'anthropic/claude-sonnet-5.5',
           canonical_slug: 'anthropic/claude-sonnet-5.5-20260928',
-          slug_verified: true,
+          slug_verified: false,
         },
         {
           seat: 'gpt',
           wire: 'openai/gpt-5.5',
           canonical_slug: 'openai/gpt-5.5-20260423',
-          slug_verified: true,
+          slug_verified: false,
         },
         {
           seat: 'deepseek',
@@ -87,7 +87,7 @@ describe('verifyNousPins', () => {
           seat: 'judge',
           wire: 'anthropic/claude-opus-5.5',
           canonical_slug: 'anthropic/claude-opus-5.5-20260921',
-          slug_verified: true,
+          slug_verified: false,
         },
       ],
     });
@@ -125,19 +125,32 @@ describe('verifyNousPins', () => {
     },
   );
 
-  it.each([
-    ['sonnet', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-5.5-20260928'],
-    ['gpt', 'openai/gpt-5.5', 'openai/gpt-5.5-20260423'],
-    ['deepseek', 'deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-pro-20260813'],
-    ['judge', 'anthropic/claude-opus-5.5', 'anthropic/claude-opus-5.5-20260921'],
-  ])('stays strict on the %s seat: an undated slug refuses', async (seat, wire, pinned) => {
+  it('stays strict on the deepseek seat: an undated slug refuses', async () => {
+    const wire = 'deepseek/deepseek-v4-pro-0813';
     const rows = LISTED.map((row) => (row.id === wire ? { id: wire, canonical_slug: wire } : row));
     const { entries, error } = await check(json({ data: rows }));
     expect(error?.message).toBe(
-      `v2 refuses the paper run: Nous GET /models: ${seat} ${wire} resolves to ${wire}, pinned ${pinned} — a changed snapshot is a new trial`,
+      `v2 refuses the paper run: Nous GET /models: deepseek ${wire} resolves to ${wire}, pinned deepseek/deepseek-v4-pro-20260813 — a changed snapshot is a new trial`,
     );
     expect(entries).toEqual([]);
   });
+
+  it('accepts the undated slugs Nous now serves on the sonnet, gpt and judge seats (#2185)', async () => {
+    const undated = ['anthropic/claude-sonnet-5.5', 'openai/gpt-5.5', 'anthropic/claude-opus-5.5'];
+    const rows = LISTED.map((row) =>
+      undated.includes(row.id) ? { id: row.id, canonical_slug: row.id } : row,
+    );
+    const { error } = await check(json({ data: rows }));
+    expect(error).toBeUndefined();
+  });
+
+  it.each(['anthropic/claude-sonnet-5.5', 'openai/gpt-5.5', 'anthropic/claude-opus-5.5'])(
+    'still refuses when %s is no longer listed',
+    async (wire) => {
+      const { error } = await check(json({ data: LISTED.filter((row) => row.id !== wire) }));
+      expect(error?.message).toContain(`${wire} is not listed`);
+    },
+  );
 
   it('never calls Nous on a dry run', async () => {
     const fetchImpl = json({ data: LISTED });
@@ -149,13 +162,13 @@ describe('verifyNousPins', () => {
 
   it('refuses when a pin resolves to a different snapshot', async () => {
     const swapped = LISTED.map((row) =>
-      row.id === 'anthropic/claude-opus-5.5'
-        ? { ...row, canonical_slug: 'anthropic/claude-opus-5.5-20261101' }
+      row.id === 'deepseek/deepseek-v4-pro-0813'
+        ? { ...row, canonical_slug: 'deepseek/deepseek-v4-pro-20261101' }
         : row,
     );
     const { entries, error } = await check(json({ data: swapped }));
     expect(error?.message).toBe(
-      'v2 refuses the paper run: Nous GET /models: judge anthropic/claude-opus-5.5 resolves to anthropic/claude-opus-5.5-20261101, pinned anthropic/claude-opus-5.5-20260921 — a changed snapshot is a new trial',
+      'v2 refuses the paper run: Nous GET /models: deepseek deepseek/deepseek-v4-pro-0813 resolves to deepseek/deepseek-v4-pro-20261101, pinned deepseek/deepseek-v4-pro-20260813 — a changed snapshot is a new trial',
     );
     expect(entries).toEqual([]);
   });

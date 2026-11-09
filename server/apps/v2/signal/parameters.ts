@@ -14,7 +14,14 @@ import {
   type UkStockScreens,
 } from '../data/index.js';
 import type { VolTargetSizing } from '../risk/index.js';
-import { ALL_PINS, JUDGE_PIN, type ModelPin, PRE_DIGEST_ALL_PINS, pinDigest } from './models.js';
+import {
+  ALL_PINS,
+  DATED_JUDGE_PIN,
+  JUDGE_PIN,
+  type ModelPin,
+  PRE_DIGEST_ALL_PINS,
+  pinDigest,
+} from './models.js';
 
 export const UNSET: unique symbol = Symbol('unset');
 
@@ -294,6 +301,7 @@ export const SLEEVE_PINS_BY_ID: Readonly<Record<string, readonly ModelPin[]>> = 
 const PRE_DIGEST_SLEEVE_PINS_BY_ID: Readonly<Record<string, readonly ModelPin[]>> = {
   ...SLEEVE_PINS_BY_ID,
   [DEBATE_SLEEVE_ID]: PRE_DIGEST_ALL_PINS,
+  [SIGNALS_SLEEVE_ID]: [DATED_JUDGE_PIN],
 };
 
 function digestOf(

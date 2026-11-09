@@ -351,7 +351,7 @@ describe('EvidenceReader (P5–P8)', () => {
         {
           book_id: 'signals/primary',
           variant: 'primary',
-          closed_trades: 2,
+          closed_trades: 1,
           by_entry_offset: [{ entry_offset_bps: 50, closed_trades: 3 }],
           by_model_pins: [
             { pin_digest: null, closed_trades: 1 },

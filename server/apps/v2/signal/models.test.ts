@@ -31,10 +31,10 @@ describe('model pins', () => {
 
   it('pins the canonical_slug the debate-sleeve spec §4 table records', () => {
     expect(ALL_PINS.map((pin) => [pin.wire, pin.canonicalSlug])).toEqual([
-      ['anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-5.5-20260928'],
-      ['openai/gpt-5.5', 'openai/gpt-5.5-20260423'],
+      ['anthropic/claude-sonnet-5.5', undefined],
+      ['openai/gpt-5.5', undefined],
       ['deepseek/deepseek-v4-pro-0813', 'deepseek/deepseek-v4-pro-20260813'],
-      ['anthropic/claude-opus-5.5', 'anthropic/claude-opus-5.5-20260921'],
+      ['anthropic/claude-opus-5.5', undefined],
     ]);
   });
 });
