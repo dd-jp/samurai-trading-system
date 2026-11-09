@@ -30,7 +30,7 @@ export interface UkStockBarsApi {
 const UK_STOCK_BAR_REFRESH_TIME_LIMIT_MS = 5 * 60_000;
 const UK_STOCK_STOP_AFTER_FAILURES_IN_A_ROW = 5;
 
-function quotedUnitOf(instrument: CfdInstrument): 'GBX' | 'GBP' {
+export function quotedUnitOf(instrument: CfdInstrument): 'GBX' | 'GBP' {
   if (instrument.currency === 'GBP' && instrument.priceToContractFactor === 0.01) return 'GBX';
   if (instrument.currency === 'GBP' && instrument.priceToContractFactor === 1) return 'GBP';
   throw new Error(
