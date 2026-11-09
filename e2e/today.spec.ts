@@ -1,7 +1,7 @@
 import { expect, test } from './support/test.ts';
 import { E2E_TOKEN } from './support/token.ts';
 
-test('boot: the token leaves the URL, the strip reads the fixture, Today shows its panels', async ({
+test('boot: the token leaves the URL, the rail reads the fixture, Glance and Live show their panels', async ({
   page,
 }) => {
   await page.goto(`/?token=${E2E_TOKEN}`);
@@ -24,6 +24,7 @@ test('boot: the token leaves the URL, the strip reads the fixture, Today shows i
   await expect(positions).toContainText('AAPL');
   await expect(positions).toContainText('unavailable');
 
+  await page.getByRole('link', { name: 'Live' }).click();
   await expect(page.getByRole('region', { name: "Today's decisions" })).toContainText(
     'entered long',
   );

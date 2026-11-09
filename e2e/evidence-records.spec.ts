@@ -1,14 +1,11 @@
 import { expect, test } from './support/test.ts';
 import { E2E_TOKEN } from './support/token.ts';
 
-test('Evidence reads the fixture books risk-adjusted and names each owned panel', async ({
+test('Review reads the fixture books risk-adjusted and names each owned panel', async ({
   page,
 }) => {
-  await page.goto(`/?token=${E2E_TOKEN}#evidence`);
-  await expect(page.getByRole('link', { name: 'Evidence' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  );
+  await page.goto(`/?token=${E2E_TOKEN}#review`);
+  await expect(page.getByRole('link', { name: 'Review' })).toHaveAttribute('aria-current', 'page');
   const performance = page.getByRole('region', { name: 'Sleeve vs benchmark' });
   await expect(performance.getByRole('row', { name: /^debate\/primary/ })).toBeVisible();
   await expect(performance).toContainText('↳ no-veto (shadow)');
@@ -21,8 +18,8 @@ test('Evidence reads the fixture books risk-adjusted and names each owned panel'
   await expect(page.getByRole('region', { name: 'Loss budget' })).toHaveCount(0);
 });
 
-test('Records searches the journal and shows the owned panels', async ({ page }) => {
-  await page.goto(`/?token=${E2E_TOKEN}#records`);
+test('Review searches the journal and shows the owned panels', async ({ page }) => {
+  await page.goto(`/?token=${E2E_TOKEN}#review`);
   const journal = page.getByRole('region', { name: 'Decision journal' });
   const day = journal.getByRole('article', { name: 'Cycle 2026-10-05' });
   await expect(day).toContainText('AAPL long, debate/primary: entered long');
