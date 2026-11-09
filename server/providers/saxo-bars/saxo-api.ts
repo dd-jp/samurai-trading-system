@@ -201,7 +201,7 @@ export class SaxoReadOnlyApi {
     private readonly signal: AbortSignal = new AbortController().signal,
   ) {}
 
-  async dailyHistory(uic: number, assetType: SaxoAssetType): Promise<ChartPage> {
+  async dailyHistory(uic: number, assetType: SaxoChartAssetType): Promise<ChartPage> {
     const pages: ChartSample[][] = [];
     const first = await this.chartPage(uic, assetType, undefined);
     pages.push(first.samples);
