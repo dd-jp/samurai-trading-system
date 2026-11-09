@@ -120,6 +120,18 @@ describe('GlanceView', () => {
     expect(widths).toEqual(['0%', '100%']);
   });
 
+  it.each([
+    ['long', 140, 130],
+    ['long at the stop', 140, 140],
+    ['short', 160, 170],
+  ])('warns when a %s is through its stop, never showing a distance', (_name, stop_gbp, price) => {
+    show(withPositions([{ ...AAPL, stop_gbp, mark: freshAt(price, -30) }]));
+    const line = region('Open risk').querySelector<HTMLElement>('.risk-line');
+    expect(line?.textContent).toContain('through stop');
+    expect(line?.textContent).not.toContain('to stop');
+    expect(line?.dataset.warn).toBe('true');
+  });
+
   it('flags a position with no stop or no fresh mark and draws no track', () => {
     show(
       withPositions([

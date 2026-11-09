@@ -7,16 +7,20 @@ function riskUsed(entry: number, stop: number, price: number): number {
   return Math.min(Math.max((entry - price) / (entry - stop), 0), 1);
 }
 
+function stopReading({ mark, stop_gbp: stop, entry_gbp: entry }: PositionWire) {
+  if (stop === null) return { detail: 'no stop', warn: true };
+  if (mark.status !== 'fresh') return { detail: 'no fresh mark', warn: true };
+  const distance = (Math.sign(entry - stop) * (mark.price_gbp - stop)) / mark.price_gbp;
+  if (distance <= 0) return { detail: 'through stop', warn: true };
+  return { detail: `${percent(distance)} to stop`, warn: false };
+}
+
 function RiskLine({ position }: { position: PositionWire }) {
   const { mark, stop_gbp: stop } = position;
   const fresh = mark.status === 'fresh';
-  let detail = 'no fresh mark';
-  if (stop === null) detail = 'no stop';
-  else if (fresh) {
-    detail = `${percent(Math.abs(mark.price_gbp - stop) / mark.price_gbp)} to stop`;
-  }
+  const { detail, warn } = stopReading(position);
   return (
-    <li className="risk-line" data-warn={stop === null || !fresh}>
+    <li className="risk-line" data-warn={warn}>
       <span>{position.instrument}</span>
       <span>{fresh ? gbp(mark.unrealised_gbp) : ''}</span>
       <span>{detail}</span>
