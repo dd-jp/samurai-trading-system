@@ -30,11 +30,16 @@ interface PanelProps<T> {
   readonly empty: string;
   readonly children: (fed: T) => ReactNode;
   readonly after?: ReactNode;
+  readonly wide?: boolean;
 }
 
-export function Panel<T>({ title, panel, empty, children, after }: PanelProps<T>) {
+export function Panel<T>({ title, panel, empty, children, after, wide }: PanelProps<T>) {
   return (
-    <section className="panel" aria-label={title} data-status={panel.status}>
+    <section
+      className={wide === true ? 'panel wide' : 'panel'}
+      aria-label={title}
+      data-status={panel.status}
+    >
       <h2>{title}</h2>
       {panel.status === 'fed' && children(panel)}
       {panel.status === 'empty' && <p className="panel-note">{empty}</p>}

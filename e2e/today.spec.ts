@@ -13,6 +13,9 @@ test('boot: the token leaves the URL, the rail reads the fixture, Glance and Liv
   await expect(strip).toContainText('RUNNING');
   await expect(page).toHaveURL(/\/$/);
 
+  await expect(page.getByRole('region', { name: 'Verdicts' })).toContainText('entered long');
+  await expect(page.getByRole('region', { name: 'Open risk' })).toContainText('AAPL');
+
   const budget = page.getByRole('region', { name: 'Loss budget' });
   await expect(budget.getByRole('list', { name: 'Size steps' })).toContainText(
     '−£500.00: ½ size−£1,000.00: ¼ size−£1,500.00: halt',

@@ -44,6 +44,18 @@ describe('RailHealth', () => {
     expect(fill(gauge('Loss budget'))).toBe('100%');
   });
 
+  it('reads the cap from the wire, not from a default', () => {
+    render(
+      <RailHealth
+        overview={overview({
+          loss_budget: { status: 'fed', ...LOSS_BUDGET, loss_cap_gbp: 900, ytd_loss_gbp: 900 },
+        })}
+      />,
+    );
+    expect(gauge('Loss budget').dataset.alarm).toBe('true');
+    expect(fill(gauge('Loss budget'))).toBe('100%');
+  });
+
   it('does not alarm one penny short of the loss cap', () => {
     render(
       <RailHealth

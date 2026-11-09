@@ -34,7 +34,15 @@ describe('App', () => {
     );
     expect(
       screen.getAllByRole('region').map((region) => region.getAttribute('aria-label')),
-    ).toEqual(['Halt and pause', 'Loss budget', 'Positions and cash']);
+    ).toEqual([
+      'Halt and pause',
+      'P&L',
+      'Open risk',
+      'Verdicts',
+      'Loss budget',
+      'Positions and cash',
+    ]);
+    expect(screen.getByText('LLM cap')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Glance' }).getAttribute('aria-current')).toBe('page');
   });
 
