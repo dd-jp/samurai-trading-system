@@ -65,7 +65,9 @@ async function pulledBars(
   context: FillContext,
 ): Promise<readonly DailyBar[]> {
   const page = await context.api.dailyHistory(instrument.uic, 'CfdOnStock');
-  const bars = samplesToBars(page.samples, gbpPerQuotedUnit(quotedUnitOf(instrument)));
+  const bars = samplesToBars(page.samples, gbpPerQuotedUnit(quotedUnitOf(instrument))).filter(
+    (bar) => bar.date >= context.from,
+  );
   const hygiene = applyBarHygiene(instrument.symbol, bars, { fetchDate: context.tradingDate });
   return roundPrices(repairBarShape(hygiene.bars).bars);
 }
@@ -87,7 +89,7 @@ async function fillResolved(
   const pulled = await pulledBars(instrument, context);
   const conflict = overlapConflict(stored, pulled);
   if (conflict !== undefined) return { symbol, outcome: 'refused', reason: conflict };
-  const older = pulled.filter((bar) => bar.date >= context.from && bar.date < head.date);
+  const older = pulled.filter((bar) => bar.date < head.date);
   if (older.length === 0) return { symbol, outcome: 'nothing_older' };
   const added = older.map((bar) => bar.date);
   if (!context.write) return { symbol, outcome: 'would_fill', added };

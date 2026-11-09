@@ -119,6 +119,14 @@ describe('fillUkBarHeads (#2143)', () => {
     expect(first?.close).toBe(5);
   });
 
+  it('ignores a data hole older than the pinned start', async () => {
+    const { store } = await storeWith();
+    const { api } = apiOf([...OLDER, ...STORED], { '2022-01-13': 5_000 });
+    await expect(fillUkBarHeads(api, store, catalogue(), request(false))).resolves.toEqual([
+      { symbol: SYMBOL, outcome: 'would_fill', added: ['2022-01-14', '2022-01-17'] },
+    ]);
+  });
+
   it('gives prepended bars the stored raw scale', async () => {
     const { store } = await storeWith(10);
     const { api } = apiOf([...OLDER, ...STORED]);
