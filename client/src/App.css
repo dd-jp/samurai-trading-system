@@ -15,6 +15,12 @@
 
   .rail {
     border-right: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    box-sizing: border-box;
+    overflow-y: auto;
   }
 }
 
@@ -212,7 +218,7 @@
   gap: 24px;
 }
 
-@media (min-width: 720px) {
+@media (min-width: 1100px) {
   .view {
     grid-template-columns: 1fr 1fr;
   }
@@ -321,7 +327,7 @@
   color: var(--muted);
 }
 
-@media (min-width: 720px) {
+@media (min-width: 1100px) {
   .panel.wide {
     grid-column: 1 / -1;
   }
@@ -398,4 +404,101 @@
   display: flex;
   gap: var(--space-2);
   margin-top: var(--space-2);
+}
+
+.big {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 40px;
+  color: var(--go);
+}
+
+.big[data-sign="loss"] {
+  color: var(--vermilion);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-3) 0 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.risk,
+.verdicts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.risk-line {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-1) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.risk-line[data-warn="true"] {
+  color: var(--amber);
+}
+
+.risk-line .rail-track {
+  grid-column: 1 / -1;
+  height: 8px;
+}
+
+.verdicts li {
+  display: grid;
+  grid-template-columns: 34px 80px 70px 1fr;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.verdict-name {
+  font-family: var(--font-mono);
+}
+
+.verdicts small {
+  color: var(--muted);
+}
+
+.seal {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  transform: rotate(-6deg);
+  font-family: var(--font-accent);
+  font-size: 13px;
+}
+
+.seal[data-seal="go"] {
+  color: var(--cyan);
+}
+
+.seal[data-seal="nogo"] {
+  color: var(--amber);
+}
+
+.seal[data-seal="stop"] {
+  color: var(--vermilion);
+}
+
+.seal[data-seal="skip"] {
+  color: var(--muted);
 }

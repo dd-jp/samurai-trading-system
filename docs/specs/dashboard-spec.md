@@ -41,12 +41,12 @@ One page, three hash views, no router library. A left rail beside every view car
 
 | View | Panels (top to bottom) | Question it answers |
 |---|---|---|
-| **Glance** (`#glance`, default) | Loss-budget gauge per sleeve · positions and cash | Can it lose more, what does it hold? |
+| **Glance** (`#glance`, default) | P&L of the last cycle · open risk (distance to stop, share of entry-to-stop used) · verdict seals · loss-budget gauge per sleeve · positions and cash | Can it lose more, what does it hold, what did it just decide? |
 | **Live** (`#live`) | Today's decisions | What did it do today? |
 | **Review** (`#review`), evidence panels | Sleeve vs benchmark (risk-adjusted) · debate G1 progress vs arm 2 · live-vs-backtest band (backtest-validated sleeves) · gate statistics | Is it doing what it was validated to do? |
 | **Review**, records panels | Decision journal (search) · research loop · LLM spend · reconcile diffs · tax export | What happened, what did it cost, what do I owe? |
 
-Width: one column under 720 px, two above. Every panel has three states: **fed** (data), **empty** (fed, nothing yet: "no closed trades"), **not yet fed** (the server says which step or ruling owns the data, with its ticket). A panel never reads a field nobody writes; "not yet fed" is itself a served value (§6).
+Width: the rail stacks above the view under 720 px; panels take one column under 1100 px, two above. Every panel has three states: **fed** (data), **empty** (fed, nothing yet: "no closed trades"), **not yet fed** (the server says which step or ruling owns the data, with its ticket). A panel never reads a field nobody writes; "not yet fed" is itself a served value (§6).
 
 Refresh: poll every 30 s. The v2 cycle runs once per trading day, so nothing faster is needed; the status strip shows the age of the data. Its "next due" and heartbeat fields come from P14; the next-due date is an estimate, shown as overdue once it is past: the first day after the newest journalled cycle (a recorded book day or a `venues_closed` skip) on which either venue trades, and the ping is the newest delivered healthchecks.io ping, journalled by the run in `v2_heartbeat_pings` (success or fail); each reads empty until the run has journalled one.
 
