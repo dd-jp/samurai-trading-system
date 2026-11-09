@@ -10,8 +10,7 @@ interface SelectionProps {
 
 function Instrument({ decision, selected, onSelect }: SelectionProps & { decision: DecisionWire }) {
   if (onSelect === undefined) return <>{decision.instrument}</>;
-  const pressed =
-    selected?.book_id === decision.book_id && selected.instrument === decision.instrument;
+  const pressed = selected?.decision_id === decision.decision_id;
   return (
     <button
       type="button"
@@ -35,7 +34,7 @@ function Decisions({
       <TableHead columns={['Instrument', 'Book', 'Outcome', 'Confidence', 'Reason']} />
       <tbody>
         {decisions.decisions.map((decision) => (
-          <tr key={`${decision.book_id}/${decision.instrument}`} data-outcome={outcomeOf(decision)}>
+          <tr key={decision.decision_id} data-outcome={outcomeOf(decision)}>
             <th scope="row">
               <Instrument decision={decision} selected={selected} onSelect={onSelect} />{' '}
               <small>{decision.direction}</small>

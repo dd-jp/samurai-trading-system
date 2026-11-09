@@ -31,7 +31,7 @@ function Verdicts({ decisions }: { decisions: DecisionsWire }) {
       <p className="panel-note">Cycle {decisions.trading_date}, primary books</p>
       <ul className="verdicts">
         {decisions.decisions.map((decision) => (
-          <li key={`${decision.book_id}/${decision.instrument}`} data-outcome={outcomeOf(decision)}>
+          <li key={decision.decision_id} data-outcome={outcomeOf(decision)}>
             <Seal decision={decision} />
             <strong className="verdict-name">{decision.instrument}</strong>
             <span>{percent(decision.confidence, 0)}</span>

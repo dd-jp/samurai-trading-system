@@ -53,6 +53,7 @@ export interface ControlWire {
 }
 
 export interface DecisionWire {
+  readonly decision_id: string;
   readonly book_id: string;
   readonly trading_date: string;
   readonly instrument: string;
@@ -539,6 +540,7 @@ export const V2_WIRE_FIELD_NAMES = {
   controlRow: fieldsOf<ControlRowWire>()(['control_id', 'action', 'reason', 'source', 'set_at']),
   decisions: fieldsOf<DecisionsWire>()(['trading_date', 'decisions']),
   decision: fieldsOf<DecisionWire>()([
+    'decision_id',
     'book_id',
     'trading_date',
     'instrument',

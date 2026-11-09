@@ -102,6 +102,7 @@ export function overview(overrides: Partial<V2OverviewWire> = {}): V2OverviewWir
       trading_date: '2026-10-05',
       decisions: [
         {
+          decision_id: 'd-1',
           book_id: 'debate/primary',
           trading_date: '2026-10-05',
           instrument: 'AAPL',

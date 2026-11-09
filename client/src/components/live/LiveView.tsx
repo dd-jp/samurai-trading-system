@@ -9,10 +9,7 @@ import { DecisionsPanel } from '../today/DecisionsPanel.tsx';
 function traceOf(journal: JournalWire, selected: DecisionWire): JournalDecisionWire | undefined {
   return journal.days
     .find((day) => day.trading_date === selected.trading_date)
-    ?.decisions.find(
-      (decision) =>
-        decision.book_id === selected.book_id && decision.instrument === selected.instrument,
-    );
+    ?.decisions.find((decision) => decision.decision_id === selected.decision_id);
 }
 
 function Trace({ journal, selected }: { journal: JournalWire; selected: DecisionWire | null }) {

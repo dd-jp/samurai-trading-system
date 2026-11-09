@@ -431,6 +431,7 @@ describe('OverviewReader decisions (P4)', () => {
       trading_date: '2026-10-05',
       decisions: [
         {
+          decision_id: 'debate/primary-2026-10-05-AAPL',
           book_id: 'debate/primary',
           trading_date: '2026-10-05',
           instrument: 'AAPL',

@@ -42,17 +42,23 @@ describe('LiveView', () => {
     expect(trace().textContent).toContain('not on the newest journal page');
   });
 
-  it('does not match another book that holds the same instrument', async () => {
+  it('tells two decisions on one instrument apart by id', async () => {
     const day = JOURNAL.days[0];
     const decision = day?.decisions[0];
     if (day === undefined || decision === undefined) throw new Error('fixture changed');
     show({
       ...JOURNAL,
-      days: [{ ...day, decisions: [{ ...decision, book_id: 'signals/primary' }] }],
+      days: [
+        {
+          ...day,
+          decisions: [{ ...decision, decision_id: 'd-0', reason: 'the other signal' }, decision],
+        },
+      ],
     });
     await waitFor(() => expect(trace().textContent).toContain('Select a decision'));
     select('AAPL');
-    expect(trace().textContent).toContain('not on the newest journal page');
+    expect(trace().textContent).toContain('vetoed:earnings');
+    expect(trace().textContent).not.toContain('the other signal');
   });
 
   it('shows the feed problem when the journal cannot be read', async () => {

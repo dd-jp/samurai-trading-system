@@ -43,6 +43,7 @@ interface BookDayRow {
 }
 
 interface DecisionRow {
+  decision_id: string;
   trading_date: string;
   book_id: string;
   instrument: string;
@@ -68,7 +69,7 @@ const LATEST_BOOK_DAYS = `
 
 const LATEST_PRIMARY_DECISIONS = `
   WITH latest AS (SELECT book_id, MAX(trading_date) AS trading_date FROM v2_decisions GROUP BY book_id)
-  SELECT d.trading_date, d.book_id, d.instrument, d.venue, d.direction, d.action, d.reason,
+  SELECT d.decision_id, d.trading_date, d.book_id, d.instrument, d.venue, d.direction, d.action, d.reason,
          d.confidence, d.size_shares
     FROM v2_decisions d JOIN latest USING (book_id, trading_date) JOIN v2_books b USING (book_id)
    WHERE b.variant = 'primary'

@@ -27,6 +27,7 @@ const STALE_MARK: PositionWire['mark'] = { status: 'stale', bar_date: '2026-09-3
 
 function decision(changes: Partial<DecisionWire>): DecisionWire {
   return {
+    decision_id: 'd-1',
     book_id: 'debate/primary',
     trading_date: '2026-10-05',
     instrument: 'AAPL',
