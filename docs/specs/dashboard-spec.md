@@ -10,9 +10,9 @@ Required before paper starts (G13 (3); Step 6 is blocked by this step).
 
 ## 2. What is not carried forward
 
-The v1 dashboard (the v3 Rail, old ADR-0021) is replaced, not restyled (G13 (1)). Dropped with it:
+The v1 dashboard's data and wire are replaced (G13 (1)). Its Rail look, with the Glance / Live / Review tabs, returned on v2 data on 2026-11-09 (doc 66, #2187). Dropped with v1:
 
-- the Glance / Live / Review tabs and the Live/Control arm toggle (`TradingArmWire`);
+- the Live/Control arm toggle (`TradingArmWire`);
 - Seal, StanceStrip, Track, ColdStart and the stance/conviction displays built around the v1 six-stage pipeline and its 0.55 floor;
 - momentum, crypto and intraday panels;
 - `DashboardSnapshot` and the rest of the v1 wire types. v2 gets its own wire types (§6); the v1 ones were deleted in v1 teardown wave 5 (#1748).
@@ -21,21 +21,30 @@ Kept: the hosting rule (old ADR-0019, restated in the ADR: co-located with the o
 
 ## 3. Layout
 
-One page, three hash views, no router library. A status strip sits above every view.
+One page, three hash views, no router library. A left rail beside every view carries the brand, the tabs, the status strip and the loss-budget and LLM gauges.
 
 ```
-┌ status strip ─────────────────────────────────────────────────────────────┐
-│ PAPER · last cycle 2026-10-05 21:40Z · next due 2026-10-06 · ● heartbeat   │
-│ State: RUNNING            [ Pause entries ]  [ Halt: flat at next fill ]  │
-└───────────────────────────────────────────────────────────────────────────┘
-  Today  |  Evidence  |  Records
+┌ rail ──────────┬ view ─────────────────────────────┐
+│ 侍 SAMURAI     │                                   │
+│ Glance         │ panels of the selected tab        │
+│ Live           │                                   │
+│ Review         │                                   │
+│ PAPER          │                                   │
+│ last cycle     │                                   │
+│ next due, ping │                                   │
+│ State: RUNNING │                                   │
+│ [Pause] [Halt] │                                   │
+│ loss budget    │                                   │
+│ LLM cap        │                                   │
+└────────────────┴───────────────────────────────────┘
 ```
 
 | View | Panels (top to bottom) | Question it answers |
 |---|---|---|
-| **Today** (`#today`, default) | Loss-budget gauge per sleeve · positions and cash · today's decisions | Can it lose more, what does it hold, what did it do today? |
-| **Evidence** (`#evidence`) | Sleeve vs benchmark (risk-adjusted) · debate G1 progress vs arm 2 · live-vs-backtest band (backtest-validated sleeves) · gate statistics | Is it doing what it was validated to do? |
-| **Records** (`#records`) | Decision journal (search) · research loop · LLM spend · reconcile diffs · tax export | What happened, what did it cost, what do I owe? |
+| **Glance** (`#glance`, default) | Loss-budget gauge per sleeve · positions and cash | Can it lose more, what does it hold? |
+| **Live** (`#live`) | Today's decisions | What did it do today? |
+| **Review** (`#review`), evidence panels | Sleeve vs benchmark (risk-adjusted) · debate G1 progress vs arm 2 · live-vs-backtest band (backtest-validated sleeves) · gate statistics | Is it doing what it was validated to do? |
+| **Review**, records panels | Decision journal (search) · research loop · LLM spend · reconcile diffs · tax export | What happened, what did it cost, what do I owe? |
 
 Width: one column under 720 px, two above. Every panel has three states: **fed** (data), **empty** (fed, nothing yet: "no closed trades"), **not yet fed** (the server says which step or ruling owns the data, with its ticket). A panel never reads a field nobody writes; "not yet fed" is itself a served value (§6).
 
@@ -114,7 +123,7 @@ The v2 wire derives its own version from its field names, as `contractVersionOf`
 
 ## 7. Client
 
-Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 screens are deleted then rather than in Step 5. This moves part of Step 5's client pass earlier. v1's `service-api` stops serving the dashboard bundle; Step 5 deletes its server side. Hash routes `#today`, `#evidence`, `#records`. Charts (equity curves, band, gauge) are inline SVG components; no chart library is added. The token flow (`client/src/lib/dashboard-token.ts`) is kept, with the URL clean-up in §5. `npm run dev:web` proxies `/api` to `V2_DASHBOARD_PORT` (default 8788). The Today view landed first (part 3a, #1809); Evidence and Records followed (part 3b).
+Replaces the v1 client in `client/` in the build PR (§9 item 5), so the v1 screens are deleted then rather than in Step 5. This moves part of Step 5's client pass earlier. v1's `service-api` stops serving the dashboard bundle; Step 5 deletes its server side. Hash routes `#glance`, `#live`, `#review`. Charts (equity curves, band, gauge) are inline SVG components; no chart library is added. The token flow (`client/src/lib/dashboard-token.ts`) is kept, with the URL clean-up in §5. `npm run dev:web` proxies `/api` to `V2_DASHBOARD_PORT` (default 8788). The Today view landed first (part 3a, #1809); Evidence and Records followed (part 3b); #2187 moved them into the Rail tabs.
 
 ## 8. Tests and definition of done
 

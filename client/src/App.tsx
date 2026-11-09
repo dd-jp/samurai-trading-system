@@ -1,9 +1,11 @@
 import type { V2OverviewWire } from '@contracts';
 import { useEffect, useState } from 'react';
 import { EvidenceView } from './components/evidence/EvidenceView.tsx';
+import { GlanceView } from './components/glance/GlanceView.tsx';
+import { LiveView } from './components/live/LiveView.tsx';
+import { RailHealth } from './components/RailHealth.tsx';
 import { RecordsView } from './components/records/RecordsView.tsx';
 import { StatusStrip } from './components/StatusStrip.tsx';
-import { TodayView } from './components/today/TodayView.tsx';
 import { type PollOptions, usePoll } from './hooks/usePoll.ts';
 import {
   resolveDashboardToken,
@@ -15,16 +17,16 @@ import './App.css';
 const OVERVIEW_URL = '/api/v2/overview';
 
 const VIEWS = [
-  { id: 'today', label: 'Today' },
-  { id: 'evidence', label: 'Evidence' },
-  { id: 'records', label: 'Records' },
+  { id: 'glance', label: 'Glance' },
+  { id: 'live', label: 'Live' },
+  { id: 'review', label: 'Review' },
 ] as const;
 
 type View = (typeof VIEWS)[number]['id'];
 
 function viewFromHash(): View {
   const id = window.location.hash.replace(/^#/, '');
-  return VIEWS.find((view) => view.id === id)?.id ?? 'today';
+  return VIEWS.find((view) => view.id === id)?.id ?? 'glance';
 }
 
 function orFallback<T>(read: () => T, fallback: T): T {
@@ -71,29 +73,40 @@ export function App(options: PollOptions = {}) {
   const overview = usePoll<V2OverviewWire>(OVERVIEW_URL, token, options);
   return (
     <div className="app">
-      <StatusStrip
-        overview={overview.data}
-        status={overview.status}
-        error={overview.error}
-        token={token}
-        fetchImpl={options.fetchImpl}
-        onRecorded={overview.refresh}
-      />
-      <nav className="views" aria-label="Views">
-        {VIEWS.map((entry) => (
-          <a
-            key={entry.id}
-            href={`#${entry.id}`}
-            aria-current={view === entry.id ? 'page' : undefined}
-          >
-            {entry.label}
-          </a>
-        ))}
-      </nav>
+      <div className="rail">
+        <p className="brand">
+          <span lang="ja">侍</span> SAMURAI
+        </p>
+        <nav className="views" aria-label="Views">
+          {VIEWS.map((entry) => (
+            <a
+              key={entry.id}
+              href={`#${entry.id}`}
+              aria-current={view === entry.id ? 'page' : undefined}
+            >
+              {entry.label}
+            </a>
+          ))}
+        </nav>
+        <StatusStrip
+          overview={overview.data}
+          status={overview.status}
+          error={overview.error}
+          token={token}
+          fetchImpl={options.fetchImpl}
+          onRecorded={overview.refresh}
+        />
+        {overview.data !== null && <RailHealth overview={overview.data} />}
+      </div>
       <main>
-        {view === 'today' && overview.data !== null && <TodayView overview={overview.data} />}
-        {view === 'evidence' && <EvidenceView token={token} options={options} />}
-        {view === 'records' && <RecordsView token={token} options={options} overview={overview} />}
+        {view === 'glance' && overview.data !== null && <GlanceView overview={overview.data} />}
+        {view === 'live' && overview.data !== null && <LiveView overview={overview.data} />}
+        {view === 'review' && (
+          <>
+            <EvidenceView token={token} options={options} />
+            <RecordsView token={token} options={options} overview={overview} />
+          </>
+        )}
       </main>
     </div>
   );
