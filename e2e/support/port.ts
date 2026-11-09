@@ -20,17 +20,19 @@ function acquireFreePort(host: string): Promise<number> {
   });
 }
 
-export async function resolveE2ePort(host: string, portEnv: string): Promise<number> {
-  const existing = process.env[portEnv];
-  if (existing !== undefined && existing !== '') {
-    const port = Number(existing);
-    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-      throw new Error(
-        `resolveE2ePort: ${portEnv}="${existing}" is not a valid port; unset it and rerun`,
-      );
-    }
-    return port;
+function parseConfiguredPort(portEnv: string, configured: string): number {
+  const port = Number(configured);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(
+      `resolveE2ePort: ${portEnv}="${configured}" is not a valid port; unset it and rerun`,
+    );
   }
+  return port;
+}
+
+export async function resolveE2ePort(host: string, portEnv: string): Promise<number> {
+  const configured = process.env[portEnv] ?? '';
+  if (configured !== '') return parseConfiguredPort(portEnv, configured);
   const port = await acquireFreePort(host);
   process.env[portEnv] = String(port);
   return port;

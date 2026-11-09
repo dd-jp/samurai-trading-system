@@ -5,20 +5,6 @@ export function parseRetryAfterMs(response: Response): number | undefined {
   return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
 }
 
-export async function requireJsonObjectBody(
-  response: Response,
-  errorPrefix: string,
-  symbol: string,
-): Promise<Record<string, unknown>> {
-  const parsed: unknown = await response.json();
-  if (typeof parsed !== 'object' || parsed === null) {
-    throw new Error(
-      `${errorPrefix} for ${symbol}: expected an object, got ${truncateForError(JSON.stringify(parsed))}`,
-    );
-  }
-  return parsed as Record<string, unknown>;
-}
-
 export const MAX_ERROR_BODY_CHARS = 500;
 
 export function truncateForError(text: string): string {
@@ -69,10 +55,6 @@ function parseErrorFields(bodyText: string): {
   const record = parsed as Record<string, unknown>;
 
   return { code: extractCode(record), message: extractMessage(record) };
-}
-
-export async function readErrorDetail(response: Response): Promise<string> {
-  return (await readErrorBody(response)).detail;
 }
 
 export type HttpErrorKind = 'rate-limit' | 'timeout' | 'provider';

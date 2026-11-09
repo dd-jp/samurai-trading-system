@@ -1,12 +1,12 @@
 import type { Fill, OpenPosition } from './types.js';
 
-export type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
+type ExitFill = Fill & { leg: 'stop' | 'target' | 'exit' };
 
-export function isExitFill(fill: Fill): fill is ExitFill {
+function isExitFill(fill: Fill): fill is ExitFill {
   return fill.leg !== 'entry';
 }
 
-export function totalQty(fills: readonly Fill[]): number {
+function totalQty(fills: readonly Fill[]): number {
   return fills.reduce((sum, fill) => sum + fill.qty, 0);
 }
 
@@ -30,10 +30,6 @@ export async function heldQuantitiesFor(
     idempotency_key: lot.idempotency_key,
     held: lot.filled_size - (exitFillSizes.get(lot.idempotency_key) ?? 0),
   }));
-}
-
-export function totalHeldQuantity(held: readonly LotHeldQuantity[]): number {
-  return held.reduce((sum, lot) => sum + lot.held, 0);
 }
 
 export const QTY_EPSILON_RELATIVE = 1e-12;

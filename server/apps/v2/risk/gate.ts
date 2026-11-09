@@ -149,6 +149,28 @@ export interface RiskGateDeps {
   readonly volTarget?: VolTargetSizing | undefined;
 }
 
+function approvedHeldLeg(
+  kind: 'rearm' | 'replace_stop',
+  label: Parameters<typeof closingLeg>[1],
+  request: RearmRequest,
+): RiskApprovedOrder {
+  const { size, side } = closingLeg(request.held, label);
+  return mintApproval({
+    kind,
+    approvalId: `${kind}:${request.clientOrderId}:${size}`,
+    clientOrderId: request.clientOrderId,
+    bookId: request.book.id,
+    bookVariant: request.book.variant,
+    venue: request.held.venue,
+    instrument: request.held.instrument,
+    side,
+    size,
+    entryClientOrderId: request.held.clientOrderId,
+    stop: request.stop,
+    target: request.target,
+  });
+}
+
 export class V2RiskGate implements RiskGate {
   constructor(private readonly deps: RiskGateDeps) {
     if (deps.volTarget !== undefined) assertVolTargetSizing(deps.volTarget);
@@ -254,39 +276,11 @@ export class V2RiskGate implements RiskGate {
   }
 
   approveRearm(request: RearmRequest): RiskApprovedOrder {
-    const { size, side } = closingLeg(request.held, 'rearm');
-    return mintApproval({
-      kind: 'rearm',
-      approvalId: `rearm:${request.clientOrderId}:${size}`,
-      clientOrderId: request.clientOrderId,
-      bookId: request.book.id,
-      bookVariant: request.book.variant,
-      venue: request.held.venue,
-      instrument: request.held.instrument,
-      side,
-      size,
-      entryClientOrderId: request.held.clientOrderId,
-      stop: request.stop,
-      target: request.target,
-    });
+    return approvedHeldLeg('rearm', 'rearm', request);
   }
 
   approveStopReplace(request: RearmRequest): RiskApprovedOrder {
-    const { size, side } = closingLeg(request.held, 'stop replace');
-    return mintApproval({
-      kind: 'replace_stop',
-      approvalId: `replace_stop:${request.clientOrderId}:${size}`,
-      clientOrderId: request.clientOrderId,
-      bookId: request.book.id,
-      bookVariant: request.book.variant,
-      venue: request.held.venue,
-      instrument: request.held.instrument,
-      side,
-      size,
-      entryClientOrderId: request.held.clientOrderId,
-      stop: request.stop,
-      target: request.target,
-    });
+    return approvedHeldLeg('replace_stop', 'stop replace', request);
   }
 
   #size(request: EntryRequest): Sizing {
