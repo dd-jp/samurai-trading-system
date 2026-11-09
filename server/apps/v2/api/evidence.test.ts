@@ -97,6 +97,7 @@ describe('EvidenceReader (P5–P8)', () => {
   it('is empty before any book exists, and names the owner of every unbuilt panel', () => {
     open();
     expect(read()).toEqual({
+      closed_trade_ledger: { status: 'empty' },
       contract_version: V2_CONTRACT_VERSION,
       generated_at: '2026-10-06T21:40:00.000Z',
       performance: { status: 'empty' },

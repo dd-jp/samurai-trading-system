@@ -11,6 +11,9 @@ test('Review reads the fixture books risk-adjusted and names each owned panel', 
   await expect(performance).toContainText('↳ no-veto (shadow)');
   await expect(performance).toContainText('vs arm 2: Not yet fed: arm 2 (#1773).');
   await expect(page.getByRole('region', { name: 'Debate G1 progress' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Closed trades' })).toContainText(
+    'No closed trades settled yet.',
+  );
   await expect(page.getByRole('region', { name: 'Live-vs-backtest band' })).toContainText(
     'Not yet fed: Step 1b (#1785).',
   );
