@@ -102,7 +102,7 @@ interface HeldBars {
 }
 
 const NO_SPLIT: SplitReading = { ratio: 1, steps: [], rejected: [] };
-const SPLIT_TICKET = '#2025';
+const SPLIT_TICKET = 'docs/research/66-v2-grill-decisions.md split cross-checks';
 
 function splitKey(instrument: string, exchange: string): string {
   return `${exchange}:${instrument}`;

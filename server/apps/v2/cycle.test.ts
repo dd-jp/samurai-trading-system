@@ -6078,7 +6078,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
             scope: 'data',
             book_id: 'debate/primary',
             instrument: 'AAPL',
-            ticket: '#2025',
+            ticket: 'docs/research/66-v2-grill-decisions.md split cross-checks',
           },
         ]);
         expect(eventsOf(blocked.logs, 'error')).toContain('v2_split_crosscheck_block');
@@ -6146,14 +6146,14 @@ describe('runCycle: positions held across a split (#1865)', () => {
           scope: 'entry',
           book_id: 'debate/primary',
           instrument: 'AAPL',
-          ticket: '#2025',
+          ticket: 'docs/research/66-v2-grill-decisions.md split cross-checks',
         },
         {
           trading_date: '2026-09-30',
           scope: 'entry',
           book_id: 'debate/no-macro-gate',
           instrument: 'AAPL',
-          ticket: '#2025',
+          ticket: 'docs/research/66-v2-grill-decisions.md split cross-checks',
         },
       ]);
 
@@ -6450,7 +6450,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
         scope: 'entry',
         book_id: 'debate/primary',
         instrument: 'AAPL',
-        ticket: '#2025',
+        ticket: 'docs/research/66-v2-grill-decisions.md split cross-checks',
       });
 
       const report = await runEntryPass(started, {
@@ -6525,7 +6525,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
             scope: 'exit',
             book_id,
             instrument: 'AAPL',
-            ticket: '#2025',
+            ticket: 'docs/research/66-v2-grill-decisions.md split cross-checks',
           })),
         );
         expect(report.refusals).toContain(
@@ -6658,7 +6658,7 @@ describe('runCycle: positions held across a split (#1865)', () => {
           scope: 'exit',
           book_id: 'debate/no-macro-gate',
           instrument: 'AAPL',
-          ticket: '#2025',
+          ticket: 'docs/research/66-v2-grill-decisions.md split cross-checks',
         });
       });
 
