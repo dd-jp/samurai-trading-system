@@ -223,18 +223,29 @@ describe('replayFromFiles', () => {
   });
 
   it('replays the day to the same cross-sleeve exposure report, and flags one that differs (#2156)', async () => {
-    const held = `UPDATE schema_migrations SET applied_at = '2000-01-01T00:00:00.000Z' WHERE version = 108;`;
+    const held = `UPDATE schema_migrations SET applied_at = '2000-01-01T00:00:00.000Z' WHERE version = 108;
+      DROP TRIGGER v2_exposure_reports_no_update;
+      UPDATE v2_exposure_reports SET recorded_at = '9999-01-01T00:00:00.000Z';`;
     const same = await replayFromFiles(tamperedCopy('exposure-held', held));
     const changed = await replayFromFiles(
       tamperedCopy(
         'exposure-changed',
         `${held}
-         DROP TRIGGER v2_exposure_reports_no_update;
          UPDATE v2_exposure_reports SET report = json_set(report, '$.warnings', json('["tampered"]'))`,
       ),
     );
 
+    const missing = await replayFromFiles(
+      tamperedCopy(
+        'exposure-missing',
+        `${held}
+         DROP TRIGGER v2_exposure_reports_no_delete;
+         DELETE FROM v2_exposure_reports`,
+      ),
+    );
+
     expect(same.skipped.map((skip) => skip.stage)).not.toContain('exposure');
+    expect(missing.divergences).toEqual([]);
     expect(same.divergences).toEqual([]);
     expect(changed.divergences).toEqual([
       expect.objectContaining({ stage: 'exposure', key: TRADING_DATE, field: 'report' }),

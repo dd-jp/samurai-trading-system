@@ -711,11 +711,13 @@ const TABLES: readonly TableSpec[] = [
                   cfd_financing_accrual_gbp, cfd_borrow_accrual_gbp FROM v2_book_days
                  WHERE trading_date = @date AND recorded_at <= @end ORDER BY rowid`,
   },
+  // Recorded after the marks, so not cut at @end; a day whose report never landed (a crash or a
+  // caught throw between the marks and the record) cannot be re-run, so presence is not held
   {
     stage: 'exposure',
-    presence: true,
+    presence: false,
     sql: () => `SELECT trading_date AS key, report FROM v2_exposure_reports
-                 WHERE trading_date = @date AND recorded_at <= @end`,
+                 WHERE trading_date = @date`,
   },
 ];
 

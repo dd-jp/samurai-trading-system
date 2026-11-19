@@ -44,25 +44,31 @@ function bookExposure(book: BookSpec, holdings: readonly ExposureHoldingWire[]):
   };
 }
 
+function byInstrument(holdings: readonly ExposureHoldingWire[]) {
+  const grouped = new Map<string, ExposureHoldingWire[]>();
+  for (const holding of holdings.filter(({ signed_gbp }) => signed_gbp !== 0)) {
+    grouped.set(holding.instrument, [...(grouped.get(holding.instrument) ?? []), holding]);
+  }
+  return [...grouped].sort(([a], [b]) => (a < b ? -1 : 1));
+}
+
+function overlapOf(
+  instrument: string,
+  holders: readonly ExposureHoldingWire[],
+): SymbolOverlapWire | undefined {
+  const sleeves = [...new Set(holders.map((holder) => holder.sleeve_id))].sort();
+  if (sleeves.length < 2) return undefined;
+  const opposed =
+    holders.some((holder) => holder.signed_gbp > 0) &&
+    holders.some((holder) => holder.signed_gbp < 0);
+  return { instrument, sleeves, opposed, holders };
+}
+
 function overlaps(holdings: readonly ExposureHoldingWire[]): SymbolOverlapWire[] {
-  const byInstrument = new Map<string, ExposureHoldingWire[]>();
-  for (const holding of holdings) {
-    if (holding.signed_gbp === 0) continue;
-    byInstrument.set(holding.instrument, [
-      ...(byInstrument.get(holding.instrument) ?? []),
-      holding,
-    ]);
-  }
-  const found: SymbolOverlapWire[] = [];
-  for (const [instrument, holders] of [...byInstrument].sort(([a], [b]) => a.localeCompare(b))) {
-    const sleeves = [...new Set(holders.map((holder) => holder.sleeve_id))].sort();
-    if (sleeves.length < 2) continue;
-    const opposed =
-      holders.some((holder) => holder.signed_gbp > 0) &&
-      holders.some((holder) => holder.signed_gbp < 0);
-    found.push({ instrument, sleeves, opposed, holders });
-  }
-  return found;
+  return byInstrument(holdings).flatMap(([instrument, holders]) => {
+    const overlap = overlapOf(instrument, holders);
+    return overlap === undefined ? [] : [overlap];
+  });
 }
 
 function returnsOn(
@@ -156,7 +162,7 @@ function warnings(
 
 export function crossSleeveExposure(input: ExposureInput): CrossSleeveExposureWire {
   const { levels } = input;
-  const books = [...input.books].sort((a, b) => a.id.localeCompare(b.id));
+  const books = [...input.books].sort((a, b) => (a.id < b.id ? -1 : 1));
   const series = seriesByBook(input.equity, input.tradingDate);
   const pairs = books.flatMap((a, index) =>
     books.slice(index + 1).map((b) => correlation(a, b, series, levels)),
