@@ -11,6 +11,7 @@ import { guardedStore } from '../../shared/store/index.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import { SqliteCashInLieuBooks } from './cash-in-lieu-books.js';
 import { SqliteCfdDividends } from './cfd-dividends.js';
+import { SqliteExposureJournal } from './cross-sleeve-exposure.js';
 import type { CycleDeps } from './cycle.js';
 import { isCfdVenue, type VenueSessionGate } from './data/index.js';
 import type { CfdDividendFeed } from './dividend-feed.js';
@@ -35,10 +36,12 @@ import {
 } from './risk/index.js';
 import {
   CFD_SLEEVE_IDS,
+  CROSS_SLEEVE_EXPOSURE_WARN,
   cfdEntryRefusal,
   declaredVolTarget,
   isSet,
   RECONCILE_CASH_TOLERANCE_GBP,
+  requireSet,
   SleeveRegistry,
   ukStockCfdRefusal,
 } from './signal/index.js';
@@ -192,5 +195,9 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     splitFeed: options.splitFeed,
     dividendFeed: options.dividendFeed,
     dividendLedger: new SqliteCfdDividends(v2Store, clock),
+    exposure: {
+      journal: new SqliteExposureJournal(v2Store, clock),
+      levels: requireSet(CROSS_SLEEVE_EXPOSURE_WARN),
+    },
   };
 }

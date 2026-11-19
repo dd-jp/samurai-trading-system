@@ -47,6 +47,8 @@ export {
   CFD_SLEEVE_IDS,
   CFD_SPREAD_MODEL,
   type CfdEntryGate,
+  CROSS_SLEEVE_EXPOSURE_WARN,
+  type CrossSleeveWarnLevels,
   CYCLE_LEVEL_PARAMETERS,
   cfdEntryRefusal,
   DEBATE_SLEEVE_ID,

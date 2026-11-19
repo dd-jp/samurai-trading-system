@@ -90,6 +90,19 @@ export const LSE_LIQUIDITY_SCREEN = set<number>('LSE_LIQUIDITY_SCREEN', '#1774',
 // delta, the venue-currency gap converted at the day's rate
 export const RECONCILE_CASH_TOLERANCE_GBP = set<number>('RECONCILE_CASH_TOLERANCE_GBP', '#1927', 5);
 
+export interface CrossSleeveWarnLevels {
+  readonly overlapInstruments: number;
+  readonly correlation: number;
+  readonly windowReturns: number;
+  readonly minObservations: number;
+}
+
+export const CROSS_SLEEVE_EXPOSURE_WARN = set<CrossSleeveWarnLevels>(
+  'CROSS_SLEEVE_EXPOSURE_WARN',
+  '#2156',
+  { overlapInstruments: 1, correlation: 0.7, windowReturns: 60, minObservations: 20 },
+);
+
 // #1774, David 2026-09-29 (option 1): on one USD ranking no LSE name reaches the 20
 // (ISF ~53M GBP/day against billions), so LSE holds a reserved share of the liquidity half;
 // David set 6 on 2026-10-14 (#1914), taken only once UK_STOCK_CFD_ENABLED puts the UK

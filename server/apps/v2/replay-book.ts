@@ -26,6 +26,7 @@ export type ReplayStage =
   | 'cash_in_lieu_corrections'
   | 'dividends'
   | 'marks'
+  | 'exposure'
   | 'signal_events'
   | 'signal_vetoes'
   | 'signal_decisions'
@@ -78,6 +79,7 @@ const DATED_TABLES = [
   'v2_cash_in_lieu',
   'v2_cash_in_lieu_adjustments',
   'v2_cfd_dividends',
+  'v2_exposure_reports',
 ] as const;
 
 const APPEND_ONLY_TRIGGERS = [
@@ -98,6 +100,7 @@ const APPEND_ONLY_TRIGGERS = [
   'v2_split_clears_no_delete',
   'v2_cfd_dividends_no_delete',
   'v2_decision_outcomes_no_delete',
+  'v2_exposure_reports_no_delete',
 ] as const;
 
 const SIGNAL_REWIND_SQL = [
@@ -708,6 +711,12 @@ const TABLES: readonly TableSpec[] = [
                   cfd_financing_accrual_gbp, cfd_borrow_accrual_gbp FROM v2_book_days
                  WHERE trading_date = @date AND recorded_at <= @end ORDER BY rowid`,
   },
+  {
+    stage: 'exposure',
+    presence: true,
+    sql: () => `SELECT trading_date AS key, report FROM v2_exposure_reports
+                 WHERE trading_date = @date AND recorded_at <= @end`,
+  },
 ];
 
 function rowsOf(db: StoreHandle, sql: string, tradingDate: string, end: string): Row[] {
@@ -789,14 +798,13 @@ const CUTOVERS: readonly SkippedStage[] = [
   { stage: 'carry', migration: 94 },
   { stage: 'cash_in_lieu_corrections', migration: 104 },
   { stage: 'dividends', migration: 105 },
+  { stage: 'exposure', migration: 108 },
 ];
 
 // A day run before a table's migration journals none of its rows, so every row its replay writes
-// would read as an extra one: before #1983 no rescale, before #2071 no per-position CFD carry,
-// before #2001 no cash-in-lieu book-cash correction, before #2143 no CFD dividend. The cutover is
-// the migration's apply instant, not the table's first row: a day after the deploy with no such row is still held, and
-// a later re-run of an old date holds no earlier day. A run cannot straddle it, as migrations
-// apply before the process cycles
+// would read as an extra one. The cutover is the migration's apply instant, not the table's first
+// row: a day after the deploy with no such row is still held, and a later re-run of an old date
+// holds no earlier day. A run cannot straddle it, as migrations apply before the process cycles
 function ranBefore(comparison: TradingComparison): (migration: number) => boolean {
   const ranAt = comparison.markedAt ?? comparison.startedAt ?? LATEST;
   const applied = comparison.journal.prepare(
