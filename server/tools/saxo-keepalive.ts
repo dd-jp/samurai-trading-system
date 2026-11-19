@@ -20,6 +20,7 @@ import { maskCredentials, SystemClock } from '../shared/index.js';
 import { runWhenInvoked } from './cli-entrypoint.js';
 
 export const WARN_WHEN_REFRESH_REMAINING_MS = 20 * 60_000;
+export const REPEAT_LOST_ALERT_MS = 24 * 60 * 60_000;
 
 const TRACE_ID = 'saxo-keepalive';
 
@@ -85,19 +86,28 @@ function journalRun(deps: SaxoKeepAliveDeps, outcome: Outcome): void {
   });
 }
 
+function lostAlertDue(prior: SaxoKeepAliveState, now: Date): boolean {
+  const last = prior.lostAlertedAt ?? prior.lostAt;
+  return last === undefined || now.getTime() - Date.parse(last) >= REPEAT_LOST_ALERT_MS;
+}
+
 function reportLost(deps: SaxoKeepAliveDeps, prior: SaxoKeepAliveState, reason: string): void {
-  if (prior.lostAt !== undefined) return;
+  const now = deps.clock.now();
+  if (!lostAlertDue(prior, now)) return;
+  const lostAt = prior.lostAt ?? now.toISOString();
   writeKeepAliveState(deps.tokenPath, {
     ...prior,
-    lostAt: deps.clock.now().toISOString(),
+    lostAt,
     lostReason: reason,
+    lostAlertedAt: now.toISOString(),
   });
+  const since = prior.lostAt === undefined ? '' : ` (lost since ${lostAt})`;
   deps.alerts.logger.log({
     trace_id: TRACE_ID,
     stage: 'orchestrator',
     level: 'error',
     event: 'saxo_keepalive_session_lost',
-    message: `Saxo live session lost: ${reason}\nIf the chain is dead, run \`npm run saxo:login\`. The LSE leg is refused until the session is back.`,
+    message: `Saxo live session lost${since}: ${reason}\nIf the chain is dead, run \`npm run saxo:login\`. The LSE leg is refused until the session is back.`,
   });
 }
 

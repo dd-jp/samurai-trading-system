@@ -31,7 +31,12 @@ describe('Saxo keep-alive state file', () => {
   });
 
   it('round-trips every field at 0600 and leaves no temp file', () => {
-    const state = { lostAt: '2026-09-29T10:00:00.000Z', lostReason: 'rejected', warnedAt: 'w' };
+    const state = {
+      lostAt: '2026-09-29T10:00:00.000Z',
+      lostReason: 'rejected',
+      lostAlertedAt: '2026-09-30T10:00:00.000Z',
+      warnedAt: 'w',
+    };
     writeKeepAliveState(tokenPath, state);
 
     expect(readKeepAliveState(tokenPath)).toEqual(state);
