@@ -77,10 +77,30 @@ describe('backtestVerdict', () => {
     expect(verdict.pass).toBe(true);
     expect(verdict.maxDrawdown).toBe(verdict.trials[0]?.maxDrawdown);
     expect(verdict.capitalCeilingGbp).toBeCloseTo(capitalCeilingGbp(1_500, verdict.maxDrawdown), 9);
-    const selected = verdict.trials.find((trial) => trial.trial === verdict.selectedTrial);
-    expect(verdict.returnToMaxDrawdown).toBe(selected?.returnToMaxDrawdown);
-    expect(verdict.trials.map((trial) => trial.returnToMaxDrawdown)).not.toContain(undefined);
-    expect(verdict).toHaveProperty('benchmarkReturnToMaxDrawdown');
+  });
+
+  it('reports total return over max drawdown for each trial, the selection and the benchmark', () => {
+    const given = input();
+    const verdict = backtestVerdict(given);
+    const byHand = ({ equity }: BookSeries) => {
+      let peak = 0;
+      let worst = 0;
+      for (const value of equity) {
+        peak = Math.max(peak, value);
+        worst = Math.max(worst, (peak - value) / peak);
+      }
+      return ((equity.at(-1) as number) / (equity[0] as number) - 1) / worst;
+    };
+    const [nine, ten] = given.trials;
+    if (nine === undefined || ten === undefined) throw new Error('fixture changed');
+    expect(Math.min(...nine.returns)).toBeGreaterThan(0);
+    expect(verdict.trials.map((trial) => trial.returnToMaxDrawdown)).toEqual([
+      null,
+      expect.closeTo(byHand(ten), 9),
+    ]);
+    expect(verdict.selectedTrial).toBe(9);
+    expect(verdict.returnToMaxDrawdown).toBeNull();
+    expect(verdict.benchmarkReturnToMaxDrawdown).toBeCloseTo(byHand(given.benchmark), 9);
   });
 
   it('judges the delayed run by the haircut walk-forward test against the same benchmark days', () => {
