@@ -14,7 +14,7 @@ import {
 import type { Clock } from '../../../shared/index.js';
 import { type StoreHandle, toStoredTimestamp } from '../../../shared/store/index.js';
 import { CLOSE_LEGS_SQL, entryOffsetOfPayload, entryPayloadOfClose } from '../entry-offset.js';
-import { annualisedSharpe, maxDrawdown, moments } from '../evidence/index.js';
+import { annualisedSharpe, maxDrawdown, moments, returnToMaxDrawdown } from '../evidence/index.js';
 import { ENTRY_LIMIT_OFFSET } from '../risk/index.js';
 import { bookPinDigest, bookPreDigestPinDigest } from '../signal/index.js';
 import { readClosedTradeLedger } from './closed-trade-ledger.js';
@@ -113,6 +113,7 @@ function bookPerformance(book: BookRow, points: readonly EquityPointWire[]): Boo
     days: points.length,
     sharpe: sharpeOf(equity),
     max_drawdown: maxDrawdown(equity),
+    return_to_max_drawdown: returnToMaxDrawdown(equity),
     equity: points,
   };
 }

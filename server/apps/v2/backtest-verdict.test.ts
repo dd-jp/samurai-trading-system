@@ -77,6 +77,10 @@ describe('backtestVerdict', () => {
     expect(verdict.pass).toBe(true);
     expect(verdict.maxDrawdown).toBe(verdict.trials[0]?.maxDrawdown);
     expect(verdict.capitalCeilingGbp).toBeCloseTo(capitalCeilingGbp(1_500, verdict.maxDrawdown), 9);
+    const selected = verdict.trials.find((trial) => trial.trial === verdict.selectedTrial);
+    expect(verdict.returnToMaxDrawdown).toBe(selected?.returnToMaxDrawdown);
+    expect(verdict.trials.map((trial) => trial.returnToMaxDrawdown)).not.toContain(undefined);
+    expect(verdict).toHaveProperty('benchmarkReturnToMaxDrawdown');
   });
 
   it('judges the delayed run by the haircut walk-forward test against the same benchmark days', () => {
