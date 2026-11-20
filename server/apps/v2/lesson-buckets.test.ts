@@ -89,6 +89,44 @@ function settle(db: StoreHandle, partial: Trade): string {
   return id;
 }
 
+function exitAgain(
+  db: StoreHandle,
+  id: string,
+  exit: { excess: number; qty: number; settled: string },
+): void {
+  db.prepare(
+    `INSERT INTO v2_decision_outcomes (decision_id, book_id, sleeve_id, instrument, venue,
+        direction, decision_date, entry_client_order_id, exit_client_order_id, exit_leg,
+        exit_reason, entry_date, exit_date, holding_days, entry_qty, exit_qty, entry_price_gbp,
+        exit_price_gbp, fees_gbp, carry_gbp, realised_pnl_gbp, trade_return, benchmark_symbol,
+        benchmark_return, excess_return, settled_at, schema_version)
+      VALUES (?, ?, 'debate', 'AAPL', 'alpaca', 'long', '2026-10-01', ?, ?, 'exit', 'time_stop',
+        '2026-10-02', ?, 5, 1, ?, 100, 100, 0, 0, 0, 0, 'SPY', 0, ?, ?, 1)`,
+  ).run(
+    id,
+    LESSON_BOOK_ID,
+    `${id}-in`,
+    `${id}-out-2`,
+    exit.settled,
+    exit.qty,
+    exit.excess,
+    exit.settled,
+  );
+}
+
+function fill(db: StoreHandle, orderId: string, leg: string, date: string): void {
+  db.prepare(
+    `INSERT INTO v2_orders (client_order_id, decision_id, book_id, trading_date, instrument, venue,
+        leg, side, dry_run, outcome, payload, recorded_at)
+      VALUES (?, NULL, ?, ?, 'AAPL', 'alpaca', ?, 'sell', 0, 'filled', '{}', 't')`,
+  ).run(orderId, LESSON_BOOK_ID, date, leg);
+  db.prepare(
+    `INSERT INTO v2_fills (fill_id, client_order_id, book_id, trading_date, instrument, venue, leg,
+        side, qty, price_gbp, fee_gbp, recorded_at, fill_date, broker_mode)
+      VALUES (?, ?, ?, ?, 'AAPL', 'alpaca', ?, 'sell', 1, 100, 0, 't', ?, 'paper')`,
+  ).run(`${orderId}-f`, orderId, LESSON_BOOK_ID, date, leg, date);
+}
+
 function settleMany(db: StoreHandle, count: number, trade: (index: number) => Trade): string[] {
   return Array.from({ length: count }, (_, index) => settle(db, trade(index)));
 }
@@ -144,6 +182,25 @@ describe('computeLessonBuckets', () => {
     const all = bucket(db, '2026-11-01', 'all');
     expect(all?.n).toBe(10);
     expect(all?.evidence).not.toContain(late);
+    expect(bucket(db, '2026-11-02', 'all')?.n).toBe(11);
+  });
+
+  it('counts a decision closed by two exits as one trade, weighted by exit quantity', () => {
+    const db = store();
+    settleMany(db, 9, () => ({ excess: 0, settled: '2026-10-10' }));
+    const split = settle(db, { excess: 0.1, settled: '2026-10-10' });
+    exitAgain(db, split, { excess: 0.4, qty: 3, settled: '2026-10-12' });
+    const all = bucket(db, '2026-11-01', 'all');
+    expect(all?.n).toBe(10);
+    expect(all?.mean_excess).toBeCloseTo(0.0325);
+  });
+
+  it('holds a decision back until its last exit settled before as_of', () => {
+    const db = store();
+    settleMany(db, 10, () => ({ excess: 0, settled: '2026-10-10' }));
+    const split = settle(db, { excess: 0.1, settled: '2026-10-10' });
+    exitAgain(db, split, { excess: 0.4, qty: 3, settled: '2026-11-01' });
+    expect(bucket(db, '2026-11-01', 'all')?.evidence).not.toContain(split);
     expect(bucket(db, '2026-11-02', 'all')?.n).toBe(11);
   });
 
@@ -247,6 +304,23 @@ describe('writeLessonBuckets', () => {
 
   it('refuses an as_of after today, whose outcomes have not all settled', () => {
     expect(() => writeLessonBuckets(store(), '2026-11-21', '2026-11-20')).toThrow(/after today/);
+  });
+
+  it('refuses an as_of with a close before it that has no settled outcome yet', () => {
+    const db = store();
+    settleMany(db, 10, () => ({ excess: 0.01, settled: '2026-10-10' }));
+    fill(db, 'waiting-out', 'exit', '2026-10-31');
+    expect(() => writeLessonBuckets(db, '2026-11-01', '2026-11-20')).toThrow(
+      /1 close\(s\) before as_of 2026-11-01 have no settled outcome yet/,
+    );
+    expect(writeLessonBuckets(db, '2026-10-31', '2026-11-20').written).toBeGreaterThan(0);
+  });
+
+  it('does not wait on an entry fill', () => {
+    const db = store();
+    settleMany(db, 10, () => ({ excess: 0.01, settled: '2026-10-10' }));
+    fill(db, 'open-in', 'entry', '2026-10-20');
+    expect(writeLessonBuckets(db, '2026-11-01', '2026-11-20').written).toBeGreaterThan(0);
   });
 
   it('reaches the kill line at 100 closed trades when no interval excludes zero', () => {
