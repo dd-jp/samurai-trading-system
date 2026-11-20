@@ -50,6 +50,7 @@ import {
   type VolTargetSizing,
 } from './risk/index.js';
 import { declaredCfdCosts, declaredVolTarget } from './signal/index.js';
+import { settledTradePnl } from './trade-pnl.js';
 import { type TrialConfig, type TrialLedger, trialHash } from './trial-ledger.js';
 
 export type SleeveFactory = (market: MarketData) => Sleeve;
@@ -376,6 +377,7 @@ interface Simulation {
   readonly opening: CapitalYear;
   readonly marks: readonly (readonly number[])[];
   readonly trades: readonly (readonly Trade[])[];
+  readonly tradePnl: readonly (readonly number[])[];
 }
 
 async function simulate(
@@ -415,7 +417,12 @@ async function simulate(
     });
     const marks = await replay(cycle, clock, sleeves, dates, today);
     const books = sleeves.map((sleeve) => `${sleeve.id}/primary`);
-    return { opening, marks, trades: bookTrades(db, books, dates) };
+    return {
+      opening,
+      marks,
+      trades: bookTrades(db, books, dates),
+      tradePnl: settledTradePnl(db, input.market, dates, books),
+    };
   } finally {
     db.close();
   }
@@ -648,6 +655,7 @@ async function simulateRecorded(input: BacktestInput): Promise<RecordedSimulatio
     trial: trialNumbers[index] as number,
     sleeve: sleeve.id,
     ...(books[index] as BookSeries),
+    tradePnl: simulation.tradePnl[index] as number[],
   }));
   const benchmark = books[trialSleeves.length] as BookSeries;
   return {

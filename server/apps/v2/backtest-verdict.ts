@@ -37,6 +37,7 @@ export interface BookSeries {
 
 export interface TrialSeries extends BookSeries {
   readonly trial: number;
+  readonly tradePnl?: readonly number[] | undefined;
 }
 
 export interface VerdictInput {
