@@ -27,7 +27,7 @@ export {
   MEAN_REVERSION_TIME_STOP_TRADING_DAYS,
   MEAN_REVERSION_TO,
 } from './mean-reversion.js';
-export { ALL_PINS, type ModelPin } from './models.js';
+export { ALL_PINS, LESSON_PIN, LESSONS_MAX_TOKENS, type ModelPin } from './models.js';
 export { SqliteMonthlySpendCap, utcMonthStart } from './monthly-spend-cap.js';
 export { verifyNousPins } from './nous-pin-check.js';
 export {
