@@ -1,5 +1,6 @@
 import { digest } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
+import { CLOSE_LEGS_SQL } from './entry-offset.js';
 import { seededRandom } from './random-canary.js';
 
 const LESSON_BUCKETS_SCHEMA_VERSION = 1;
@@ -112,16 +113,46 @@ export function bootstrapMeanCi(values: readonly number[], seed: number): [numbe
   return [quantile(means, 0.025), quantile(means, 0.975)];
 }
 
-function readSettled(db: StoreHandle, asOf: string, books: readonly string[]): SettledOutcome[] {
+// One trade per decision: a decision closed by several exit orders settles as one row per exit,
+// which would count its parts as separate trades and narrow the interval
+function readSettled(
+  db: StoreHandle,
+  asOf: string,
+  bookId: string,
+  baselineBookId: string,
+): SettledOutcome[] {
   return db
     .prepare(
-      `SELECT o.decision_id, o.book_id, o.venue, o.direction, o.excess_return, d.confidence,
+      `SELECT o.decision_id, o.book_id, o.venue, o.direction,
+          SUM(o.excess_return * o.exit_qty) / SUM(o.exit_qty) AS excess_return, d.confidence,
           d.payload
         FROM v2_decision_outcomes o JOIN v2_decisions d ON d.decision_id = o.decision_id
-        WHERE o.book_id IN (?, ?) AND o.settled_at < ? AND o.excess_return IS NOT NULL
-        ORDER BY o.outcome_id`,
+        WHERE o.book_id IN (?, ?)
+        GROUP BY o.decision_id
+        HAVING MAX(o.settled_at) < ?
+        ORDER BY MIN(o.outcome_id)`,
     )
-    .all(books[0], books[1], asOf) as SettledOutcome[];
+    .all(bookId, baselineBookId, asOf) as SettledOutcome[];
+}
+
+function unsettledClosesBefore(
+  db: StoreHandle,
+  asOf: string,
+  bookId: string,
+  baselineBookId: string,
+): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(DISTINCT f.client_order_id) AS closes
+        FROM v2_fills f
+        WHERE f.${CLOSE_LEGS_SQL} AND f.book_id IN (?, ?) AND f.trading_date < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM v2_decision_outcomes o
+            WHERE o.book_id = f.book_id AND o.exit_client_order_id = f.client_order_id
+          )`,
+    )
+    .get(bookId, baselineBookId, asOf) as { closes: number };
+  return row.closes;
 }
 
 function groupByTag(outcomes: readonly SettledOutcome[]): Map<string, SettledOutcome[]> {
@@ -177,7 +208,7 @@ export function computeLessonBuckets(
   bookId = LESSON_BOOK_ID,
   baselineBookId = LESSON_BASELINE_BOOK_ID,
 ): { closedTrades: number; buckets: LessonBucket[] } {
-  const settled = readSettled(db, asOf, [bookId, baselineBookId]);
+  const settled = readSettled(db, asOf, bookId, baselineBookId);
   const run = { asOf, bookId, baselineBookId, inputsHash: digest({ asOf, settled }) };
   const own = groupByTag(settled.filter((outcome) => outcome.book_id === bookId));
   const baseline = groupByTag(settled.filter((outcome) => outcome.book_id === baselineBookId));
@@ -207,8 +238,16 @@ export function writeLessonBuckets(
   today: string,
   bookId = LESSON_BOOK_ID,
 ): LessonRun {
-  // A later as_of would read rows that have not settled yet, so a rerun could not reproduce it
   if (asOf > today) throw new Error(`as_of ${asOf} is after today ${today}`);
+  // An outcome row is dated by its close, not by when the ledger wrote it, so a close still waiting
+  // on bars would land before this as_of later and the stored run could never be reproduced
+  const unsettled = unsettledClosesBefore(db, asOf, bookId, LESSON_BASELINE_BOOK_ID);
+  if (unsettled > 0) {
+    throw new Error(
+      `${unsettled} close(s) before as_of ${asOf} have no settled outcome yet; ` +
+        'rerun after the outcome ledger settles them',
+    );
+  }
   const { closedTrades, buckets } = computeLessonBuckets(db, asOf, bookId);
   const stored = storedLessonBuckets(db, asOf, bookId);
   let written = 0;
