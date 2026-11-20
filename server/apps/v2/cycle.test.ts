@@ -3271,6 +3271,33 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     expect(deps.journal.restingEntries('debate/primary')).toEqual([]);
   });
 
+  it('#1938 kill line: the halting mark cancels an entry whose same-day part fill the sweep already booked', async () => {
+    const MSFT_ENTRY = 'v2-debate-primary-2026-09-28-MSFT';
+    class BookedBeforeHalt extends FakeAlpaca {
+      readonly replaces: ProtectiveReplaceRequest[] = [];
+      override async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
+        const ack = await super.submitBracket(order);
+        if (order.client_order_id === MSFT_ENTRY) this.cumulative(MSFT_ENTRY, 'entry', 3, 20);
+        return ack;
+      }
+      replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+        this.replaces.push(request);
+        return Promise.resolve(request.qty);
+      }
+    }
+    const alpaca = new BookedBeforeHalt();
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, SPREAD_ONLY, 5);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.barsByDate.set('2026-09-28', drop());
+    deps.setDecisions([msft]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(true);
+    expect(deps.books.position('debate/primary', 'MSFT')?.qty).toBe(3);
+    expect(alpaca.cancelled).toEqual([MSFT_ENTRY]);
+    expect(alpaca.replaces).toMatchObject([{ entryClientOrderId: MSFT_ENTRY, qty: 3 }]);
+  });
+
   it('paper: a resting entry on a route the executor cannot reach is left alone', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, SPREAD_ONLY, 5);
