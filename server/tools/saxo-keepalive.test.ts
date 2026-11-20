@@ -16,6 +16,7 @@ import { recordingLogger } from '../shared/recording-logger.js';
 import {
   jsonlFileLogger,
   main,
+  REPEAT_LOST_ALERT_MS,
   runSaxoKeepAlive,
   WARN_WHEN_REFRESH_REMAINING_MS,
 } from './saxo-keepalive.js';
@@ -197,6 +198,39 @@ describe('runSaxoKeepAlive', () => {
     const second = run(okGateway);
     expect(await second.promise).toBe(1);
     expect(second.sent).toEqual([]);
+  });
+
+  it('repeats the lost alert once a day while the session stays lost, citing when it was lost', async () => {
+    const first = run(okGateway);
+    await first.promise;
+    expect(first.sent).toHaveLength(1);
+
+    now = NOW + REPEAT_LOST_ALERT_MS - 1;
+    const early = run(okGateway);
+    await early.promise;
+    expect(early.sent).toEqual([]);
+
+    now = NOW + REPEAT_LOST_ALERT_MS;
+    const daily = run(okGateway);
+    await daily.promise;
+    expect(daily.sent).toHaveLength(1);
+    expect(daily.sent[0]?.text).toContain(`lost since ${new Date(NOW).toISOString()}`);
+    expect(readKeepAliveState(tokenPath)).toMatchObject({
+      lostAt: new Date(NOW).toISOString(),
+      lostAlertedAt: new Date(NOW + REPEAT_LOST_ALERT_MS).toISOString(),
+    });
+
+    now = NOW + 2 * REPEAT_LOST_ALERT_MS - 1;
+    const sameDay = run(okGateway);
+    await sameDay.promise;
+    expect(sameDay.sent).toEqual([]);
+  });
+
+  it('a state from before the repeat counts from lostAt', async () => {
+    writeKeepAliveState(tokenPath, { lostAt: new Date(NOW - REPEAT_LOST_ALERT_MS).toISOString() });
+    const { promise, sent } = run(okGateway);
+    await promise;
+    expect(sent).toHaveLength(1);
   });
 
   it('a rejected refresh token alerts once and never overwrites the saved token', async () => {
