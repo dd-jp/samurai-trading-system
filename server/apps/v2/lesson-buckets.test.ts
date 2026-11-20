@@ -37,25 +37,34 @@ function store(): StoreHandle {
 
 let next = 0;
 
-function settle(db: StoreHandle, trade: Trade): string {
+const DEFAULTS = { book: LESSON_BOOK_ID, venue: 'alpaca', direction: 'long', confidence: 0.75 };
+
+const SLEEVE_OF: Readonly<Record<string, string>> = {
+  [LESSON_BOOK_ID]: 'debate',
+  [LESSON_BASELINE_BOOK_ID]: 'arm2',
+};
+
+function payloadOf(book: string, headlines = 0): object {
+  return book === LESSON_BOOK_ID
+    ? { disagreement: 'bull and bear disagree on direction', headlines }
+    : { technical: [] };
+}
+
+function settle(db: StoreHandle, partial: Trade): string {
   next += 1;
   const id = `d-${next}`;
-  const book = trade.book ?? LESSON_BOOK_ID;
-  const payload =
-    book === LESSON_BOOK_ID
-      ? { disagreement: 'bull and bear disagree on direction', headlines: trade.headlines ?? 0 }
-      : { technical: [] };
+  const trade = { ...DEFAULTS, ...partial };
   db.prepare(
     `INSERT INTO v2_decisions (decision_id, book_id, trading_date, instrument, venue, inputs_hash,
         direction, confidence, action, reason, size_shares, stop_price, payload, recorded_at)
       VALUES (?, ?, '2026-10-01', 'AAPL', ?, 'h', ?, ?, 'enter', 'r', 1, 90, ?, 't')`,
   ).run(
     id,
-    book,
-    trade.venue ?? 'alpaca',
-    trade.direction ?? 'long',
-    trade.confidence ?? 0.75,
-    JSON.stringify(payload),
+    trade.book,
+    trade.venue,
+    trade.direction,
+    trade.confidence,
+    JSON.stringify(payloadOf(trade.book, trade.headlines)),
   );
   db.prepare(
     `INSERT INTO v2_decision_outcomes (decision_id, book_id, sleeve_id, instrument, venue,
@@ -67,10 +76,10 @@ function settle(db: StoreHandle, trade: Trade): string {
         1, 1, 100, 100, 0, 0, 0, 0, 'SPY', 0, ?, ?, 1)`,
   ).run(
     id,
-    book,
-    book === LESSON_BOOK_ID ? 'debate' : 'arm2',
-    trade.venue ?? 'alpaca',
-    trade.direction ?? 'long',
+    trade.book,
+    SLEEVE_OF[trade.book],
+    trade.venue,
+    trade.direction,
     `${id}-in`,
     `${id}-out`,
     trade.settled,
