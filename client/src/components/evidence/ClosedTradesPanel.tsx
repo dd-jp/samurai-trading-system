@@ -5,7 +5,7 @@ import { Panel, TableHead } from '../Panel.tsx';
 function Stats({ ledger }: { ledger: ClosedTradeLedgerWire }) {
   return (
     <table className="grid">
-      <caption>Primary books, all settled trades</caption>
+      <caption>Primary books and arm 2, all settled trades</caption>
       <TableHead columns={['Book', 'Trades', 'Win rate', 'Expectancy', 'Profit factor', 'Net']} />
       <tbody>
         {ledger.stats.map((book) => (

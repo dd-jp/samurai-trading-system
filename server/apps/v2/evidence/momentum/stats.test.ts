@@ -6,6 +6,7 @@ import {
   maxDrawdown,
   moments,
   perPeriodSharpe,
+  returnToMaxDrawdown,
 } from './stats.js';
 
 describe('moments', () => {
@@ -44,6 +45,26 @@ describe('maxDrawdown', () => {
     expect(maxDrawdown([100, 120, 90, 110, 80, 130])).toBeCloseTo(1 - 80 / 120);
     expect(maxDrawdown([100, 110, 120])).toBe(0);
     expect(maxDrawdown([])).toBe(0);
+  });
+});
+
+describe('returnToMaxDrawdown', () => {
+  it('divides the total return by the deepest fall', () => {
+    expect(returnToMaxDrawdown([100, 120, 90, 130])).toBeCloseTo(0.3 / 0.25);
+  });
+
+  it('is negative when the window loses', () => {
+    expect(returnToMaxDrawdown([100, 90, 80])).toBeCloseTo(-0.2 / 0.2);
+  });
+
+  it('is null when nothing ever fell, rather than infinite', () => {
+    expect(returnToMaxDrawdown([100, 110, 120])).toBeNull();
+  });
+
+  it('is null for an empty, single-point or non-positive start', () => {
+    expect(returnToMaxDrawdown([])).toBeNull();
+    expect(returnToMaxDrawdown([100])).toBeNull();
+    expect(returnToMaxDrawdown([0, 10, 5])).toBeNull();
   });
 });
 

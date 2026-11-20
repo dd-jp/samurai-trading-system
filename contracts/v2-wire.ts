@@ -309,6 +309,7 @@ export interface BookPerformanceWire {
   readonly days: number;
   readonly sharpe: number | null;
   readonly max_drawdown: number;
+  readonly return_to_max_drawdown: number | null;
   readonly equity: readonly EquityPointWire[];
 }
 
@@ -728,6 +729,7 @@ export const V2_WIRE_FIELD_NAMES = {
     'days',
     'sharpe',
     'max_drawdown',
+    'return_to_max_drawdown',
     'equity',
   ]),
   performance: fieldsOf<PerformanceWire>()(['books']),
