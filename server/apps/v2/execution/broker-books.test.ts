@@ -218,8 +218,8 @@ function crlBracket(
   };
 }
 
-// Unmeasured (#2090 item 1): the OCO re-arm as Alpaca's order reference draws it, the take-profit
-// limit as parent and the stop as its one leg, the leg assumed `held` like a filled bracket's
+// The OCO re-arm as measured on Alpaca paper 2026-11-20 (#2090): the take-profit limit is the parent
+// and the stop its one leg, resting `held` like a filled bracket's
 function crlOco(status = 'new', stop: Record<string, unknown> = {}) {
   return {
     id: 'oco-7a21',
