@@ -3242,7 +3242,7 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     const MSFT_ENTRY = 'v2-debate-primary-2026-09-28-MSFT';
     class PartFilledAtHalt extends FakeAlpaca {
       readonly replaces: ProtectiveReplaceRequest[] = [];
-      override getOrder(clientOrderId: string): Promise<null> {
+      override getOrder(clientOrderId: string): ReturnType<FakeAlpaca['getOrder']> {
         if (clientOrderId !== MSFT_ENTRY) return super.getOrder(clientOrderId);
         this.cumulative(MSFT_ENTRY, 'entry', 3, 20);
         return Promise.resolve({
@@ -3250,7 +3250,7 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
           broker_order_ids: ['m1'],
           order_state: 'partially_filled',
           filled_qty: 3,
-        } as unknown as null);
+        } as unknown as Awaited<ReturnType<FakeAlpaca['getOrder']>>);
       }
       replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
         this.replaces.push(request);
