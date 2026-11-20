@@ -3238,6 +3238,39 @@ describe('runCycle: a mark that blocks entries cancels the resting ones', () => 
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-MSFT')?.outcome).toBe('cancelled');
   });
 
+  it('#1938 kill line: the halting mark cancels a part-filled entry remainder and re-arms the filled part', async () => {
+    const MSFT_ENTRY = 'v2-debate-primary-2026-09-28-MSFT';
+    class PartFilledAtHalt extends FakeAlpaca {
+      readonly replaces: ProtectiveReplaceRequest[] = [];
+      override getOrder(clientOrderId: string): Promise<null> {
+        if (clientOrderId !== MSFT_ENTRY) return super.getOrder(clientOrderId);
+        this.cumulative(MSFT_ENTRY, 'entry', 3, 20);
+        return Promise.resolve({
+          client_order_id: MSFT_ENTRY,
+          broker_order_ids: ['m1'],
+          order_state: 'partially_filled',
+          filled_qty: 3,
+        } as unknown as null);
+      }
+      replaceProtectiveLegs(request: ProtectiveReplaceRequest): Promise<number> {
+        this.replaces.push(request);
+        return Promise.resolve(request.qty);
+      }
+    }
+    const alpaca = new PartFilledAtHalt();
+    const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, SPREAD_ONLY, 5);
+    await runCycle(deps, '2026-09-25');
+    alpaca.fill('v2-debate-primary-2026-09-25-AAPL', 'entry', 6, 20);
+    deps.barsByDate.set('2026-09-28', drop());
+    deps.setDecisions([msft]);
+    await runCycle(deps, '2026-09-28');
+    expect(deps.books.lastDay('debate/primary')?.state.halted).toBe(true);
+    expect(alpaca.cancelled).toEqual([MSFT_ENTRY]);
+    expect(deps.journal.orderFor(MSFT_ENTRY)?.outcome).toBe('cancelled');
+    expect(alpaca.replaces).toMatchObject([{ entryClientOrderId: MSFT_ENTRY, qty: 3 }]);
+    expect(deps.journal.restingEntries('debate/primary')).toEqual([]);
+  });
+
   it('paper: a resting entry on a route the executor cannot reach is left alone', async () => {
     const alpaca = new FakeAlpaca();
     const deps = harness([longAapl], false, alpaca, [2026], TEST_SPEC, SPREAD_ONLY, 5);
