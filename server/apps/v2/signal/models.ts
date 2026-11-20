@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 export type DebaterSeat = 'sonnet' | 'gpt' | 'deepseek';
 
 export interface ModelPin {
-  readonly seat: DebaterSeat | 'judge';
+  readonly seat: DebaterSeat | 'judge' | 'lessons';
   readonly wire: string;
   readonly priced: string;
   readonly canonicalSlug: string | undefined;
@@ -73,5 +73,9 @@ export function pinDigest(pins: readonly ModelPin[]): string {
   return createHash('sha256').update(JSON.stringify(keyed)).digest('hex').slice(0, 16);
 }
 
+// G11 ruling 3 (#1717): the lesson writer's one call per run goes to the cheapest pinned model
+export const LESSON_PIN: ModelPin = { ...DEEPSEEK_V4_PRO_PIN, seat: 'lessons' };
+
 export const DEBATER_MAX_TOKENS = 1024;
+export const LESSONS_MAX_TOKENS = 1024;
 export const JUDGE_MAX_TOKENS = 2048;

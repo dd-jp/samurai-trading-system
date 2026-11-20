@@ -219,8 +219,10 @@ export function nousOptionsFrom(
   return { nousBaseUrl: endpoint?.baseUrl, nousApiKey: endpoint?.apiKey };
 }
 
-function nousTransportFactory(
-  options: V2RootOptions,
+type NousWiring = Pick<V2RootOptions, 'nousBaseUrl' | 'nousApiKey' | 'knownSecrets'>;
+
+export function nousTransportFactory(
+  options: NousWiring,
   logger: Logger,
 ): (pin: ModelPin) => AnthropicMessagesClient {
   const accountGate = new NousAccountInFlightGate({
@@ -239,11 +241,15 @@ function nousTransportFactory(
     });
 }
 
-function secretsFor(options: V2RootOptions): SecretSource {
+function secretsFor(options: NousWiring): SecretSource {
   return options.knownSecrets ?? knownSecretsFrom(process.env);
 }
 
-function guardedSpendSink(db: StoreHandle, options: V2RootOptions, logger: Logger): LlmSpendSink {
+export function guardedSpendSink(
+  db: StoreHandle,
+  options: NousWiring,
+  logger: Logger,
+): LlmSpendSink {
   return secretGuardedSink(new SqliteLlmSpendStore(db, logger, true), secretsFor(options), logger);
 }
 
