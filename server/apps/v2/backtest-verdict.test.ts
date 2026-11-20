@@ -103,6 +103,55 @@ describe('backtestVerdict', () => {
     expect(verdict.benchmarkReturnToMaxDrawdown).toBeCloseTo(byHand(given.benchmark), 9);
   });
 
+  it('reports profit factor from settled trades for each trial and the selection, none when unmeasured (#2195)', () => {
+    const [nine, ten] = input().trials;
+    if (nine === undefined || ten === undefined) throw new Error('fixture changed');
+    const verdict = backtestVerdict(
+      input({
+        trials: [
+          { ...nine, tradePnl: [40, -10, 20, -5], unsettledTrades: 2 },
+          { ...ten, tradePnl: [7], unsettledTrades: 0 },
+        ],
+      }),
+    );
+    expect(
+      verdict.trials.map(({ profitFactor, settledTrades, unsettledTrades }) => ({
+        profitFactor,
+        settledTrades,
+        unsettledTrades,
+      })),
+    ).toEqual([
+      { profitFactor: 60 / 15, settledTrades: 4, unsettledTrades: 2 },
+      { profitFactor: null, settledTrades: 1, unsettledTrades: 0 },
+    ]);
+    expect(verdict.selectedTrial).toBe(9);
+    expect(verdict.profitFactor).toBe(4);
+    expect(verdict.settledTrades).toBe(4);
+    expect(verdict.unsettledTrades).toBe(2);
+
+    const unmeasured = backtestVerdict(input());
+    expect(unmeasured.profitFactor).toBeNull();
+    expect(unmeasured.settledTrades).toBeNull();
+    expect(unmeasured.unsettledTrades).toBeNull();
+    expect(unmeasured.trials.map((trial) => trial.settledTrades)).toEqual([null, null]);
+    expect(unmeasured.trials.map((trial) => trial.unsettledTrades)).toEqual([null, null]);
+    const {
+      profitFactor: _pf,
+      settledTrades: _s,
+      unsettledTrades: _u,
+      trials: _t,
+      ...rest
+    } = verdict;
+    const {
+      profitFactor: _upf,
+      settledTrades: _us,
+      unsettledTrades: _uu,
+      trials: _ut,
+      ...unmeasuredRest
+    } = unmeasured;
+    expect(rest).toEqual(unmeasuredRest);
+  });
+
   it('judges the delayed run by the haircut walk-forward test against the same benchmark days', () => {
     const delayed = [book(noisy(LENGTH, 0.003, 0.002, 0.4)), book(noisy(LENGTH, 0, 0.01, 1.4))];
     const verdict = backtestVerdict(input({ delayed }));
