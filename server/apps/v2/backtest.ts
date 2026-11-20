@@ -13,6 +13,7 @@ import {
   type BacktestVerdict,
   type BookSeries,
   backtestVerdict,
+  type TrialSeries,
   walkForwardRanges,
 } from './backtest-verdict.js';
 import type { CanaryLog } from './canary-log.js';
@@ -50,6 +51,7 @@ import {
   type VolTargetSizing,
 } from './risk/index.js';
 import { declaredCfdCosts, declaredVolTarget } from './signal/index.js';
+import { type SettledTrades, settledTradePnl } from './trade-pnl.js';
 import { type TrialConfig, type TrialLedger, trialHash } from './trial-ledger.js';
 
 export type SleeveFactory = (market: MarketData) => Sleeve;
@@ -105,7 +107,7 @@ export interface BacktestInput {
 
 export interface BacktestSimulation {
   readonly dates: readonly string[];
-  readonly trials: readonly (BookSeries & { readonly trial: number; readonly sleeve: string })[];
+  readonly trials: readonly (TrialSeries & { readonly sleeve: string })[];
   readonly benchmark: BookSeries;
   readonly trialsShare: number;
 }
@@ -376,6 +378,12 @@ interface Simulation {
   readonly opening: CapitalYear;
   readonly marks: readonly (readonly number[])[];
   readonly trades: readonly (readonly Trade[])[];
+  readonly tradePnl: readonly SettledTrades[] | undefined;
+}
+
+interface SimulationHooks {
+  readonly attach?: (db: StoreHandle) => void;
+  readonly settle?: boolean;
 }
 
 async function simulate(
@@ -383,12 +391,12 @@ async function simulate(
   sleeves: readonly Sleeve[],
   today: { current: string },
   dates: readonly string[],
-  attach?: (db: StoreHandle) => void,
+  hooks: SimulationHooks = {},
 ): Promise<Simulation> {
   const first = dates[0] as string;
   const db = openSharedStore(':memory:');
   try {
-    attach?.(db);
+    hooks.attach?.(db);
     const clock = new SimulatedClock(new Date(`${first}T00:00:00.000Z`));
     const opening = seedCapital(
       new CapitalConfigStore(guardedStore(db, 'v2'), clock),
@@ -415,7 +423,15 @@ async function simulate(
     });
     const marks = await replay(cycle, clock, sleeves, dates, today);
     const books = sleeves.map((sleeve) => `${sleeve.id}/primary`);
-    return { opening, marks, trades: bookTrades(db, books, dates) };
+    return {
+      opening,
+      marks,
+      trades: bookTrades(db, books, dates),
+      tradePnl:
+        hooks.settle === true
+          ? settledTradePnl(db, input.market, dates, books, input.logger)
+          : undefined,
+    };
   } finally {
     db.close();
   }
@@ -566,7 +582,7 @@ async function randomCanaryRuns(
     sleeves,
     view.today,
     run.dates,
-    ledger.attach,
+    { attach: ledger.attach },
   );
   const runs = seeds.map((seed, index) => {
     const traded = simulation.trades[index] as readonly Trade[];
@@ -642,12 +658,14 @@ async function simulateRecorded(input: BacktestInput): Promise<RecordedSimulatio
   const configs = trialConfigs(input, trialSleeves, benchmarkSleeve);
   assertDividendsCover(input);
   const trialNumbers = configs.map((config) => input.ledger.record(input.candidate, config));
-  const simulation = await simulate(input, sleeves, view.today, dates);
+  const simulation = await simulate(input, sleeves, view.today, dates, { settle: true });
   const books = seriesOf(simulation, sleeves);
   const trials = trialSleeves.map((sleeve, index) => ({
     trial: trialNumbers[index] as number,
     sleeve: sleeve.id,
     ...(books[index] as BookSeries),
+    tradePnl: simulation.tradePnl?.[index]?.pnl,
+    unsettledTrades: simulation.tradePnl?.[index]?.unsettled,
   }));
   const benchmark = books[trialSleeves.length] as BookSeries;
   return {
