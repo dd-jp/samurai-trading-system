@@ -40,6 +40,7 @@ export interface BookSeries {
 export interface TrialSeries extends BookSeries {
   readonly trial: number;
   readonly tradePnl?: readonly number[] | undefined;
+  readonly unsettledTrades?: number | undefined;
 }
 
 export interface VerdictInput {
@@ -69,6 +70,7 @@ export interface TrialResult {
   readonly returnToMaxDrawdown: number | null;
   readonly profitFactor: number | null;
   readonly settledTrades: number | null;
+  readonly unsettledTrades: number | null;
   readonly foldSharpes: readonly number[];
 }
 
@@ -110,6 +112,8 @@ export interface BacktestVerdict {
   readonly maxDrawdown: number;
   readonly returnToMaxDrawdown: number | null;
   readonly profitFactor: number | null;
+  readonly settledTrades: number | null;
+  readonly unsettledTrades: number | null;
   readonly capitalCeilingGbp: number;
   readonly regimeSplit: RegimeSplit;
   readonly oneBarDelay: OneBarDelay | null;
@@ -281,6 +285,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     returnToMaxDrawdown: returnToMaxDrawdown(series.equity),
     profitFactor: series.tradePnl === undefined ? null : profitFactor(series.tradePnl),
     settledTrades: series.tradePnl?.length ?? null,
+    unsettledTrades: series.unsettledTrades ?? null,
     foldSharpes: matrix[index] as number[],
   }));
   const selected = input.trials[argMaxIndex(trials.map((trial) => trial.sharpe))] as TrialSeries;
@@ -329,6 +334,8 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     maxDrawdown: drawdown,
     returnToMaxDrawdown: returnToMaxDrawdown(selected.equity),
     profitFactor: selected.tradePnl === undefined ? null : profitFactor(selected.tradePnl),
+    settledTrades: selected.tradePnl?.length ?? null,
+    unsettledTrades: selected.unsettledTrades ?? null,
     capitalCeilingGbp: capitalCeilingGbp(input.lossCapGbp, drawdown),
     regimeSplit: regimes,
     oneBarDelay: delay,

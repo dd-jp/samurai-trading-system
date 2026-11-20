@@ -109,25 +109,46 @@ describe('backtestVerdict', () => {
     const verdict = backtestVerdict(
       input({
         trials: [
-          { ...nine, tradePnl: [40, -10, 20, -5] },
-          { ...ten, tradePnl: [7] },
+          { ...nine, tradePnl: [40, -10, 20, -5], unsettledTrades: 2 },
+          { ...ten, tradePnl: [7], unsettledTrades: 0 },
         ],
       }),
     );
     expect(
-      verdict.trials.map(({ profitFactor, settledTrades }) => ({ profitFactor, settledTrades })),
+      verdict.trials.map(({ profitFactor, settledTrades, unsettledTrades }) => ({
+        profitFactor,
+        settledTrades,
+        unsettledTrades,
+      })),
     ).toEqual([
-      { profitFactor: 60 / 15, settledTrades: 4 },
-      { profitFactor: null, settledTrades: 1 },
+      { profitFactor: 60 / 15, settledTrades: 4, unsettledTrades: 2 },
+      { profitFactor: null, settledTrades: 1, unsettledTrades: 0 },
     ]);
     expect(verdict.selectedTrial).toBe(9);
     expect(verdict.profitFactor).toBe(4);
+    expect(verdict.settledTrades).toBe(4);
+    expect(verdict.unsettledTrades).toBe(2);
 
     const unmeasured = backtestVerdict(input());
     expect(unmeasured.profitFactor).toBeNull();
+    expect(unmeasured.settledTrades).toBeNull();
+    expect(unmeasured.unsettledTrades).toBeNull();
     expect(unmeasured.trials.map((trial) => trial.settledTrades)).toEqual([null, null]);
-    const { profitFactor: _pf, trials: _t, ...rest } = verdict;
-    const { profitFactor: _upf, trials: _ut, ...unmeasuredRest } = unmeasured;
+    expect(unmeasured.trials.map((trial) => trial.unsettledTrades)).toEqual([null, null]);
+    const {
+      profitFactor: _pf,
+      settledTrades: _s,
+      unsettledTrades: _u,
+      trials: _t,
+      ...rest
+    } = verdict;
+    const {
+      profitFactor: _upf,
+      settledTrades: _us,
+      unsettledTrades: _uu,
+      trials: _ut,
+      ...unmeasuredRest
+    } = unmeasured;
     expect(rest).toEqual(unmeasuredRest);
   });
 

@@ -2,7 +2,7 @@ import type { MarketData } from '../../../contracts/index.js';
 import { describeThrownSafely, type Logger } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { addDays, type BarsSource } from './data/index.js';
-import { rebuildDecisionOutcomes } from './decision-outcomes.js';
+import { type OutcomeRebuild, rebuildDecisionOutcomes } from './decision-outcomes.js';
 
 export function profitFactor(pnl: readonly number[]): number | null {
   const wins = pnl.filter((value) => value > 0).reduce((sum, value) => sum + value, 0);
@@ -22,6 +22,19 @@ function windowBars(market: MarketData, to: string, sessions: number): BarsSourc
   };
 }
 
+export interface SettledTrades {
+  readonly pnl: readonly number[];
+  readonly unsettled: number;
+}
+
+export function unsettledIn(rebuild: OutcomeRebuild, bookId: string): number {
+  return (
+    rebuild.pending.filter((close) => close.bookId === bookId).length +
+    rebuild.anomalous.filter((close) => close.bookId === bookId).length +
+    rebuild.unmatched.filter((key) => key.startsWith(`${bookId}|`)).length
+  );
+}
+
 // Reporting only, and the run's trials are already counted when it settles, so a failure here
 // leaves profit factor unmeasured rather than failing a run that cannot be recounted
 export function settledTradePnl(
@@ -30,16 +43,24 @@ export function settledTradePnl(
   dates: readonly string[],
   bookIds: readonly string[],
   logger: Logger,
-): number[][] | undefined {
+): SettledTrades[] | undefined {
   try {
-    rebuildDecisionOutcomes(db, windowBars(market, dates.at(-1) as string, dates.length));
+    const rebuild = rebuildDecisionOutcomes(
+      db,
+      windowBars(market, dates.at(-1) as string, dates.length),
+    );
     const select = db.prepare(
       `SELECT realised_pnl_gbp FROM v2_decision_outcomes WHERE book_id = ?
         ORDER BY exit_date, outcome_id`,
     );
-    return bookIds.map((bookId) =>
-      (select.all(bookId) as { realised_pnl_gbp: number }[]).map((row) => row.realised_pnl_gbp),
-    );
+    const books = bookIds.map((bookId) => ({
+      pnl: (select.all(bookId) as { realised_pnl_gbp: number }[]).map(
+        (row) => row.realised_pnl_gbp,
+      ),
+      unsettled: unsettledIn(rebuild, bookId),
+    }));
+    warnUnsettled(logger, books);
+    return books;
   } catch (error) {
     logger.log({
       trace_id: 'v2-backtest',
@@ -50,4 +71,16 @@ export function settledTradePnl(
     });
     return undefined;
   }
+}
+
+function warnUnsettled(logger: Logger, books: readonly SettledTrades[]): void {
+  const unsettled = books.reduce((sum, book) => sum + book.unsettled, 0);
+  if (unsettled === 0) return;
+  logger.log({
+    trace_id: 'v2-backtest',
+    stage: 'v2',
+    level: 'warn',
+    event: 'v2_backtest_trades_unsettled',
+    message: `${unsettled} closed trade(s) did not settle and are left out of profit factor`,
+  });
 }
