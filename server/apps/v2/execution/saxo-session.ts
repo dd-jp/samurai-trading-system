@@ -27,8 +27,8 @@ export function recordedSessionLoss(tokenPath: string = tokenFilePath('live')): 
   return typeof session === 'string' ? undefined : lostSinceIssue(tokenPath, session);
 }
 
-// The keep-alive alerts only while no lostAt is recorded, so recording a loss here keeps the
-// outage at one alert; a lostAt older than the current session is stale and is overwritten
+// The keep-alive alerts once a day counted from the recorded lostAt, so recording a loss here
+// delays its next alert by up to a day; a lostAt older than the current session is overwritten
 export function recordSessionLoss(
   reason: string,
   now: Date,

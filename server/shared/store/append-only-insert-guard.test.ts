@@ -526,6 +526,25 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    table: 'v2_exposure_reports',
+    seed: `INSERT INTO v2_exposure_reports (trading_date, report, recorded_at)
+        VALUES ('2026-10-01', '{}', 't');`,
+    attacks: [
+      {
+        name: 'same trading date',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_exposure_reports (trading_date, report, recorded_at)
+          VALUES ('2026-10-01', '{"warnings":[]}', 'u')`,
+      },
+      {
+        name: 'same trading date, ignored',
+        outcome: 'refused',
+        sql: `INSERT OR IGNORE INTO v2_exposure_reports (trading_date, report, recorded_at)
+          VALUES ('2026-10-01', '{"warnings":[]}', 'u')`,
+      },
+    ],
+  },
+  {
     table: 'v2_decision_outcomes',
     seed: `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
         VALUES ('debate/primary', 'debate', 'primary', 1000, 1000, 't');

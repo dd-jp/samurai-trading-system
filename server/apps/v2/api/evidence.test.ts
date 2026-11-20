@@ -98,6 +98,7 @@ describe('EvidenceReader (P5–P8)', () => {
     open();
     expect(read()).toEqual({
       closed_trade_ledger: { status: 'empty' },
+      exposure: { status: 'empty' },
       contract_version: V2_CONTRACT_VERSION,
       generated_at: '2026-10-06T21:40:00.000Z',
       performance: { status: 'empty' },
@@ -128,6 +129,7 @@ describe('EvidenceReader (P5–P8)', () => {
           days: 3,
           sharpe: annualisedSharpe([1010 / 1000 - 1, 1005 / 1010 - 1]),
           max_drawdown: 1 - 1005 / 1010,
+          return_to_max_drawdown: (1005 / 1000 - 1) / (1 - 1005 / 1010),
           equity: [
             { trading_date: '2026-10-01', equity_gbp: 1000 },
             { trading_date: '2026-10-02', equity_gbp: 1010 },
@@ -141,6 +143,7 @@ describe('EvidenceReader (P5–P8)', () => {
           days: 1,
           sharpe: null,
           max_drawdown: 0,
+          return_to_max_drawdown: null,
           equity: [{ trading_date: '2026-10-02', equity_gbp: 990 }],
         },
       ],

@@ -32,8 +32,8 @@ describe('EvidenceView (P5–P8)', () => {
     const panel = await screen.findByRole('region', { name: 'Sleeve vs benchmark' });
     const rows = within(panel).getAllByRole('row').slice(1);
     expect(rows.map((row) => row.textContent)).toEqual([
-      'debate/primary31.23−5.0%',
-      '↳ no-veto (shadow)3—0.0%—',
+      'debate/primary31.23−5.0%−0.60',
+      '↳ no-veto (shadow)3—0.0%no drawdown—',
     ]);
     expect(
       within(panel).getByRole('img', {

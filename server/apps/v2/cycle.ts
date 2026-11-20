@@ -49,6 +49,7 @@ import {
   type UnbookedDividend,
 } from './cfd-dividend-step.js';
 import type { CfdDividendLedger } from './cfd-dividends.js';
+import { crossSleeveExposure, type ExposureJournal, newWarnings } from './cross-sleeve-exposure.js';
 import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
   addDays,
@@ -77,7 +78,7 @@ import {
   type StepThrow,
   type ThrowFailure,
 } from './reconcile.js';
-import { bookPinDigest, withheldParameters } from './signal/index.js';
+import { bookPinDigest, type CrossSleeveWarnLevels, withheldParameters } from './signal/index.js';
 import {
   bracketExit,
   type LimitEntryOutcome,
@@ -141,6 +142,9 @@ export interface CycleDeps {
   readonly splitFeed?: SplitFeed | undefined;
   readonly dividendFeed?: CfdDividendFeed | undefined;
   readonly dividendLedger?: CfdDividendLedger | undefined;
+  readonly exposure?:
+    | { readonly journal: ExposureJournal; readonly levels: CrossSleeveWarnLevels }
+    | undefined;
 }
 
 export interface BookReport {
@@ -2387,6 +2391,35 @@ class Cycle {
     };
   }
 
+  // Measurement only (#2156): a failure is logged and never reaches the marks or the exits
+  journalExposure(books: readonly BookSpec[]): void {
+    const { exposure } = this.deps;
+    if (exposure === undefined) return;
+    try {
+      const { journal, levels } = exposure;
+      const report = crossSleeveExposure({
+        tradingDate: this.tradingDate,
+        books,
+        holdings: books.flatMap((book) =>
+          this.deps.books.positions(book.id).map((held) => ({
+            book_id: book.id,
+            sleeve_id: book.sleeve,
+            instrument: held.instrument,
+            signed_gbp: held.qty * (this.markGbp(held.instrument, held.venue) ?? held.avgPriceGbp),
+          })),
+        ),
+        equity: journal.equityThrough(this.tradingDate, levels.windowReturns + 1),
+        levels,
+      });
+      for (const warning of newWarnings(report, journal.warningsBefore(this.tradingDate))) {
+        this.log('warn', 'v2_cross_sleeve_exposure', `${this.tradingDate} ${warning}`);
+      }
+      journal.record(report);
+    } catch (error) {
+      this.log('warn', 'v2_cross_sleeve_exposure_failed', describeThrownSafely(error));
+    }
+  }
+
   logBudgetChange(bookId: string, before: LossBudgetState | undefined, after: LossBudgetState) {
     for (const change of budgetChanges(bookId, before, after)) {
       this.log(change.level, change.event, change.message);
@@ -2758,6 +2791,7 @@ async function runUnmarked(
   cycle.refuseMarkIfDividendUnread();
   cycle.refuseMarkIfDividendBookingThrew();
   const bookReports = await cycle.markAll(books);
+  cycle.journalExposure(books);
   refusals.push(...cycle.refusals);
   const { tally } = cycle;
   return {

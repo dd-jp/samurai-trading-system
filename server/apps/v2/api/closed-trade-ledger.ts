@@ -9,7 +9,7 @@ import type { StoreHandle } from '../../../shared/store/index.js';
 const NEWEST_ROWS = 50;
 
 const PRIMARY_OUTCOMES = `
-  v2_decision_outcomes o JOIN v2_books b ON b.book_id = o.book_id WHERE b.variant = 'primary'`;
+  v2_decision_outcomes o JOIN v2_books b ON b.book_id = o.book_id WHERE b.variant = 'primary' OR b.sleeve_id = 'arm2'`;
 
 const NEWEST_TRADES = `
   SELECT o.decision_id, o.exit_client_order_id, o.book_id, o.instrument, o.direction, o.entry_date, o.exit_date,

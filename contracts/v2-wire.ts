@@ -309,6 +309,7 @@ export interface BookPerformanceWire {
   readonly days: number;
   readonly sharpe: number | null;
   readonly max_drawdown: number;
+  readonly return_to_max_drawdown: number | null;
   readonly equity: readonly EquityPointWire[];
 }
 
@@ -371,6 +372,55 @@ export interface ClosedTradeLedgerWire {
   readonly newest: readonly ClosedTradeWire[];
 }
 
+export interface ExposureHoldingWire {
+  readonly book_id: string;
+  readonly sleeve_id: string;
+  readonly instrument: string;
+  readonly signed_gbp: number;
+}
+
+export interface BookExposureWire {
+  readonly book_id: string;
+  readonly sleeve_id: string;
+  readonly variant: string;
+  readonly long_gbp: number;
+  readonly short_gbp: number;
+  readonly gross_gbp: number;
+  readonly net_gbp: number;
+}
+
+export interface SymbolOverlapWire {
+  readonly instrument: string;
+  readonly sleeves: readonly string[];
+  readonly opposed: boolean;
+  readonly holders: readonly ExposureHoldingWire[];
+}
+
+// #303: a pair without enough history, or with a flat book, has no correlation; it is never 0
+export type CorrelationGapWire = 'warm_up' | 'zero_variance';
+
+export interface BookCorrelationWire {
+  readonly book_a: string;
+  readonly book_b: string;
+  readonly cross_sleeve: boolean;
+  readonly correlation: number | null;
+  readonly observations: number;
+  readonly gap: CorrelationGapWire | null;
+}
+
+export interface CrossSleeveExposureWire {
+  readonly trading_date: string;
+  readonly window_returns: number;
+  readonly min_observations: number;
+  readonly overlap_warn: number;
+  readonly correlation_warn: number;
+  readonly books: readonly BookExposureWire[];
+  readonly holdings: readonly ExposureHoldingWire[];
+  readonly overlaps: readonly SymbolOverlapWire[];
+  readonly correlations: readonly BookCorrelationWire[];
+  readonly warnings: readonly string[];
+}
+
 export interface EvidenceWire {
   readonly contract_version: string;
   readonly generated_at: string;
@@ -379,6 +429,7 @@ export interface EvidenceWire {
   readonly vs_benchmark: NotYetFedWire;
   readonly trade_count: PanelWire<TradeCountWire>;
   readonly closed_trade_ledger: PanelWire<ClosedTradeLedgerWire>;
+  readonly exposure: PanelWire<CrossSleeveExposureWire>;
   readonly arm2_test: NotYetFedWire;
   readonly band: NotYetFedWire;
   readonly gate: NotYetFedWire;
@@ -678,6 +729,7 @@ export const V2_WIRE_FIELD_NAMES = {
     'days',
     'sharpe',
     'max_drawdown',
+    'return_to_max_drawdown',
     'equity',
   ]),
   performance: fieldsOf<PerformanceWire>()(['books']),
@@ -716,6 +768,42 @@ export const V2_WIRE_FIELD_NAMES = {
     'net_gbp',
   ]),
   closedTradeLedger: fieldsOf<ClosedTradeLedgerWire>()(['stats', 'newest']),
+  exposureHolding: fieldsOf<ExposureHoldingWire>()([
+    'book_id',
+    'sleeve_id',
+    'instrument',
+    'signed_gbp',
+  ]),
+  bookExposure: fieldsOf<BookExposureWire>()([
+    'book_id',
+    'sleeve_id',
+    'variant',
+    'long_gbp',
+    'short_gbp',
+    'gross_gbp',
+    'net_gbp',
+  ]),
+  symbolOverlap: fieldsOf<SymbolOverlapWire>()(['instrument', 'sleeves', 'opposed', 'holders']),
+  bookCorrelation: fieldsOf<BookCorrelationWire>()([
+    'book_a',
+    'book_b',
+    'cross_sleeve',
+    'correlation',
+    'observations',
+    'gap',
+  ]),
+  crossSleeveExposure: fieldsOf<CrossSleeveExposureWire>()([
+    'trading_date',
+    'window_returns',
+    'min_observations',
+    'overlap_warn',
+    'correlation_warn',
+    'books',
+    'holdings',
+    'overlaps',
+    'correlations',
+    'warnings',
+  ]),
   evidence: fieldsOf<EvidenceWire>()([
     'contract_version',
     'generated_at',
@@ -724,6 +812,7 @@ export const V2_WIRE_FIELD_NAMES = {
     'vs_benchmark',
     'trade_count',
     'closed_trade_ledger',
+    'exposure',
     'arm2_test',
     'band',
     'gate',

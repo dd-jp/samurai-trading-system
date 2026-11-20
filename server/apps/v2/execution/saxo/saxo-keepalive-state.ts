@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 export interface SaxoKeepAliveState {
   readonly lostAt?: string;
   readonly lostReason?: string;
+  readonly lostAlertedAt?: string;
   readonly warnedAt?: string;
 }
 
@@ -27,10 +28,12 @@ export function readKeepAliveState(tokenPath: string): SaxoKeepAliveState {
   const body = parsed as Record<string, unknown>;
   const lostAt = optionalString(body, 'lostAt');
   const lostReason = optionalString(body, 'lostReason');
+  const lostAlertedAt = optionalString(body, 'lostAlertedAt');
   const warnedAt = optionalString(body, 'warnedAt');
   return {
     ...(lostAt === undefined ? {} : { lostAt }),
     ...(lostReason === undefined ? {} : { lostReason }),
+    ...(lostAlertedAt === undefined ? {} : { lostAlertedAt }),
     ...(warnedAt === undefined ? {} : { warnedAt }),
   };
 }

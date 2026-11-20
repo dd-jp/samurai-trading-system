@@ -55,6 +55,14 @@ export function maxDrawdown(equity: readonly number[]): number {
   return worst;
 }
 
+export function returnToMaxDrawdown(equity: readonly number[]): number | null {
+  const first = equity[0];
+  const last = equity[equity.length - 1];
+  const drawdown = maxDrawdown(equity);
+  if (first === undefined || last === undefined || !(first > 0) || drawdown === 0) return null;
+  return (last / first - 1) / drawdown;
+}
+
 export function compoundedAnnualReturn(equity: readonly number[]): number {
   const first = equity[0];
   const last = equity[equity.length - 1];

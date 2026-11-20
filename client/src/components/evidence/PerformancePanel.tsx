@@ -44,10 +44,12 @@ function Books({ books }: { books: readonly BookPerformanceWire[] }) {
   return (
     <table className="grid">
       <caption>
-        Annualised Sharpe and max drawdown of daily equity returns, each book over its own cycle
-        days
+        Annualised Sharpe, max drawdown and total return over max drawdown of daily equity, each
+        book over its own cycle days
       </caption>
-      <TableHead columns={['Book', 'Days', 'Sharpe', 'Max drawdown', 'Equity']} />
+      <TableHead
+        columns={['Book', 'Days', 'Sharpe', 'Max drawdown', 'Return / max DD', 'Equity']}
+      />
       <tbody>
         {bySleevePrimaryFirst(books).map((book) => (
           <tr key={book.book_id}>
@@ -55,6 +57,11 @@ function Books({ books }: { books: readonly BookPerformanceWire[] }) {
             <td>{book.days}</td>
             <td>{fixed(book.sharpe)}</td>
             <td>{percent(-book.max_drawdown)}</td>
+            <td>
+              {book.return_to_max_drawdown === null
+                ? 'no drawdown'
+                : fixed(book.return_to_max_drawdown)}
+            </td>
             <td>
               <EquityCurve book={book} />
             </td>

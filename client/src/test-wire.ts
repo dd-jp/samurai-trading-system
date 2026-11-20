@@ -153,6 +153,7 @@ export function evidence(overrides: Partial<EvidenceWire> = {}): EvidenceWire {
     contract_version: V2_CONTRACT_VERSION,
     generated_at: '2026-10-06T21:40:00.000Z',
     closed_trade_ledger: { status: 'empty' },
+    exposure: { status: 'empty' },
     performance: {
       status: 'fed',
       books: [
@@ -163,6 +164,7 @@ export function evidence(overrides: Partial<EvidenceWire> = {}): EvidenceWire {
           days: 3,
           sharpe: null,
           max_drawdown: 0,
+          return_to_max_drawdown: null,
           equity: [{ trading_date: '2026-10-05', equity_gbp: 1_000 }],
         },
         {
@@ -172,6 +174,7 @@ export function evidence(overrides: Partial<EvidenceWire> = {}): EvidenceWire {
           days: 3,
           sharpe: 1.234,
           max_drawdown: 0.05,
+          return_to_max_drawdown: -0.6,
           equity: [
             { trading_date: '2026-10-01', equity_gbp: 2_000 },
             { trading_date: '2026-10-02', equity_gbp: 1_900 },

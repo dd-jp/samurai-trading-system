@@ -14,6 +14,7 @@ import {
   type RegimeSplit,
   regimePeriods,
   regimeSplit,
+  returnToMaxDrawdown,
   sliceByRanges,
   WALK_FORWARD_FOLDS,
   type WalkForwardPath,
@@ -64,6 +65,7 @@ export interface TrialResult {
   readonly trial: number;
   readonly sharpe: number;
   readonly maxDrawdown: number;
+  readonly returnToMaxDrawdown: number | null;
   readonly foldSharpes: readonly number[];
 }
 
@@ -98,10 +100,12 @@ export interface BacktestVerdict {
   };
   readonly benchmarkSharpe: number;
   readonly benchmarkMaxDrawdown: number;
+  readonly benchmarkReturnToMaxDrawdown: number | null;
   readonly deflatedSharpe: number;
   readonly deflatedSharpeWalkForward: number;
   readonly pbo: number;
   readonly maxDrawdown: number;
+  readonly returnToMaxDrawdown: number | null;
   readonly capitalCeilingGbp: number;
   readonly regimeSplit: RegimeSplit;
   readonly oneBarDelay: OneBarDelay | null;
@@ -270,6 +274,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     trial: series.trial,
     sharpe: annualisedSharpe(series.returns),
     maxDrawdown: maxDrawdown(series.equity),
+    returnToMaxDrawdown: returnToMaxDrawdown(series.equity),
     foldSharpes: matrix[index] as number[],
   }));
   const selected = input.trials[argMaxIndex(trials.map((trial) => trial.sharpe))] as TrialSeries;
@@ -311,10 +316,12 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     },
     benchmarkSharpe: annualisedSharpe(input.benchmark.returns),
     benchmarkMaxDrawdown: maxDrawdown(input.benchmark.equity),
+    benchmarkReturnToMaxDrawdown: returnToMaxDrawdown(input.benchmark.equity),
     deflatedSharpe: dsr,
     deflatedSharpeWalkForward: deflatedSharpeOfReturns(path.returns, input.trialsCounted),
     pbo: probability,
     maxDrawdown: drawdown,
+    returnToMaxDrawdown: returnToMaxDrawdown(selected.equity),
     capitalCeilingGbp: capitalCeilingGbp(input.lossCapGbp, drawdown),
     regimeSplit: regimes,
     oneBarDelay: delay,

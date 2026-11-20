@@ -11,6 +11,7 @@ import type {
   BrokerCashActivityReader,
   BrokerMode,
   ControlAction,
+  CrossSleeveExposureWire,
   JournalledOrder,
   LossBudgetState,
   MarketData,
@@ -39,6 +40,7 @@ import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import { SqliteCashInLieuBooks } from './cash-in-lieu-books.js';
 import { type CfdDividendLedger, SqliteCfdDividends } from './cfd-dividends.js';
+import { type ExposureJournal, SqliteExposureJournal } from './cross-sleeve-exposure.js';
 import * as cycleModule from './cycle.js';
 import {
   budgetChanges,
@@ -8970,5 +8972,100 @@ describe('the outcome ledger dates each simulated fill by the bar the cycle pric
         exit_price_native: sold(19.5),
       })),
     });
+  });
+});
+
+describe('cross-sleeve exposure (#2156)', () => {
+  const LEVELS = {
+    overlapInstruments: 1,
+    correlation: 0.7,
+    windowReturns: 60,
+    minObservations: 20,
+  };
+
+  function twoSleeves(journalFor: (db: StoreHandle) => ExposureJournal) {
+    const spec: SleeveSpec = { ...TEST_SPEC, capitalShare: 0.5 };
+    const trend: Sleeve = {
+      id: 'trend',
+      spec,
+      universe: () => ({ instruments: [], refusals: [] }),
+      decide: () => Promise.resolve({ decisions: [], refusals: [] }),
+    };
+    const deps = harness([], true, undefined, [2026], spec, SPREAD_ONLY, 1_500, trend);
+    const db = (deps.journal as unknown as { db: StoreHandle }).db;
+    return { ...deps, db, exposure: { journal: journalFor(db), levels: LEVELS } };
+  }
+
+  function holdAapl(books: BookLedger, bookId: string, clientOrderId: string): void {
+    books.applyFill(bookId, {
+      instrument: 'AAPL',
+      venue: 'alpaca',
+      side: 'buy',
+      leg: 'entry',
+      qty: 2,
+      priceGbp: 100,
+      feeGbp: 0,
+      clientOrderId,
+      tradingDate: '2026-09-25',
+    });
+  }
+
+  function reportOn(db: StoreHandle, tradingDate: string): CrossSleeveExposureWire {
+    const row = db
+      .prepare('SELECT report FROM v2_exposure_reports WHERE trading_date = ?')
+      .get(tradingDate) as { report: string };
+    return JSON.parse(row.report) as CrossSleeveExposureWire;
+  }
+
+  it('journals the marked holdings and alerts an overlap once, on the day it appears', async () => {
+    const deps = twoSleeves((db) => new SqliteExposureJournal(db, clock));
+    const log = vi.fn();
+    await runCycle({ ...deps, logger: { log } }, '2026-09-25');
+    holdAapl(deps.books, 'debate/primary', 'a');
+    holdAapl(deps.books, 'trend/primary', 'b');
+    await runCycle({ ...deps, logger: { log } }, '2026-09-28');
+    await runCycle({ ...deps, logger: { log } }, '2026-09-29');
+
+    expect(reportOn(deps.db, '2026-09-25')).toMatchObject({ overlaps: [], warnings: [] });
+    const report = reportOn(deps.db, '2026-09-28');
+    expect(report.overlaps.map(({ instrument, sleeves }) => ({ instrument, sleeves }))).toEqual([
+      { instrument: 'AAPL', sleeves: ['debate', 'trend'] },
+    ]);
+    expect(report.warnings).toEqual(['overlap:AAPL']);
+    const invested = deps.db
+      .prepare(
+        "SELECT book_id, invested_gbp FROM v2_book_days WHERE trading_date = '2026-09-28' ORDER BY book_id",
+      )
+      .all() as { book_id: string; invested_gbp: number }[];
+    expect(report.books.map(({ book_id, gross_gbp }) => ({ book_id, gross_gbp }))).toEqual(
+      invested.map(({ book_id, invested_gbp }) => ({ book_id, gross_gbp: invested_gbp })),
+    );
+    expect(
+      log.mock.calls
+        .map(([entry]) => entry as LogEntry)
+        .filter((entry) => entry.event === 'v2_cross_sleeve_exposure')
+        .map((entry) => [entry.level, entry.message]),
+    ).toEqual([['warn', '2026-09-28 overlap:AAPL']]);
+  });
+
+  it('a journal that throws is logged and the day still marks', async () => {
+    const deps = twoSleeves(() => ({
+      equityThrough: () => {
+        throw new Error('disk gone');
+      },
+      warningsBefore: () => [],
+      record: () => {},
+    }));
+    const log = vi.fn();
+    const report = await runCycle({ ...deps, logger: { log } }, '2026-09-25');
+
+    expect(report.books.map((book) => book.book_id)).toContain('trend/primary');
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: 'warn',
+        event: 'v2_cross_sleeve_exposure_failed',
+        message: expect.stringContaining('disk gone'),
+      }),
+    );
   });
 });

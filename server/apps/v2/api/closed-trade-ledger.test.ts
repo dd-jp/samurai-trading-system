@@ -71,6 +71,18 @@ describe('readClosedTradeLedger', () => {
     expect(readClosedTradeLedger(db)).toMatchObject({ stats: [{ profit_factor: null }] });
   });
 
+  it('counts arm 2 beside the primary books', () => {
+    fresh();
+    db.prepare(
+      `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
+       VALUES ('arm2/technical-only', 'arm2', 'technical-only', 1000, 1000, 'x')`,
+    ).run();
+    outcome('arm2/technical-only', '2026-10-05', -4);
+    expect(readClosedTradeLedger(db)).toMatchObject({
+      stats: [{ book_id: 'arm2/technical-only', trades: 1, net_gbp: -4, profit_factor: 0 }],
+    });
+  });
+
   it('leaves shadow books out of the totals and the rows', () => {
     fresh();
     book('debate/no-veto', 'no-veto');
