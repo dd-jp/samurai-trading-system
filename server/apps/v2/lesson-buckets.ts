@@ -2,11 +2,11 @@ import { digest } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { seededRandom } from './random-canary.js';
 
-export const LESSON_BUCKETS_SCHEMA_VERSION = 1;
+const LESSON_BUCKETS_SCHEMA_VERSION = 1;
 // #2147: a bucket smaller than this is a handful of trades, the n = 1 noise the ticket rules out
 export const LESSON_MIN_BUCKET_N = 10;
-export const LESSON_BOOTSTRAP_RESAMPLES = 2_000;
-export const LESSON_KILL_LINE_TRADES = 100;
+const LESSON_BOOTSTRAP_RESAMPLES = 2_000;
+const LESSON_KILL_LINE_TRADES = 100;
 export const LESSON_BOOK_ID = 'debate/primary';
 export const LESSON_BASELINE_BOOK_ID = 'arm2/technical-only';
 
@@ -80,7 +80,7 @@ function debateTags(payload: Record<string, unknown>, confidence: number): strin
   ];
 }
 
-export function outcomeTags(outcome: SettledOutcome): string[] {
+function outcomeTags(outcome: SettledOutcome): string[] {
   const payload = JSON.parse(outcome.payload) as Record<string, unknown>;
   return [
     'all',
