@@ -545,6 +545,34 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    table: 'v2_lesson_buckets',
+    seed: `INSERT INTO v2_lesson_buckets (as_of, bucket, book_id, n, mean_excess, hit_rate, ci_low,
+          ci_high, baseline_book_id, baseline_n, baseline_mean_excess, evidence, inputs_hash,
+          schema_version)
+        VALUES ('2026-11-20', 'all', 'debate/primary', 25, 0.01, 0.5, -0.01, 0.03,
+          'arm2/technical-only', 31, 0, '[]', 'h', 1);`,
+    attacks: [
+      {
+        name: 'same as_of, book and bucket',
+        outcome: 'refused',
+        sql: `INSERT OR REPLACE INTO v2_lesson_buckets (as_of, bucket, book_id, n, mean_excess,
+            hit_rate, ci_low, ci_high, baseline_book_id, baseline_n, baseline_mean_excess,
+            evidence, inputs_hash, schema_version)
+          VALUES ('2026-11-20', 'all', 'debate/primary', 26, 0.02, 0.5, -0.01, 0.03,
+            'arm2/technical-only', 31, 0, '[]', 'h', 1)`,
+      },
+      {
+        name: 'same as_of, book and bucket, ignored',
+        outcome: 'refused',
+        sql: `INSERT OR IGNORE INTO v2_lesson_buckets (as_of, bucket, book_id, n, mean_excess,
+            hit_rate, ci_low, ci_high, baseline_book_id, baseline_n, baseline_mean_excess,
+            evidence, inputs_hash, schema_version)
+          VALUES ('2026-11-20', 'all', 'debate/primary', 26, 0.02, 0.5, -0.01, 0.03,
+            'arm2/technical-only', 31, 0, '[]', 'h', 1)`,
+      },
+    ],
+  },
+  {
     table: 'v2_decision_outcomes',
     seed: `INSERT INTO v2_books (book_id, sleeve_id, variant, start_capital_gbp, cash_gbp, created_at)
         VALUES ('debate/primary', 'debate', 'primary', 1000, 1000, 't');
