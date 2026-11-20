@@ -378,7 +378,12 @@ interface Simulation {
   readonly opening: CapitalYear;
   readonly marks: readonly (readonly number[])[];
   readonly trades: readonly (readonly Trade[])[];
-  readonly tradePnl: readonly (readonly number[])[];
+  readonly tradePnl: readonly (readonly number[])[] | undefined;
+}
+
+interface SimulationHooks {
+  readonly attach?: (db: StoreHandle) => void;
+  readonly settle?: boolean;
 }
 
 async function simulate(
@@ -386,12 +391,12 @@ async function simulate(
   sleeves: readonly Sleeve[],
   today: { current: string },
   dates: readonly string[],
-  attach?: (db: StoreHandle) => void,
+  hooks: SimulationHooks = {},
 ): Promise<Simulation> {
   const first = dates[0] as string;
   const db = openSharedStore(':memory:');
   try {
-    attach?.(db);
+    hooks.attach?.(db);
     const clock = new SimulatedClock(new Date(`${first}T00:00:00.000Z`));
     const opening = seedCapital(
       new CapitalConfigStore(guardedStore(db, 'v2'), clock),
@@ -422,7 +427,10 @@ async function simulate(
       opening,
       marks,
       trades: bookTrades(db, books, dates),
-      tradePnl: settledTradePnl(db, input.market, dates, books),
+      tradePnl:
+        hooks.settle === true
+          ? settledTradePnl(db, input.market, dates, books, input.logger)
+          : undefined,
     };
   } finally {
     db.close();
@@ -574,7 +582,7 @@ async function randomCanaryRuns(
     sleeves,
     view.today,
     run.dates,
-    ledger.attach,
+    { attach: ledger.attach },
   );
   const runs = seeds.map((seed, index) => {
     const traded = simulation.trades[index] as readonly Trade[];
@@ -650,13 +658,13 @@ async function simulateRecorded(input: BacktestInput): Promise<RecordedSimulatio
   const configs = trialConfigs(input, trialSleeves, benchmarkSleeve);
   assertDividendsCover(input);
   const trialNumbers = configs.map((config) => input.ledger.record(input.candidate, config));
-  const simulation = await simulate(input, sleeves, view.today, dates);
+  const simulation = await simulate(input, sleeves, view.today, dates, { settle: true });
   const books = seriesOf(simulation, sleeves);
   const trials = trialSleeves.map((sleeve, index) => ({
     trial: trialNumbers[index] as number,
     sleeve: sleeve.id,
     ...(books[index] as BookSeries),
-    tradePnl: simulation.tradePnl[index] as number[],
+    tradePnl: simulation.tradePnl?.[index],
   }));
   const benchmark = books[trialSleeves.length] as BookSeries;
   return {

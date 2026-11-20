@@ -107,7 +107,12 @@ describe('backtestVerdict', () => {
     const [nine, ten] = input().trials;
     if (nine === undefined || ten === undefined) throw new Error('fixture changed');
     const verdict = backtestVerdict(
-      input({ trials: [{ ...nine, tradePnl: [40, -10, 20, -5] }, { ...ten, tradePnl: [7] }] }),
+      input({
+        trials: [
+          { ...nine, tradePnl: [40, -10, 20, -5] },
+          { ...ten, tradePnl: [7] },
+        ],
+      }),
     );
     expect(
       verdict.trials.map(({ profitFactor, settledTrades }) => ({ profitFactor, settledTrades })),
