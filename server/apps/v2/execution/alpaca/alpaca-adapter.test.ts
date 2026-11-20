@@ -535,6 +535,48 @@ describe('AlpacaBrokerAdapter.fetchNewFills', () => {
     expect(second[0]?.qty_is_cumulative).toBe(true);
   });
 
+  it("offers a part fill that completes on a later day past that day's since floor (#1938)", async () => {
+    const getOrder = vi
+      .fn()
+      .mockResolvedValueOnce(
+        acceptedOrder({
+          status: 'partially_filled',
+          filled_qty: '50',
+          filled_avg_price: '100',
+          filled_at: '2026-07-15T19:55:00Z',
+        }),
+      )
+      .mockResolvedValueOnce(
+        acceptedOrder({
+          status: 'filled',
+          filled_qty: '80',
+          filled_avg_price: '100.75',
+          filled_at: '2026-07-16T13:31:00Z',
+        }),
+      );
+    const adapter = new AlpacaBrokerAdapter({
+      client: makeClient({ getOrder }),
+      rateLimiter: permissiveLimiter(),
+      unpricedFillAlerts: recordingAlerts(),
+      logger: recordingLogger(),
+    });
+    await adapter.submitBracket(makeBracket());
+
+    const dayOne = await adapter.fetchNewFills('2026-07-15T00:00:00.000Z');
+    const dayTwo = await adapter.fetchNewFills('2026-07-16T00:00:00.000Z');
+
+    expect(dayOne).toEqual([
+      expect.objectContaining({ broker_fill_id: 'alpaca-entry-1', qty: 50 }),
+    ]);
+    expect(dayTwo).toEqual([
+      expect.objectContaining({
+        broker_fill_id: 'alpaca-entry-1',
+        qty: 80,
+        qty_is_cumulative: true,
+      }),
+    ]);
+  });
+
   it('tags the take-profit leg as target and the stop-loss leg as stop', async () => {
     const filledAt = '2026-07-15T15:00:00Z';
     const client = makeClient({
