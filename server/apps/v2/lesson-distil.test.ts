@@ -65,13 +65,16 @@ const ANSWER = JSON.stringify({
 
 class AnsweringTransport implements AnthropicMessagesClient {
   readonly requests: AnthropicMessageRequest[] = [];
-  constructor(private readonly text = ANSWER) {}
+  constructor(
+    private readonly text = ANSWER,
+    private readonly stopReason = 'end_turn',
+  ) {}
   createMessage(request: AnthropicMessageRequest) {
     this.requests.push(request);
     return Promise.resolve({
       content: [{ type: 'text' as const, text: this.text }],
       usage: { input_tokens: 900, output_tokens: 60 },
-      stop_reason: 'end_turn',
+      stop_reason: this.stopReason,
       model: LESSON_PIN.priced,
     });
   }
@@ -193,6 +196,28 @@ describe('distilLessons', () => {
       written: 1,
     });
     expect(transport.requests).toHaveLength(1);
+  });
+
+  it.each([
+    ['a malformed answer', new AnsweringTransport('sorry, cannot')],
+    ['a refused answer', new AnsweringTransport(ANSWER, 'refusal')],
+    ['a truncated answer', new AnsweringTransport(ANSWER.slice(0, 40), 'max_tokens')],
+  ])('leaves the run unsettled after %s, so the next run calls again', async (_, failing) => {
+    const db = store();
+    await expect(distilLessons(deps(db, failing), AS_OF)).rejects.toThrow();
+    const transport = new AnsweringTransport();
+    expect(await distilLessons(deps(db, transport), AS_OF)).toMatchObject({
+      source: 'model',
+      written: 1,
+    });
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  it('does not pay again for a band already distilled at a later as_of', async () => {
+    const db = store(25);
+    addBuckets(db, '2026-12-04', 30);
+    await distilLessons(deps(db, new AnsweringTransport()), '2026-12-04');
+    expect(await distilLessons({ ...NEVER, db }, AS_OF)).toMatchObject({ source: 'not_due' });
   });
 
   it('refuses before calling when the monthly spend cap is reached', async () => {

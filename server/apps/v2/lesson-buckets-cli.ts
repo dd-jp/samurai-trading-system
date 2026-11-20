@@ -4,6 +4,7 @@ import { guardedStore, openSharedStore, type StoreHandle } from '../../shared/st
 import { setExitCodeWhenInvoked, writeOrFail } from '../../tools/cli-entrypoint.js';
 import {
   guardedSpendSink,
+  knownSecretsFrom,
   nousOptionsFrom,
   nousTransportFactory,
   STDERR_LOGGER,
@@ -20,7 +21,7 @@ export type LiveLessonClient = (db: StoreHandle) => LlmClient;
 
 export function nousLessonClient(env: NodeJS.ProcessEnv): LiveLessonClient {
   return (db) => {
-    const nous = nousOptionsFrom(env);
+    const nous = { ...nousOptionsFrom(env), knownSecrets: knownSecretsFrom(env) };
     if (nous.nousApiKey === undefined || nous.nousBaseUrl === undefined) {
       throw new Error('--distil needs NOUS_BASE_URL and a Nous key in the environment');
     }
@@ -29,14 +30,23 @@ export function nousLessonClient(env: NodeJS.ProcessEnv): LiveLessonClient {
   };
 }
 
+function parseArgs(args: readonly string[]): { asOf: string; storePath: string; distil: boolean } {
+  const positional = args.filter((arg) => arg !== '--distil');
+  const [asOf = '', storePath = V2_STORE_PATH] = positional;
+  const wellFormed =
+    ISO_DATE.test(asOf) &&
+    positional.length <= 2 &&
+    positional.every((arg) => !arg.startsWith('--'));
+  if (!wellFormed) throw new Error(USAGE);
+  return { asOf, storePath, distil: positional.length < args.length };
+}
+
 async function run(
   args: readonly string[],
   today: string,
   live: LiveLessonClient,
 ): Promise<string> {
-  const distil = args.includes('--distil');
-  const [asOf, storePath = V2_STORE_PATH] = args.filter((arg) => arg !== '--distil');
-  if (asOf === undefined || !ISO_DATE.test(asOf)) throw new Error(USAGE);
+  const { asOf, storePath, distil } = parseArgs(args);
   const db = openSharedStore(storePath);
   try {
     const guarded = guardedStore(db, 'v2');

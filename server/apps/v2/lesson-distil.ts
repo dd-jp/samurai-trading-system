@@ -115,7 +115,7 @@ function draftProblem(entry: unknown, known: ReadonlySet<string>): string | unde
   const { bucket, claim } = (entry ?? {}) as { bucket?: unknown; claim?: unknown };
   if (typeof bucket !== 'string' || !known.has(bucket)) return `unknown bucket ${String(bucket)}`;
   if (typeof claim !== 'string' || claim.trim() === '') return `no claim for ${bucket}`;
-  return claim.length > MAX_CLAIM_CHARS ? `claim for ${bucket} is too long` : undefined;
+  return claim.trim().length > MAX_CLAIM_CHARS ? `claim for ${bucket} is too long` : undefined;
 }
 
 export function parseLessons(
@@ -189,9 +189,15 @@ function storedLessons(db: StoreHandle, asOf: string, bookId: string): Lesson[] 
     .all(asOf, bookId) as Lesson[];
 }
 
-// Only an answered call settles a run: a logged failure leaves the next run free to call again
-function answeredCalls(db: StoreHandle, traceId: string): LoggedCall[] {
-  return db
+// The client journals a call before parsing its answer, so a malformed, refused or truncated answer
+// is logged as a success; only an answer that parses settles a run, and a run without one calls
+// again
+function settledCall(
+  db: StoreHandle,
+  traceId: string,
+  buckets: readonly LessonBucket[],
+): LoggedCall | undefined {
+  const calls = db
     .prepare(
       `SELECT id, trace_id AS traceId, model, prompt, response, stop_reason AS stopReason,
           error_class AS errorClass, error_message AS errorMessage
@@ -201,32 +207,30 @@ function answeredCalls(db: StoreHandle, traceId: string): LoggedCall[] {
         ORDER BY id`,
     )
     .all(traceId) as LoggedCall[];
+  return calls.find(
+    (call) => call.stopReason !== 'refusal' && parseLessons(call.response ?? '', buckets).valid,
+  );
 }
 
-function closedTradesAt(db: StoreHandle, asOf: string, bookId: string): number {
-  const row = db
-    .prepare(`SELECT n FROM v2_lesson_buckets WHERE as_of = ? AND book_id = ? AND bucket = 'all'`)
-    .get(asOf, bookId) as { n: number } | undefined;
-  return row?.n ?? 0;
+function bandOf(buckets: readonly LessonBucket[]): number {
+  const all = buckets.find((bucket) => bucket.bucket === 'all');
+  return Math.floor((all?.n ?? 0) / LESSON_CADENCE_TRADES);
 }
 
-function lastDistilledAsOf(db: StoreHandle, asOf: string, bookId: string): string | undefined {
-  const row = db
+// Compared against every settled as_of, earlier or later, so running an older as_of after a newer
+// one cannot pay twice for the same band
+function due(db: StoreHandle, asOf: string, bookId: string, band: number): boolean {
+  const others = db
     .prepare(
-      `SELECT MAX(l.as_of) AS as_of FROM llm_call_log c
-        JOIN v2_lesson_buckets l ON c.trace_id = 'v2-lessons-' || l.as_of || '-' || l.book_id
-        WHERE l.book_id = ? AND l.as_of < ? AND c.response IS NOT NULL AND c.error_class IS NULL`,
+      `SELECT DISTINCT as_of FROM v2_lesson_buckets WHERE book_id = ? AND as_of <> ? ORDER BY as_of`,
     )
-    .get(bookId, asOf) as { as_of: string | null };
-  return row.as_of ?? undefined;
-}
-
-function due(db: StoreHandle, asOf: string, bookId: string): boolean {
-  const cadence = (asOfDate: string | undefined) =>
-    asOfDate === undefined
-      ? 0
-      : Math.floor(closedTradesAt(db, asOfDate, bookId) / LESSON_CADENCE_TRADES);
-  return cadence(asOf) > cadence(lastDistilledAsOf(db, asOf, bookId));
+    .all(bookId, asOf) as { as_of: string }[];
+  return others.every(({ as_of }) => {
+    const buckets = storedLessonBuckets(db, as_of, bookId);
+    return settledCall(db, lessonTraceId(as_of, bookId), buckets) === undefined
+      ? true
+      : bandOf(buckets) < band;
+  });
 }
 
 function record(db: StoreHandle, lessons: readonly Lesson[]): void {
@@ -264,14 +268,16 @@ export async function distilLessons(
   const buckets = storedLessonBuckets(deps.db, asOf, bookId);
   if (buckets.length === 0) return { lessons: [], written: 0, source: 'none' };
   const traceId = lessonTraceId(asOf, bookId);
-  const logged = answeredCalls(deps.db, traceId);
+  const settled = settledCall(deps.db, traceId, buckets);
   const stored = storedLessons(deps.db, asOf, bookId);
-  if (logged.length > 0) {
-    const replay = lessonClient(new ReplayTransport(LESSON_PIN, new ReplayLog(logged)));
+  if (settled !== undefined) {
+    const replay = lessonClient(new ReplayTransport(LESSON_PIN, new ReplayLog([settled])));
     const lessons = rowsOf(await draftLessons(replay, buckets, traceId), buckets, traceId);
     return { lessons, written: settleAgainstStored(deps.db, lessons, stored), source: 'replay' };
   }
-  if (!due(deps.db, asOf, bookId)) return { lessons: [], written: 0, source: 'not_due' };
+  const band = bandOf(buckets);
+  if (band === 0 || !due(deps.db, asOf, bookId, band))
+    return { lessons: [], written: 0, source: 'not_due' };
   const cap = deps.spendCap.check();
   if (!cap.admitted)
     throw new Error(`LLM spend cap reached: ${cap.spent_usd} of ${cap.budget_usd} USD`);

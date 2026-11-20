@@ -34,7 +34,12 @@ describe('lesson-buckets-cli', () => {
   });
 
   it('refuses a missing or malformed as_of', async () => {
-    for (const argv of [[], ['20-11-2026']]) {
+    for (const argv of [
+      [],
+      ['20-11-2026'],
+      ['2026-11-20', '--distill'],
+      ['2026-11-20', 'a', 'b'],
+    ]) {
       const lines: string[] = [];
       expect(await main(argv, (line) => lines.push(line), TODAY)).toBe(1);
       expect(lines[0]).toContain('usage: npm run v2:lessons');

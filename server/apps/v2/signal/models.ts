@@ -77,5 +77,5 @@ export function pinDigest(pins: readonly ModelPin[]): string {
 export const LESSON_PIN: ModelPin = { ...DEEPSEEK_V4_PRO_PIN, seat: 'lessons' };
 
 export const DEBATER_MAX_TOKENS = 1024;
-export const LESSONS_MAX_TOKENS = 1024;
+export const LESSONS_MAX_TOKENS = 4096;
 export const JUDGE_MAX_TOKENS = 2048;
