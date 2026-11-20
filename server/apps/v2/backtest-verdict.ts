@@ -20,6 +20,7 @@ import {
   type WalkForwardPath,
   walkForwardPath,
 } from './evidence/index.js';
+import { profitFactor } from './trade-pnl.js';
 
 // Q7: beat the benchmark after a 40% Sharpe haircut, applied as strategy × 0.6 > benchmark (doc 66 Session B (e))
 export const SHARPE_HAIRCUT_MULTIPLIER = 0.6;
@@ -66,6 +67,8 @@ export interface TrialResult {
   readonly sharpe: number;
   readonly maxDrawdown: number;
   readonly returnToMaxDrawdown: number | null;
+  readonly profitFactor: number | null;
+  readonly settledTrades: number | null;
   readonly foldSharpes: readonly number[];
 }
 
@@ -106,6 +109,7 @@ export interface BacktestVerdict {
   readonly pbo: number;
   readonly maxDrawdown: number;
   readonly returnToMaxDrawdown: number | null;
+  readonly profitFactor: number | null;
   readonly capitalCeilingGbp: number;
   readonly regimeSplit: RegimeSplit;
   readonly oneBarDelay: OneBarDelay | null;
@@ -275,6 +279,8 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     sharpe: annualisedSharpe(series.returns),
     maxDrawdown: maxDrawdown(series.equity),
     returnToMaxDrawdown: returnToMaxDrawdown(series.equity),
+    profitFactor: series.tradePnl === undefined ? null : profitFactor(series.tradePnl),
+    settledTrades: series.tradePnl?.length ?? null,
     foldSharpes: matrix[index] as number[],
   }));
   const selected = input.trials[argMaxIndex(trials.map((trial) => trial.sharpe))] as TrialSeries;
@@ -322,6 +328,7 @@ export function backtestVerdict(input: VerdictInput): BacktestVerdict {
     pbo: probability,
     maxDrawdown: drawdown,
     returnToMaxDrawdown: returnToMaxDrawdown(selected.equity),
+    profitFactor: selected.tradePnl === undefined ? null : profitFactor(selected.tradePnl),
     capitalCeilingGbp: capitalCeilingGbp(input.lossCapGbp, drawdown),
     regimeSplit: regimes,
     oneBarDelay: delay,

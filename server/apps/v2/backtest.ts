@@ -13,6 +13,7 @@ import {
   type BacktestVerdict,
   type BookSeries,
   backtestVerdict,
+  type TrialSeries,
   walkForwardRanges,
 } from './backtest-verdict.js';
 import type { CanaryLog } from './canary-log.js';
@@ -106,7 +107,7 @@ export interface BacktestInput {
 
 export interface BacktestSimulation {
   readonly dates: readonly string[];
-  readonly trials: readonly (BookSeries & { readonly trial: number; readonly sleeve: string })[];
+  readonly trials: readonly (TrialSeries & { readonly sleeve: string })[];
   readonly benchmark: BookSeries;
   readonly trialsShare: number;
 }

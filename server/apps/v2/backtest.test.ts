@@ -923,7 +923,11 @@ describe('runBacktest', { timeout: 120_000 }, () => {
     expect(new Set(tail).size).toBe(1);
     const pnl = result.trials[0]?.tradePnl as readonly number[];
     expect(pnl.length).toBeGreaterThan(1);
-    expect(pnl.reduce((sum, value) => sum + value, 0)).toBeCloseTo((equity.at(-1) as number) - (equity[0] as number), 6);  });
+    expect(pnl.reduce((sum, value) => sum + value, 0)).toBeCloseTo(
+      (equity.at(-1) as number) - (equity[0] as number),
+      6,
+    );
+  });
 
   it('#1911: closes a held name at its last close on the first session its bars are over 5 days stale, in the trial and the benchmark', async () => {
     const lastBarDate = DATES[70] as string;

@@ -103,6 +103,29 @@ describe('backtestVerdict', () => {
     expect(verdict.benchmarkReturnToMaxDrawdown).toBeCloseTo(byHand(given.benchmark), 9);
   });
 
+  it('reports profit factor from settled trades for each trial and the selection, none when unmeasured (#2195)', () => {
+    const [nine, ten] = input().trials;
+    if (nine === undefined || ten === undefined) throw new Error('fixture changed');
+    const verdict = backtestVerdict(
+      input({ trials: [{ ...nine, tradePnl: [40, -10, 20, -5] }, { ...ten, tradePnl: [7] }] }),
+    );
+    expect(
+      verdict.trials.map(({ profitFactor, settledTrades }) => ({ profitFactor, settledTrades })),
+    ).toEqual([
+      { profitFactor: 60 / 15, settledTrades: 4 },
+      { profitFactor: null, settledTrades: 1 },
+    ]);
+    expect(verdict.selectedTrial).toBe(9);
+    expect(verdict.profitFactor).toBe(4);
+
+    const unmeasured = backtestVerdict(input());
+    expect(unmeasured.profitFactor).toBeNull();
+    expect(unmeasured.trials.map((trial) => trial.settledTrades)).toEqual([null, null]);
+    const { profitFactor: _pf, trials: _t, ...rest } = verdict;
+    const { profitFactor: _upf, trials: _ut, ...unmeasuredRest } = unmeasured;
+    expect(rest).toEqual(unmeasuredRest);
+  });
+
   it('judges the delayed run by the haircut walk-forward test against the same benchmark days', () => {
     const delayed = [book(noisy(LENGTH, 0.003, 0.002, 0.4)), book(noisy(LENGTH, 0, 0.01, 1.4))];
     const verdict = backtestVerdict(input({ delayed }));
