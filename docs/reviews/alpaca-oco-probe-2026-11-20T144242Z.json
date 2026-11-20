@@ -1,8 +1,6 @@
 {
   "probe": "alpaca-oco-probe",
-  "refs": [
-    "#2090"
-  ],
+  "refs": ["#2090"],
   "baseUrl": "https://paper-api.alpaca.markets",
   "symbol": "SCHD",
   "entryClientOrderId": "oco-probe-1795185761706",
@@ -937,10 +935,7 @@
     }
   ],
   "cleanup": {
-    "cancelled": [
-      "7f3e300f-262b-42b1-8385-09579df94885",
-      "f8c741c9-f61c-4da1-bf5a-859686382a7c"
-    ],
+    "cancelled": ["7f3e300f-262b-42b1-8385-09579df94885", "f8c741c9-f61c-4da1-bf5a-859686382a7c"],
     "errors": [],
     "flattenOrder": {
       "id": "6a0c7c7c-f927-4c00-8a3d-286db07d526a",
