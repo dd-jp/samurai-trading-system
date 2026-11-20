@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
-import { main } from './lesson-buckets-cli.js';
+import { main, nousLessonClient } from './lesson-buckets-cli.js';
 
 const dirs: string[] = [];
 
@@ -46,5 +46,26 @@ describe('lesson-buckets-cli', () => {
     const code = await main(['2026-11-21', emptyStoreFile()], (line) => lines.push(line), TODAY);
     expect(code).toBe(1);
     expect(lines[0]).toContain('after today');
+  });
+
+  it('distils on request, and a ledger with no bucket calls no model', async () => {
+    const lines: string[] = [];
+    const never = () => {
+      throw new Error('the model must not be called');
+    };
+    const code = await main(
+      ['2026-11-20', emptyStoreFile(), '--distil'],
+      (line) => lines.push(line),
+      TODAY,
+      never,
+    );
+    expect(code).toBe(0);
+    expect(lines[0]?.split('\n')[1]).toBe('lessons: 0 (none), 0 written');
+  });
+
+  it('needs the Nous wiring in the environment to call the model', () => {
+    const db = migratedMemoryStore();
+    expect(() => nousLessonClient({})(db)).toThrow(/--distil needs NOUS_BASE_URL/);
+    db.close();
   });
 });

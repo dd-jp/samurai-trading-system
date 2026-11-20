@@ -18,6 +18,8 @@ import {
 
 const LESSONS_SCHEMA_VERSION = 1;
 const MAX_CLAIM_CHARS = 280;
+// G11 ruling 2 (#1717): the first run at 25 closed debate trades, then every further 25
+const LESSON_CADENCE_TRADES = 25;
 const LLM_CALL_TIMEOUT_MS = 60_000;
 const LLM_RETRY = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 } as const;
 
@@ -43,7 +45,7 @@ export interface Lesson {
 export interface LessonDistil {
   readonly lessons: readonly Lesson[];
   readonly written: number;
-  readonly source: 'none' | 'model' | 'replay';
+  readonly source: 'none' | 'not_due' | 'model' | 'replay';
 }
 
 export interface LessonDistilDeps {
@@ -201,6 +203,32 @@ function answeredCalls(db: StoreHandle, traceId: string): LoggedCall[] {
     .all(traceId) as LoggedCall[];
 }
 
+function closedTradesAt(db: StoreHandle, asOf: string, bookId: string): number {
+  const row = db
+    .prepare(`SELECT n FROM v2_lesson_buckets WHERE as_of = ? AND book_id = ? AND bucket = 'all'`)
+    .get(asOf, bookId) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
+function lastDistilledAsOf(db: StoreHandle, asOf: string, bookId: string): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT MAX(l.as_of) AS as_of FROM llm_call_log c
+        JOIN v2_lesson_buckets l ON c.trace_id = 'v2-lessons-' || l.as_of || '-' || l.book_id
+        WHERE l.book_id = ? AND l.as_of < ? AND c.response IS NOT NULL AND c.error_class IS NULL`,
+    )
+    .get(bookId, asOf) as { as_of: string | null };
+  return row.as_of ?? undefined;
+}
+
+function due(db: StoreHandle, asOf: string, bookId: string): boolean {
+  const cadence = (asOfDate: string | undefined) =>
+    asOfDate === undefined
+      ? 0
+      : Math.floor(closedTradesAt(db, asOfDate, bookId) / LESSON_CADENCE_TRADES);
+  return cadence(asOf) > cadence(lastDistilledAsOf(db, asOf, bookId));
+}
+
 function record(db: StoreHandle, lessons: readonly Lesson[]): void {
   const insert = db.prepare(
     `INSERT INTO v2_lessons (${COLUMNS.join(', ')})
@@ -243,8 +271,10 @@ export async function distilLessons(
     const lessons = rowsOf(await draftLessons(replay, buckets, traceId), buckets, traceId);
     return { lessons, written: settleAgainstStored(deps.db, lessons, stored), source: 'replay' };
   }
+  if (!due(deps.db, asOf, bookId)) return { lessons: [], written: 0, source: 'not_due' };
   const cap = deps.spendCap.check();
-  if (!cap.admitted) throw new Error(`LLM spend cap reached: ${cap.spent_usd} of ${cap.budget_usd} USD`);
+  if (!cap.admitted)
+    throw new Error(`LLM spend cap reached: ${cap.spent_usd} of ${cap.budget_usd} USD`);
   const lessons = rowsOf(await draftLessons(deps.live(), buckets, traceId), buckets, traceId);
   record(deps.db, lessons);
   return { lessons, written: lessons.length, source: 'model' };

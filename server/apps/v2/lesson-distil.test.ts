@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   type AnthropicMessageRequest,
   type AnthropicMessagesClient,
-  SqliteLlmSpendStore,
   type SpendCap,
+  SqliteLlmSpendStore,
   UNCAPPED_SPEND,
 } from '../../shared/debate/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
@@ -21,9 +21,9 @@ import { LESSON_PIN } from './signal/index.js';
 
 const AS_OF = '2026-11-20';
 
-function bucketRow(bucket: string, n: number) {
+function bucketRow(bucket: string, n: number, asOf = AS_OF) {
   return {
-    as_of: AS_OF,
+    as_of: asOf,
     bucket,
     book_id: LESSON_BOOK_ID,
     n,
@@ -40,8 +40,7 @@ function bucketRow(bucket: string, n: number) {
   };
 }
 
-function store(buckets = ['all', 'direction=short']): StoreHandle {
-  const db = migratedMemoryStore();
+function addBuckets(db: StoreHandle, asOf: string, closedTrades: number): void {
   const insert = db.prepare(
     `INSERT INTO v2_lesson_buckets (as_of, bucket, book_id, n, mean_excess, hit_rate, ci_low,
         ci_high, baseline_book_id, baseline_n, baseline_mean_excess, evidence, inputs_hash,
@@ -50,7 +49,13 @@ function store(buckets = ['all', 'direction=short']): StoreHandle {
         @baseline_book_id, @baseline_n, @baseline_mean_excess, @evidence, @inputs_hash,
         @schema_version)`,
   );
-  for (const bucket of buckets) insert.run(bucketRow(bucket, 13));
+  insert.run(bucketRow('all', closedTrades, asOf));
+  insert.run(bucketRow('direction=short', 13, asOf));
+}
+
+function store(closedTrades = 25): StoreHandle {
+  const db = migratedMemoryStore();
+  if (closedTrades > 0) addBuckets(db, AS_OF, closedTrades);
   return db;
 }
 
@@ -72,7 +77,11 @@ class AnsweringTransport implements AnthropicMessagesClient {
   }
 }
 
-function deps(db: StoreHandle, transport: AnthropicMessagesClient, spendCap: SpendCap = UNCAPPED_SPEND) {
+function deps(
+  db: StoreHandle,
+  transport: AnthropicMessagesClient,
+  spendCap: SpendCap = UNCAPPED_SPEND,
+) {
   return {
     db,
     spendCap,
@@ -90,7 +99,7 @@ const NEVER = {
 
 describe('distilLessons', () => {
   it('calls nothing when the as_of has no qualifying bucket', async () => {
-    const db = store([]);
+    const db = store(0);
     expect(await distilLessons({ ...NEVER, db }, AS_OF)).toEqual({
       lessons: [],
       written: 0,
@@ -145,7 +154,7 @@ describe('distilLessons', () => {
   it('refuses a stored run that the logged answer no longer reproduces', async () => {
     const db = store();
     await distilLessons(deps(db, new AnsweringTransport()), AS_OF);
-    db.prepare("UPDATE llm_call_log SET response = ? WHERE response IS NOT NULL").run(
+    db.prepare('UPDATE llm_call_log SET response = ? WHERE response IS NOT NULL').run(
       JSON.stringify({ lessons: [{ bucket: 'all', claim: 'Something else.' }] }),
     );
     await expect(distilLessons({ ...NEVER, db }, AS_OF)).rejects.toThrow(
@@ -156,11 +165,33 @@ describe('distilLessons', () => {
   it('calls again after a logged failure, which settles nothing', async () => {
     const db = store();
     db.prepare(
-      `INSERT INTO llm_call_log (trace_id, model, prompt, response, error_class, error_message)
-        VALUES (?, ?, 'p', NULL, 'LlmTimeoutError', 'timed out')`,
+      `INSERT INTO llm_call_log (trace_id, stage, model, timestamp, prompt, response, error_class,
+          error_message)
+        VALUES (?, 'lessons', ?, 't', 'p', NULL, 'LlmTimeoutError', 'timed out')`,
     ).run(lessonTraceId(AS_OF, LESSON_BOOK_ID), LESSON_PIN.priced);
     const transport = new AnsweringTransport();
     expect(await distilLessons(deps(db, transport), AS_OF)).toMatchObject({ source: 'model' });
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  it('waits for 25 closed trades before the first call', async () => {
+    const db = store(24);
+    expect(await distilLessons({ ...NEVER, db }, AS_OF)).toMatchObject({ source: 'not_due' });
+  });
+
+  it('calls again only once a further 25 trades have closed since the last answered call', async () => {
+    const db = store(25);
+    await distilLessons(deps(db, new AnsweringTransport()), AS_OF);
+    addBuckets(db, '2026-11-27', 49);
+    expect(await distilLessons({ ...NEVER, db }, '2026-11-27')).toMatchObject({
+      source: 'not_due',
+    });
+    addBuckets(db, '2026-12-04', 50);
+    const transport = new AnsweringTransport();
+    expect(await distilLessons(deps(db, transport), '2026-12-04')).toMatchObject({
+      source: 'model',
+      written: 1,
+    });
     expect(transport.requests).toHaveLength(1);
   });
 
@@ -181,7 +212,9 @@ describe('parseLessons', () => {
   const buckets = [bucketRow('all', 25), bucketRow('direction=short', 13)];
 
   it('reads a fenced JSON answer and an empty list', () => {
-    expect(parseLessons('```json\n{"lessons":[{"bucket":"all","claim":"c"}]}\n```', buckets)).toEqual({
+    expect(
+      parseLessons('```json\n{"lessons":[{"bucket":"all","claim":"c"}]}\n```', buckets),
+    ).toEqual({
       valid: true,
       data: [{ bucket: 'all', claim: 'c' }],
     });
@@ -211,7 +244,9 @@ describe('formatLessonDistil', () => {
   it('lists each claim under its bucket', () => {
     expect(
       formatLessonDistil({
-        lessons: [{ ...bucketRow('all', 1), claim: 'c', model: 'm', prompt_hash: 'p', trace_id: 't' }],
+        lessons: [
+          { ...bucketRow('all', 1), claim: 'c', model: 'm', prompt_hash: 'p', trace_id: 't' },
+        ],
         written: 1,
         source: 'model',
       }),
