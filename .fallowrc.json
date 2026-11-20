@@ -22,21 +22,8 @@
       { "from": "server", "allow": ["contracts"] }
     ]
   },
-  "ignorePatterns": [
-    "dist",
-    "coverage",
-    "docs/prototypes",
-    "server/tools/__fixtures__",
-    "docs/research/**/*.mjs",
-    "docs/research/**/*.mts"
-  ],
-  "ignoreDependencies": [
-    "@fontsource/chakra-petch",
-    "@fontsource/ibm-plex-mono",
-    "@fontsource/ibm-plex-sans",
-    "react",
-    "react-dom"
-  ],
+  "ignorePatterns": ["docs/research/**/*.mjs", "docs/research/**/*.mts"],
+  "ignoreDependencies": [],
   "usedClassMembers": [
     "shouldAlert",
     "anchorEquity",
