@@ -188,7 +188,7 @@ export function computeLessonBuckets(
   return { closedTrades: own.get('all')?.length ?? 0, buckets };
 }
 
-function storedBuckets(db: StoreHandle, asOf: string, bookId: string): LessonBucket[] {
+export function storedLessonBuckets(db: StoreHandle, asOf: string, bookId: string): LessonBucket[] {
   return db
     .prepare(
       `SELECT ${COLUMNS.join(', ')} FROM v2_lesson_buckets WHERE as_of = ? AND book_id = ?
@@ -210,7 +210,7 @@ export function writeLessonBuckets(
   // A later as_of would read rows that have not settled yet, so a rerun could not reproduce it
   if (asOf > today) throw new Error(`as_of ${asOf} is after today ${today}`);
   const { closedTrades, buckets } = computeLessonBuckets(db, asOf, bookId);
-  const stored = storedBuckets(db, asOf, bookId);
+  const stored = storedLessonBuckets(db, asOf, bookId);
   let written = 0;
   if (stored.length === 0) {
     const insert = db.prepare(

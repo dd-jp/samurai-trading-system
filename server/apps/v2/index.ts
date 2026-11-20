@@ -350,7 +350,7 @@ export function newsWiringFor(options: V2RootOptions, db: StoreHandle, logger: L
   return { news, ukNews };
 }
 
-const STDERR_LOGGER: Logger = {
+export const STDERR_LOGGER: Logger = {
   log: (entry) => {
     process.stderr.write(`${JSON.stringify(entry)}\n`);
   },

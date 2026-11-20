@@ -102,6 +102,7 @@ export const STAGE_OWNED_TABLES: Record<StoreOwnerStage, readonly string[]> = {
     'v2_decision_outcomes',
     'v2_exposure_reports',
     'v2_lesson_buckets',
+    'v2_lessons',
   ],
   verdict: ['verdict_log'],
 };
