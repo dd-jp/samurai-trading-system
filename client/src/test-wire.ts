@@ -153,6 +153,7 @@ export function evidence(overrides: Partial<EvidenceWire> = {}): EvidenceWire {
     contract_version: V2_CONTRACT_VERSION,
     generated_at: '2026-10-06T21:40:00.000Z',
     closed_trade_ledger: { status: 'empty' },
+    exposure: { status: 'empty' },
     performance: {
       status: 'fed',
       books: [
