@@ -2619,6 +2619,57 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     ]);
   });
 
+  function venueHolding(deps: CycleDeps, qty: number): BrokerBookReader {
+    return {
+      read: async (venue) => {
+        const book = await deps.brokerBooks.read(venue);
+        if (venue !== 'alpaca') return book;
+        return {
+          ...book,
+          positions: [{ instrument: 'AAPL', qty }],
+          openOrders: [
+            ...book.openOrders.filter((order) => order.instrument !== 'AAPL'),
+            {
+              clientOrderId: 'stop-AAPL',
+              instrument: 'AAPL',
+              protects: 'long',
+              qty,
+              stopPrice: null,
+            },
+          ],
+        };
+      },
+    };
+  }
+
+  it.each([
+    [6, []],
+    [10, ['position_qty']],
+  ])(
+    '#1938: after cumulative reports of 4 then 6, a venue holding %i reconciles to %j',
+    async (venueQty, kinds) => {
+      const { alpaca, deps } = await entered();
+      alpaca.cumulative(ENTRY, 'entry', 4, 20);
+      await runCycle(deps, '2026-09-28');
+      alpaca.cumulative(ENTRY, 'entry', 6, 20.2);
+      await runCycle(deps, '2026-09-29');
+      const log = vi.fn();
+      const report = await runCycle(
+        { ...deps, brokerBooks: venueHolding(deps, venueQty), logger: { log } },
+        '2026-09-30',
+      );
+      const mismatches = log.mock.calls
+        .map(([entry]) => entry as LogEntry)
+        .filter((entry) => entry.event === 'v2_reconcile_mismatch');
+      expect(
+        mismatches.map((entry) => kinds.find((kind) => entry.message?.includes(kind))),
+      ).toEqual(kinds);
+      expect(report.refusals.some((refusal) => refusal.includes('reconcile'))).toBe(
+        kinds.length > 0,
+      );
+    },
+  );
+
   it('kill line: a partial then cancel keeps the partial quantity however often it is re-reported', async () => {
     const { alpaca, deps } = await entered();
     alpaca.cumulative(ENTRY, 'entry', 4, 20);
@@ -2756,6 +2807,29 @@ describe('#1873: Alpaca cumulative fills book as increments per broker order', (
     expect(deps.journal.orderFor('v2-debate-primary-2026-09-28-AAPL-exit')?.payload).toMatchObject({
       reason: 'manual_halt',
     });
+    expect(alpaca.replaces).toEqual([]);
+  });
+
+  it('#1938 kill line: a flatten pass cancels the remainder of a part fill the sweep already booked and flattens it', async () => {
+    class BookedBeforeFlatten extends VenuePartFill {
+      override async submitBracket(order: NativeBracketRequest): Promise<BrokerAck> {
+        const ack = await super.submitBracket(order);
+        if (order.client_order_id === ENTRY) this.cumulative(ENTRY, 'entry', 4, 20);
+        return ack;
+      }
+    }
+    const alpaca = new BookedBeforeFlatten();
+    const deps = harness([longAapl], false, alpaca);
+    await runCycle(deps, '2026-09-25');
+    deps.setDecisions([]);
+    expect(heldQty(deps)).toBe(4);
+    expect(deps.journal.restingEntries('debate/primary')).toEqual([]);
+    alpaca.calls.splice(0);
+    deps.setControl('halt');
+    await runFlattenPass(deps, '2026-09-28');
+    expect(alpaca.calls.filter((call) => call !== 'sweep')).toEqual([`cancel ${ENTRY}`, 'exit 4']);
+    expect(deps.journal.orderFor(ENTRY)?.outcome).toBe('cancelled');
+    expect(deps.journal.partFilledEntries('debate/primary')).toEqual([]);
     expect(alpaca.replaces).toEqual([]);
   });
 
