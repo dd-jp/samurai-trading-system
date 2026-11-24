@@ -62,7 +62,7 @@ import {
 import { selectUniverse } from './universe.js';
 
 const DEBATE_MAX_ROUNDS = 1;
-export const LESSONS_TRACE_SUFFIX = '-lessons';
+const LESSONS_TRACE_SUFFIX = '-lessons';
 export const SPEND_CAP_REASON_PREFIX = 'llm_spend_cap:';
 export const SMA_LONG_WINDOW = 200;
 const TRAILING_SHORT_DAYS = 20;

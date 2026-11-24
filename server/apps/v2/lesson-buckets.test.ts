@@ -7,10 +7,10 @@ import {
   computeLessonBuckets,
   formatLessonRun,
   LESSON_BASELINE_BOOK_ID,
-  LESSON_BOOK_ID,
   LESSON_MIN_BUCKET_N,
   writeLessonBuckets,
 } from './lesson-buckets.js';
+import { LESSON_BOOK_ID } from './lesson-recipe.js';
 
 interface Trade {
   readonly book?: string;

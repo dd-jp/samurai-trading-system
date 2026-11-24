@@ -41,7 +41,7 @@ LLM-debate entry at a **swing** horizon: one debate per screened name per day, p
 A structured disagreement between three debaters (one model per provider: Sonnet 5.5, DeepSeek, GPT) settled by a judge (Opus 5.5), producing a directional conviction for one name on one day. Roles rotate across providers daily so a stance is not a provider's bias. Only market data and news leave the system — never account data or keys.
 
 **Shadow book**
-A paper book that runs the same sleeve with one input or rule removed, so the input's value is measured rather than assumed: no-macro-gate, no-sentiment, no-social, large-cap-only (debate). Each shadow comparison is a counted **trial**.
+A paper book that runs the same sleeve with one input or rule removed, so the input's value is measured rather than assumed: no-macro-gate, no-sentiment, no-social, large-cap-only (debate). The debate's `lessons` book is the one shadow that adds an input instead: the judge also reads stored lessons. Each shadow comparison is a counted **trial**.
 
 **Arm 2**
 The debate sleeve's matched control: the same names, the same exit rule, the same stop, with entry by indicator alone and no LLM anywhere in the path. The debate sleeve exists only if it beats arm 2 forward, on paper: at least 100 closed trades and a one-sided test at 95%.

@@ -46,6 +46,7 @@ import {
   budgetChanges,
   type CycleDeps,
   calendarDaysBetween,
+  lessonsApplied,
   runCycle,
   runEntryPass,
   runFlattenPass,
@@ -1184,6 +1185,38 @@ describe('runCycle', () => {
       veto: 'x',
     } as const;
     expect(vetoApplied(primary, skipped)).toBe(skipped);
+  });
+
+  it('trades the lessons verdict in the lessons book only, and the shared one where it has none (#2148)', async () => {
+    const lessons = {
+      venue: longAapl.venue,
+      direction: 'neutral',
+      confidence: 0.5,
+      action: 'none',
+      reason: 'judge neutral',
+      stop_price: undefined,
+      inputs_hash: 'lessons-hash',
+      payload: { lessons_as_of: '2026-09-20', lessons: ['all: x'] },
+    } as const;
+    const deps = harness([{ ...longAapl, lessons }], true, undefined, [2026], {
+      ...TEST_SPEC,
+      books: [
+        { variant: 'primary', instantiated: true },
+        { variant: 'lessons', instantiated: true },
+      ],
+    });
+    await runCycle(deps, '2026-09-25');
+    expect(orders(deps, 'debate/lessons')).toEqual([]);
+    expect(orders(deps, 'debate/primary')).not.toEqual([]);
+    const book = (variant: 'primary' | 'lessons') =>
+      ({ id: `debate/${variant}`, sleeve: 'debate', variant, instantiated: true }) as const;
+    expect(lessonsApplied(book('lessons'), { ...longAapl, lessons })).toEqual({
+      ...longAapl,
+      ...lessons,
+    });
+    expect(lessonsApplied(book('lessons'), longAapl)).toBe(longAapl);
+    const shared = { ...longAapl, lessons };
+    expect(lessonsApplied(book('primary'), shared)).toBe(shared);
   });
 
   it('gives a sleeve below its minimum capital no books and never asks it for a universe or decisions', async () => {

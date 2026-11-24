@@ -11,6 +11,7 @@ import type {
   AnthropicMessagesClient,
 } from '../../shared/debate/index.js';
 import {
+  LESSONS_BLOCK_HEADER,
   LlmProviderError,
   LlmRateLimitError,
   MAX_CAPTURED_PROMPT_CHARS,
@@ -24,6 +25,7 @@ import type { NewsSource, VenueSessionGate } from './data/index.js';
 import { AlpacaNewsSource, MarketauxNewsSource, SqliteNewsLedger } from './data/index.js';
 import { composeV2Root } from './index.js';
 import type { InputDigest } from './input-digest.js';
+import { LESSON_BOOK_ID } from './lesson-recipe.js';
 import {
   compareDecision,
   type Divergence,
@@ -31,6 +33,7 @@ import {
   formatReplay,
   type JournalledDecision,
   journalledCfdEntryRefusal,
+  journalledLessonsAsOf,
   journalledLseRefusal,
   journalledSplitBlocks,
   journalledUkStockCfdRefusal,
@@ -1470,5 +1473,86 @@ describe('main redaction', () => {
     expect(printed).not.toContain(secret.slice(0, 8));
     expect(printed).not.toContain(secret.slice(-8));
     expect(printed).toContain('differs at offset 81\n  replayed: "replayed"\n  logged:   "logged"');
+  });
+});
+
+describe('replay of the lessons book (#2148)', () => {
+  const EARLIER_RUN = dateAt(250);
+
+  function addLesson(db: StoreHandle, asOf: string, claim: string): void {
+    db.prepare(
+      `INSERT INTO v2_lesson_buckets (as_of, bucket, book_id, n, mean_excess, hit_rate, ci_low,
+          ci_high, baseline_book_id, baseline_n, baseline_mean_excess, evidence, inputs_hash,
+          schema_version)
+        VALUES (?, 'direction=long', ?, 25, -0.2, 0.4, -0.3, -0.1, 'arm2/technical-only', 25, 0,
+          '[]', 'h', 1)`,
+    ).run(asOf, LESSON_BOOK_ID);
+    db.prepare(
+      `INSERT INTO v2_lessons (as_of, book_id, bucket, claim, model, prompt_hash, inputs_hash,
+          trace_id, schema_version)
+        VALUES (?, ?, 'direction=long', ?, 'm', 'p', 'h', 't', 1)`,
+    ).run(asOf, LESSON_BOOK_ID, claim);
+  }
+
+  const lessonsAnswer = (request: AnthropicMessageRequest): string =>
+    (request.messages[0]?.content ?? '').includes(LESSONS_BLOCK_HEADER)
+      ? '{"stance":"neutral","rationale":"longs lagged","converged":true}'
+      : answer(request);
+
+  let lessoned: ReplayCliOptions;
+
+  beforeAll(async () => {
+    lessoned = await seedDay(
+      'lessons',
+      (pin) => new ScriptedTransport(pin, lessonsAnswer),
+      FIXTURE_NEWS,
+      (seed) => addLesson(seed, EARLIER_RUN, 'longs lagged the index'),
+    );
+  });
+
+  it('journals the re-judged verdict on the lessons book only', () => {
+    const db = new BetterSqlite3(lessoned.storePath, { readonly: true });
+    const rows = db
+      .prepare(
+        `SELECT book_id, action, json_extract(payload, '$.lessons_as_of') AS lessons_as_of
+           FROM v2_decisions WHERE instrument = 'UP' AND book_id LIKE 'debate/%' ORDER BY book_id`,
+      )
+      .all();
+    const prompts = db
+      .prepare(`SELECT prompt FROM llm_call_log WHERE trace_id = 'v2-${TRADING_DATE}-UP-lessons'`)
+      .all() as { prompt: string }[];
+    db.close();
+    expect(rows).toEqual([
+      { book_id: 'debate/lessons', action: 'none', lessons_as_of: EARLIER_RUN },
+      { book_id: 'debate/no-macro-gate', action: 'enter_long', lessons_as_of: null },
+      { book_id: 'debate/primary', action: 'enter_long', lessons_as_of: null },
+    ]);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.prompt).toContain('direction=long: longs lagged the index');
+  });
+
+  it('replays identical, on the journalled lesson run even after a newer one lands', async () => {
+    expect(await replayFromFiles(lessoned)).toMatchObject({ calls: 4, divergences: [] });
+    const storePath = join(directory, 'lessons-newer-run.sqlite');
+    copyFileSync(lessoned.storePath, storePath);
+    const db = openSharedStore(storePath);
+    addLesson(db, dateAt(259), 'a run written after the cycle');
+    db.close();
+    expect(await replayFromFiles({ ...lessoned, storePath })).toMatchObject({ divergences: [] });
+  });
+});
+
+describe('journalledLessonsAsOf', () => {
+  const row = (variant: string, instrument: string, payload: Record<string, unknown>) =>
+    ({ variant, instrument, payload: JSON.stringify(payload) }) as JournalledDecision;
+
+  it('pins each name to the run its lessons-book row was judged with', () => {
+    expect(
+      journalledLessonsAsOf([
+        row('lessons', 'UP', { lessons_as_of: '2026-11-20' }),
+        row('lessons', 'DOWN', {}),
+        row('primary', 'FLAT', { lessons_as_of: '2026-11-20' }),
+      ]),
+    ).toEqual(new Map([['UP', '2026-11-20']]));
   });
 });

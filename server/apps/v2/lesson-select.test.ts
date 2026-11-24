@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
-import { LESSON_BOOK_ID } from './lesson-buckets.js';
+import { LESSON_BOOK_ID, LESSONS_PER_PROMPT } from './lesson-recipe.js';
 import {
-  LESSONS_PER_PROMPT,
   latestLessonSource,
   lessonTags,
   pickLessons,

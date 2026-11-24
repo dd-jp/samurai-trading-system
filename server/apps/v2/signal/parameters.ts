@@ -6,6 +6,7 @@ import type {
   CfdSpreadModel,
   SleeveSpec,
 } from '../../../../contracts/index.js';
+import { digest } from '../../../shared/index.js';
 import {
   SAXO_CFD_COMMISSION,
   SAXO_CFD_FINANCING,
@@ -13,11 +14,13 @@ import {
   saxoCfdBorrow,
   type UkStockScreens,
 } from '../data/index.js';
+import { LESSONS_RECIPE_HASH } from '../lesson-recipe.js';
 import type { VolTargetSizing } from '../risk/index.js';
 import {
   ALL_PINS,
   DATED_JUDGE_PIN,
   JUDGE_PIN,
+  LESSON_PIN,
   type ModelPin,
   PRE_DIGEST_ALL_PINS,
   pinDigest,
@@ -325,6 +328,12 @@ function digestOf(
 ): string | undefined {
   const pins = pinsById[sleeveId];
   if (pins === undefined) return undefined;
+  if (variant === 'lessons') {
+    return digest({ pins: pinDigest([...pins, LESSON_PIN]), recipe: LESSONS_RECIPE_HASH }).slice(
+      0,
+      16,
+    );
+  }
   return pinDigest(variant === 'no-veto' ? [] : pins);
 }
 

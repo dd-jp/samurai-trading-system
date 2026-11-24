@@ -1,7 +1,5 @@
 import type { StoreHandle } from '../../shared/store/index.js';
-import { LESSON_BOOK_ID, newsBand } from './lesson-buckets.js';
-
-export const LESSONS_PER_PROMPT = 3;
+import { LESSON_BOOK_ID, LESSONS_PER_PROMPT, newsBand } from './lesson-recipe.js';
 
 export interface LessonCandidate {
   readonly bucket: string;

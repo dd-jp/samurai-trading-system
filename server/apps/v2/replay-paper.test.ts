@@ -15,7 +15,7 @@ import { composeV2Root } from './index.js';
 import { type ReplayCliOptions, replayFromFiles } from './replay-cli.js';
 import { CapitalConfigStore } from './risk/index.js';
 import type { ModelPin } from './signal/index.js';
-import { ScriptedTransport } from './signal/index.js';
+import { bookPinDigest, ScriptedTransport } from './signal/index.js';
 import { ALL_PINS, pinDigest } from './signal/models.js';
 
 const ORIGIN = Date.UTC(2026, 0, 1);
@@ -359,7 +359,7 @@ describe('replay of a paper store against journalled Alpaca fills', () => {
       ),
     ).toEqual([
       { book_id: 'arm2/technical-only', pin_digest: pinDigest([]) },
-      { book_id: 'debate/lessons', pin_digest: pinDigest(ALL_PINS) },
+      { book_id: 'debate/lessons', pin_digest: bookPinDigest('debate', 'lessons') },
       { book_id: 'debate/no-macro-gate', pin_digest: pinDigest(ALL_PINS) },
       { book_id: 'debate/primary', pin_digest: pinDigest(ALL_PINS) },
     ]);

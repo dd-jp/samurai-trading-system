@@ -7,7 +7,13 @@ import {
 } from '../../shared/debate/index.js';
 import { hashPromptTemplate } from '../../shared/llm/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
-import { LESSON_BOOK_ID, type LessonBucket, storedLessonBuckets } from './lesson-buckets.js';
+import { type LessonBucket, storedLessonBuckets } from './lesson-buckets.js';
+import {
+  LESSON_BOOK_ID,
+  LESSON_PROMPT_TEMPLATE,
+  LESSONS_SCHEMA_VERSION,
+  MAX_CLAIM_CHARS,
+} from './lesson-recipe.js';
 import {
   LESSON_PIN,
   LESSONS_MAX_TOKENS,
@@ -16,19 +22,10 @@ import {
   ReplayTransport,
 } from './signal/index.js';
 
-const LESSONS_SCHEMA_VERSION = 1;
-const MAX_CLAIM_CHARS = 280;
 // G11 ruling 2 (#1717): the first run at 25 closed debate trades, then every further 25
 const LESSON_CADENCE_TRADES = 25;
 const LLM_CALL_TIMEOUT_MS = 60_000;
 const LLM_RETRY = { maxAttempts: 2, baseDelayMs: 500, maxDelayMs: 2_000 } as const;
-
-export const LESSON_PROMPT_TEMPLATE = `You write short lessons for a daily swing-trading debate from statistics over its settled trades. Each bucket groups the trades that share one tag. mean_excess is the mean return against the venue's index, net of the trade's direction; ci is a bootstrap 95% interval on that mean; hit_rate is the share of trades that beat the index; arm2_mean_excess is the no-LLM control's mean on the same tag, or on all its trades for a tag it does not have.
-
-Write at most one lesson per bucket, and only for a bucket whose interval excludes zero or whose mean differs clearly from arm 2's. Each claim is one plain sentence of at most ${MAX_CLAIM_CHARS} characters that states only what the numbers show and quotes no number that is not in its bucket. Answer with JSON only, in the form {"lessons":[{"bucket":"<the bucket exactly as given>","claim":"<sentence>"}]}. An empty list is a valid answer.
-
-Buckets:
-`;
 
 export interface Lesson {
   readonly as_of: string;

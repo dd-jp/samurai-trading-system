@@ -8,15 +8,14 @@ import {
 } from '../../shared/debate/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
-import { LESSON_BOOK_ID } from './lesson-buckets.js';
 import {
   distilLessons,
   formatLessonDistil,
-  LESSON_PROMPT_TEMPLATE,
   lessonClient,
   lessonTraceId,
   parseLessons,
 } from './lesson-distil.js';
+import { LESSON_BOOK_ID, LESSON_PROMPT_TEMPLATE } from './lesson-recipe.js';
 import { LESSON_PIN } from './signal/index.js';
 
 const AS_OF = '2026-11-20';
