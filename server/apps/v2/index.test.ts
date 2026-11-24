@@ -635,8 +635,8 @@ describe('composeV2Root', () => {
       expect(root.registry.ids()).toEqual(['debate', 'arm2', 'signals']);
       expect(root.books.ids()).toEqual([
         'debate/primary',
-        'debate/no-macro-gate',
         'debate/lessons',
+        'debate/no-macro-gate',
         'arm2/technical-only',
         'signals/primary',
         'signals/no-veto',

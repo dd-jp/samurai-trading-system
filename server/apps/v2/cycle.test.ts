@@ -7724,6 +7724,36 @@ describe('runCycle with per-venue sessions (#1933)', () => {
       .map((order) => order.client_order_id.split('-').at(-1));
   }
 
+  it('sits out the lessons book on its own verdict, not the shared one (#2148)', async () => {
+    const skippedAapl: SleeveDecision = { ...longAapl, action: 'skip', reason: 'judge neutral' };
+    const lessons = {
+      venue: longAapl.venue,
+      direction: longAapl.direction,
+      confidence: longAapl.confidence,
+      action: longAapl.action,
+      reason: longAapl.reason,
+      stop_price: longAapl.stop_price,
+      inputs_hash: 'lessons-hash',
+      payload: {},
+    };
+    const deps = {
+      ...harness([{ ...skippedAapl, lessons }], true, undefined, [2026], {
+        ...TEST_SPEC,
+        books: [
+          { variant: 'primary', instantiated: true },
+          { variant: 'lessons', instantiated: true },
+        ],
+      }),
+      clock: new SimulatedClock(new Date('2026-11-26T06:30:00.000Z')),
+      venueSessions: TABLE_VENUE_SESSIONS,
+    };
+    await runCycle(deps, '2026-11-26');
+    expect(sitOuts(deps)).toMatchObject([
+      { parameter: 'venue_closed', book_id: 'debate/lessons', instrument: 'AAPL' },
+    ]);
+    expect(orders(deps, 'debate/lessons')).toEqual([]);
+  });
+
   it('Thanksgiving: US names sit out with venue_closed while LSE names enter', async () => {
     const deps = sessioned([longAapl, longIsf], '2026-11-26T06:30:00.000Z');
     const report = await runCycle(deps, '2026-11-26');

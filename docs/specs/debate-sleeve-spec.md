@@ -127,8 +127,8 @@ Each instantiated book is a paper book seeded at its sleeve's share of the year'
 | Book | Sleeve | Differs from primary by | Status |
 |---|---|---|---|
 | `debate/primary` | debate | — | instantiated |
-| `debate/no-macro-gate` | debate | no half-size on macro days (G16) | instantiated |
 | `debate/lessons` | debate | the judge also reads up to three stored lessons (#2148, doc 66 G11 ruling 8) | instantiated |
+| `debate/no-macro-gate` | debate | no half-size on macro days (G16) | instantiated |
 | `debate/no-sentiment` | debate | sentiment input off (G18) | declared, not instantiated: there is no sentiment input to remove until `G18_SENTIMENT_DEDUP_RULE` is set (#1753) |
 | `debate/no-social` | debate | social input off (G18) | declared, not instantiated: no social input until `G18_SOCIAL_SOURCE` is set (#1753) |
 | `debate/large-cap-only` | debate | small caps excluded (G18) | declared, not instantiated: the pool is large-cap only until `G18_SMALL_CAP_FLOORS` is set (#1753) |

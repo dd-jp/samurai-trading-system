@@ -2758,11 +2758,12 @@ async function tradeSleeveBooks(
 ): Promise<BookSpec[]> {
   const books = deps.books.forSleeve(sleeve.id);
   for (const book of books) {
+    const own = decisions.map((decision) => lessonsApplied(book, decision));
     await cycle.cancelStaleEntries(book);
-    await cycle.exits(book, decisions);
+    await cycle.exits(book, own);
     await cycle.entries(
       book,
-      cycle.withoutSplitBlockedAtStart(book, cycle.withoutSittingOut(book, decisions)),
+      cycle.withoutSplitBlockedAtStart(book, cycle.withoutSittingOut(book, own)),
     );
   }
   return [...books];
