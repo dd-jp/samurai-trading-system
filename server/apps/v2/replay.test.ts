@@ -200,9 +200,9 @@ describe('replayFromFiles', () => {
   it('replays the fixture day to identical decisions and inputs hashes without writing', async () => {
     const before = digestOf(options.storePath);
     const result = await replayFromFiles(options);
-    expect(result.decisions).toBe(3);
+    expect(result.decisions).toBe(4);
     expect(result.calls).toBe(3);
-    expect(result.orders).toBe(3);
+    expect(result.orders).toBe(4);
     expect(result.divergences).toEqual([]);
     expect(digestOf(options.storePath)).toBe(before);
   });
@@ -468,7 +468,7 @@ describe('replay from the US headline journal (#1981)', { timeout: 30_000 }, () 
     expect(prompts.length).toBeGreaterThan(0);
     expect(prompts.every((row) => row.prompt.length >= MAX_CAPTURED_PROMPT_CHARS)).toBe(true);
     const result = await replayFromFiles(capped);
-    expect(result.decisions).toBe(3);
+    expect(result.decisions).toBe(4);
     expect(result.divergences).toEqual([]);
   });
 
@@ -525,7 +525,7 @@ describe('replay from the UK headline journal (#1981)', { timeout: 30_000 }, () 
     expect(prompts.length).toBeGreaterThan(0);
     expect(prompts.every((row) => row.prompt.length >= MAX_CAPTURED_PROMPT_CHARS)).toBe(true);
     const result = await replayFromFiles(capped);
-    expect(result.decisions).toBe(3);
+    expect(result.decisions).toBe(4);
     expect(result.divergences).toEqual([]);
   });
 

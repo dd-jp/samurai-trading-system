@@ -14,7 +14,7 @@ export interface StoredLessons {
   readonly candidates: readonly LessonCandidate[];
 }
 
-export type LessonSource = (tradingDate: string) => StoredLessons | undefined;
+export type LessonSource = (tradingDate: string, instrument: string) => StoredLessons | undefined;
 
 export function lessonTags(venues: readonly string[], headlines: number): ReadonlySet<string> {
   return new Set([
@@ -77,8 +77,11 @@ export function latestLessonSource(db: StoreHandle, bookId = LESSON_BOOK_ID): Le
 // replay reads back the as_of the cycle journalled instead of the latest one in the store
 export function pinnedLessonSource(
   db: StoreHandle,
-  asOf: string | undefined,
+  asOfByInstrument: ReadonlyMap<string, string>,
   bookId = LESSON_BOOK_ID,
 ): LessonSource {
-  return () => (asOf === undefined ? undefined : lessonsAt(db, asOf, bookId));
+  return (_tradingDate, instrument) => {
+    const asOf = asOfByInstrument.get(instrument);
+    return asOf === undefined ? undefined : lessonsAt(db, asOf, bookId);
+  };
 }

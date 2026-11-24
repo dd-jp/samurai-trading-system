@@ -67,6 +67,7 @@ export type {
   JournalledSplit,
   LatestQuote,
   LatestQuoteSource,
+  LessonsVerdict,
   LossBudgetState,
   ManualControl,
   MarketData,

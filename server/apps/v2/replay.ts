@@ -6,11 +6,12 @@ import type {
   SleeveDecision,
   Venue,
 } from '../../../contracts/index.js';
+import { UNCAPPED_SPEND } from '../../shared/debate/index.js';
 import type { Logger } from '../../shared/index.js';
 import { maskCredentials, SimulatedClock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { type CycleComposition, composeCycle } from './compose.js';
-import { runCycle, vetoApplied } from './cycle.js';
+import { bookDecision, runCycle } from './cycle.js';
 import {
   type BarsMarketData,
   type BarsSource,
@@ -32,6 +33,7 @@ import {
   venueRouterFor,
 } from './index.js';
 import { type InputChange, type InputDigest, inputChangesSince } from './input-digest.js';
+import { pinnedLessonSource } from './lesson-select.js';
 import { storeView } from './reconcile.js';
 import {
   type BookDivergence,
@@ -293,7 +295,7 @@ export function compareDecision(
   if (replayed === undefined) {
     return { kind: 'decision_missing', bookId: row.book_id, instrument: row.instrument };
   }
-  const fields = fieldsOf(vetoApplied(bookOf(row), replayed));
+  const fields = fieldsOf(bookDecision(bookOf(row), replayed));
   const journalled = row as unknown as Record<string, unknown>;
   const field = Object.keys(fields).find((name) => fields[name] !== journalled[name]);
   if (field === undefined) return undefined;
@@ -399,7 +401,21 @@ function replaySleeves(
     router: venueRouterFor(inputs.catalogue, cfdGateOf(inputs), ukStockGateOf(inputs)),
     lseLegRefusal: journalledLseRefusal(inputs.db, inputs.tradingDate),
     ukStocks: ukStockPoolFor(inputs.catalogue, ukStockGateOf(inputs)()),
+    lessons: pinnedLessonSource(inputs.db, journalledLessonsAsOf(rows)),
+    lessonsCap: UNCAPPED_SPEND,
   });
+}
+
+// A lessons-book row carries lessons_as_of only when the live cycle made the lessons judge call,
+// so the pinned source alone reproduces a skip for no lessons or a refused lessons cap
+export function journalledLessonsAsOf(rows: readonly JournalledDecision[]): Map<string, string> {
+  const asOf = new Map<string, string>();
+  for (const row of rows) {
+    if (row.variant !== 'lessons') continue;
+    const stored = (JSON.parse(row.payload) as Record<string, unknown>).lessons_as_of;
+    if (typeof stored === 'string') asOf.set(row.instrument, stored);
+  }
+  return asOf;
 }
 
 function mirrorOf(composition: CycleComposition, venue: Venue): MirroredBook {

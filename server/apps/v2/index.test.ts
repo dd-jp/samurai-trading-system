@@ -636,6 +636,7 @@ describe('composeV2Root', () => {
       expect(root.books.ids()).toEqual([
         'debate/primary',
         'debate/no-macro-gate',
+        'debate/lessons',
         'arm2/technical-only',
         'signals/primary',
         'signals/no-veto',
@@ -643,10 +644,10 @@ describe('composeV2Root', () => {
       const report = await root.run();
       expect(report).toMatchObject({
         decisions: 2,
-        entries: 3,
+        entries: 4,
         submitted_orders: 0,
         dry_run_refusals: 1,
-        simulated_orders: 2,
+        simulated_orders: 3,
         rejected_orders: 0,
         fills: 0,
         sleeves: ['debate', 'arm2', 'signals'],
@@ -685,9 +686,12 @@ describe('composeV2Root', () => {
         outcome: 'simulated',
         payload: { approval: expect.stringMatching(/^entry:v2-arm2-technical-only-/) },
       });
-      expect(count(root, 'v2_orders')).toBe(3);
+      expect(root.journal.orderFor(`v2-debate-lessons-${ENTRY_DATE}-UP`)).toMatchObject({
+        outcome: 'simulated',
+      });
+      expect(count(root, 'v2_orders')).toBe(4);
       expect(count(root, 'v2_fills')).toBe(0);
-      expect(report.books.map((book) => book.positions)).toEqual([0, 0, 0, 0, 0]);
+      expect(report.books.map((book) => book.positions)).toEqual([0, 0, 0, 0, 0, 0]);
       const llmCalls = root.scriptedTransports.reduce((n, t) => n + t.calls.length, 0);
       expect(llmCalls).toBe(3);
       expect(count(root, 'llm_spend')).toBe(llmCalls);
@@ -705,7 +709,7 @@ describe('composeV2Root', () => {
     const next = open(NEXT_DATE);
     try {
       const report = await next.run();
-      expect(report).toMatchObject({ fills: 3, entries: 0 });
+      expect(report).toMatchObject({ fills: 4, entries: 0 });
       const size = next.journal.orderFor(`v2-debate-primary-${ENTRY_DATE}-UP`)?.payload.size;
       expect(next.books.position('debate/primary', 'UP')?.qty).toBe(size);
       const fx = new BarsMarketData(
@@ -723,7 +727,7 @@ describe('composeV2Root', () => {
       expect(fill.price_gbp * fx).toBeCloseTo(ENTRY_BAR_OPEN, 6);
       expect(fill.fee_gbp).toBeGreaterThan(0);
       expect(fill.trading_date).toBe(NEXT_DATE);
-      expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1, 0, 0]);
+      expect(report.books.map((book) => book.positions)).toEqual([1, 1, 1, 1, 0, 0]);
     } finally {
       next.close();
     }
@@ -782,6 +786,7 @@ describe('composeV2Root', () => {
       lines.filter((line) => /^\S+\/\S+: equity /.test(line)).map((line) => line.split(':')[0]),
     ).toEqual([
       'debate/primary',
+      'debate/lessons',
       'debate/no-macro-gate',
       'arm2/technical-only',
       'signals/primary',
@@ -1016,9 +1021,9 @@ describe('composeV2Root', () => {
       report = await first.run();
       expect(report).toMatchObject({
         dry_run: false,
-        entries: 3,
+        entries: 4,
         submitted_orders: 1,
-        simulated_orders: 2,
+        simulated_orders: 3,
         dry_run_refusals: 0,
         fills: 1,
       });
@@ -1100,7 +1105,7 @@ describe('composeV2Root', () => {
     });
     try {
       const report = await root.run();
-      expect(report).toMatchObject({ submitted_orders: 1, simulated_orders: 2 });
+      expect(report).toMatchObject({ submitted_orders: 1, simulated_orders: 3 });
       expect(alpacaClient.submitOrder).toHaveBeenCalledTimes(1);
       expect(
         root.db
