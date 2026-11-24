@@ -1,6 +1,7 @@
 import { digest } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { CLOSE_LEGS_SQL } from './entry-offset.js';
+import { LESSON_BOOK_ID, newsBand } from './lesson-recipe.js';
 import { seededRandom } from './random-canary.js';
 
 const LESSON_BUCKETS_SCHEMA_VERSION = 1;
@@ -8,7 +9,7 @@ const LESSON_BUCKETS_SCHEMA_VERSION = 1;
 export const LESSON_MIN_BUCKET_N = 10;
 const LESSON_BOOTSTRAP_RESAMPLES = 2_000;
 const LESSON_KILL_LINE_TRADES = 100;
-export const LESSON_BOOK_ID = 'debate/primary';
+
 export const LESSON_BASELINE_BOOK_ID = 'arm2/technical-only';
 
 export interface LessonBucket {
@@ -66,11 +67,6 @@ const COLUMNS = [
 ] as const;
 
 const SHARED_TAG_PREFIXES = ['all', 'venue=', 'direction='];
-
-function newsBand(headlines: unknown): string {
-  if (typeof headlines !== 'number' || headlines === 0) return '0';
-  return headlines < 5 ? '1-4' : '5+';
-}
 
 function debateTags(payload: Record<string, unknown>, confidence: number): string[] {
   const disagreement =

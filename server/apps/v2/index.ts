@@ -74,6 +74,7 @@ import {
 import { heartbeatFor, pingJournal, withHeartbeat } from './heartbeat.js';
 import { cycleInputDigests, RecordingBarsSource, recordInputDigests } from './input-digest.js';
 import { type FaultLedger, Journal } from './journal/index.js';
+import { type LessonSource, latestLessonSource } from './lesson-select.js';
 import {
   assertArm2RunsBesideDebate,
   assertCapitalShares,
@@ -94,6 +95,7 @@ import {
   DEBATE_SLEEVE_ID,
   declaredCfdCosts,
   isLseInstrument,
+  LLM_MONTHLY_BUDGET_USD,
   type LlmPanel,
   type ModelPin,
   NousPinnedTransport,
@@ -536,7 +538,13 @@ export interface DecisionSleeveInputs {
   readonly router: VenueRouter;
   readonly lseLegRefusal: string | undefined;
   readonly ukStocks: ((tradingDate: string) => readonly string[]) | undefined;
+  readonly lessons?: LessonSource | undefined;
+  readonly lessonsCap?: SpendCap | undefined;
 }
+
+// #2148: the lessons judge is the first LLM call to stop as the month's spend climbs, so the
+// primary debate keeps the rest of the budget (doc 66 G11 ruling 8)
+export const LESSONS_SPEND_SHARE = 0.7;
 
 export function ukStockPoolFor(
   catalogue: CfdCatalogue | undefined,
@@ -561,10 +569,10 @@ export function venueOf(symbol: string): Venue {
 }
 
 export function decisionSleeves(inputs: DecisionSleeveInputs): Sleeve[] {
-  const { panel, news, clock, logger, ...technical } = inputs;
+  const { panel, news, clock, logger, lessons, lessonsCap, ...technical } = inputs;
   const shared = { ...technical, venueFor: venueOf };
   return [
-    createDebateSleeve({ ...shared, panel, news, clock, logger }),
+    createDebateSleeve({ ...shared, panel, news, clock, logger, lessons, lessonsCap }),
     createArm2Sleeve({ ...shared, clock }),
     createSignalsSleeve(),
   ].map((sleeve) => withoutRefusedLse(sleeve, inputs.lseLegRefusal));
@@ -695,6 +703,13 @@ export function composeV2Root(options: V2RootOptions): V2Root {
     router: venueRouterFor(catalogue, cfdGate),
     lseLegRefusal: options.lseLegRefusal,
     ukStocks: ukStockPoolFor(catalogue, ukStockCfdRefusal()),
+    lessons: latestLessonSource(db),
+    lessonsCap: new SqliteMonthlySpendCap(
+      db,
+      clock,
+      LLM_MONTHLY_BUDGET_USD * LESSONS_SPEND_SHARE,
+      logger,
+    ),
   });
   assertArm2RunsBesideDebate(sleeves, DEBATE_SLEEVE_ID, ARM2_SLEEVE_ID);
   assertCapitalShares(sleeves);

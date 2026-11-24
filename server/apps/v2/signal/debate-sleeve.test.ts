@@ -5,13 +5,14 @@ import type {
   SleeveDecision,
   SleeveOutput,
 } from '../../../../contracts/index.js';
-import type { AnalystView } from '../../../shared/debate/index.js';
-import { UNCAPPED_SPEND } from '../../../shared/debate/index.js';
+import type { AnalystView, SpendCap } from '../../../shared/debate/index.js';
+import { LESSONS_BLOCK_HEADER, UNCAPPED_SPEND } from '../../../shared/debate/index.js';
 import type { BarSeries, DailyBar } from '../../../shared/index.js';
 import { SimulatedClock } from '../../../shared/index.js';
 import type { BarsSource } from '../data/index.js';
 import { addDays, isUkStock, NO_NEWS } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
+import type { LessonSource } from '../lesson-select.js';
 import { createArm2Sleeve } from './arm2-sleeve.js';
 import {
   actionFor,
@@ -836,5 +837,91 @@ describe('createDebateSleeve', () => {
     });
     expect(output.decisions[0]?.action).toBe('skip');
     expect(output.decisions[0]?.reason).toMatch(/^llm_error:/);
+  });
+});
+
+describe('lessons judge (#2148)', () => {
+  const series = trending('UP', 260, 0.001);
+  const lessonsSeen = (request: Parameters<Script>[0]) =>
+    (request.messages[0]?.content ?? '').includes(LESSONS_BLOCK_HEADER);
+  const reJudgedNeutral: Script = (request) =>
+    lessonsSeen(request) ? NEUTRAL_SCRIPT(request) : bullishScript(request);
+  const stored =
+    (bucket: string): LessonSource =>
+    () => ({
+      asOf: '2026-11-20',
+      candidates: [{ bucket, claim: 'longs lagged the index', mean_excess: -0.2 }],
+    });
+
+  async function decide(options: {
+    script?: Script;
+    lessons?: LessonSource;
+    lessonsCap?: SpendCap;
+  }): Promise<{ decision: SleeveDecision; prompts: string[] }> {
+    const transports: ScriptedTransport[] = [];
+    const sleeve = createDebateSleeve({
+      panel: panelWith(options.script ?? reJudgedNeutral, transports),
+      bars: source([series]),
+      constituents: () => ['UP'],
+      venueFor: () => 'alpaca',
+      market,
+      news: NO_NEWS,
+      clock,
+      lessons: options.lessons,
+      lessonsCap: options.lessonsCap ?? UNCAPPED_SPEND,
+    });
+    const output = await decideAll(sleeve, {
+      tradingDate: nextDate(series),
+      macroDay: false,
+      dryRun: true,
+    });
+    return {
+      decision: output.decisions[0] as SleeveDecision,
+      prompts: panelPrompts(transports).prompts,
+    };
+  }
+
+  it('re-judges the same debate with the lessons and leaves the primary verdict alone', async () => {
+    const { decision, prompts } = await decide({ lessons: stored('direction=long') });
+    expect(decision).toMatchObject({ action: 'enter_long', reason: 'judge bullish' });
+    expect(decision.lessons).toMatchObject({
+      action: 'none',
+      direction: 'neutral',
+      reason: 'judge neutral',
+      payload: {
+        lessons_as_of: '2026-11-20',
+        lessons: ['direction=long: longs lagged the index'],
+      },
+    });
+    expect(decision.lessons?.inputs_hash).not.toBe(decision.inputs_hash);
+    expect(prompts).toHaveLength(4);
+    const lessonPrompts = prompts.filter((prompt) => prompt.includes(LESSONS_BLOCK_HEADER));
+    expect(lessonPrompts).toHaveLength(1);
+    expect(lessonPrompts[0]).toContain('longs lagged the index');
+  });
+
+  it('makes no extra call when no lesson matches, none is stored or the lessons cap refuses', async () => {
+    const refusing: SpendCap = {
+      check: () => ({ admitted: false, spent_usd: 21, budget_usd: 21, kind: 'budget' }),
+    };
+    for (const options of [
+      { lessons: stored('venue=saxo') },
+      { lessons: () => undefined },
+      { lessons: stored('all'), lessonsCap: refusing },
+      {},
+    ]) {
+      const { decision, prompts } = await decide(options);
+      expect(decision.lessons).toBeUndefined();
+      expect(prompts).toHaveLength(3);
+    }
+  });
+
+  it('journals a failed lessons judge as a skip on the lessons verdict only', async () => {
+    const failing: Script = (request) =>
+      lessonsSeen(request) ? 'not json' : bullishScript(request);
+    const { decision } = await decide({ script: failing, lessons: stored('all') });
+    expect(decision.action).toBe('enter_long');
+    expect(decision.lessons).toMatchObject({ action: 'skip', direction: 'neutral' });
+    expect(decision.lessons?.reason).toMatch(/^llm_error:/);
   });
 });

@@ -28,7 +28,13 @@ export {
 } from './llm/spend-sink.js';
 export type { LlmClient } from './llm/types.js';
 export type { PersonaResponse } from './personas.js';
-export { runBearPersona, runBullPersona, runMediatorPersona } from './personas.js';
+export {
+  LESSONS_BLOCK_HEADER,
+  MEDIATOR_LESSONS_TEMPLATE_HASH,
+  runBearPersona,
+  runBullPersona,
+  runMediatorPersona,
+} from './personas.js';
 export type { DebatePersonas, MediatorAssessment, RoundContext } from './round-orchestrator.js';
 export { runDebate } from './round-orchestrator.js';
 export type { AnalystContribution, AnalystView, DebateResult, Direction } from './types.js';

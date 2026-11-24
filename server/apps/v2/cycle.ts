@@ -224,6 +224,16 @@ export function vetoApplied(book: BookSpec, decision: SleeveDecision): SleeveDec
   return { ...decision, action: 'skip', reason: `vetoed: ${decision.veto}` };
 }
 
+export function lessonsApplied(book: BookSpec, decision: SleeveDecision): SleeveDecision {
+  if (book.variant !== 'lessons' || decision.lessons === undefined) return decision;
+  const { lessons, ...shared } = decision;
+  return { ...shared, ...lessons };
+}
+
+export function bookDecision(book: BookSpec, decision: SleeveDecision): SleeveDecision {
+  return vetoApplied(book, lessonsApplied(book, decision));
+}
+
 interface Tally {
   submitted: number;
   simulated: number;
@@ -2147,7 +2157,7 @@ class Cycle {
     equityGbp: number,
     room: EntryRoom,
   ): { decision: SleeveDecision; gated: EntryApproval } {
-    const decision = vetoApplied(book, proposed);
+    const decision = bookDecision(book, proposed);
     const approval = this.deps.risk.approveEntry({
       book,
       decision,
@@ -2192,7 +2202,7 @@ class Cycle {
 
   journalBlockedDecisions(book: BookSpec, decisions: readonly SleeveDecision[]): void {
     for (const proposed of decisions) {
-      this.deps.journal.recordDecision(book.id, this.tradingDate, vetoApplied(book, proposed), 0);
+      this.deps.journal.recordDecision(book.id, this.tradingDate, bookDecision(book, proposed), 0);
     }
   }
 
@@ -2234,7 +2244,7 @@ class Cycle {
   }
 
   journalSitOut(book: BookSpec, proposed: SleeveDecision, code: SitOutCode): void {
-    this.deps.journal.recordDecision(book.id, this.tradingDate, vetoApplied(book, proposed), 0);
+    this.deps.journal.recordDecision(book.id, this.tradingDate, bookDecision(book, proposed), 0);
     const message = `${book.id} ${proposed.instrument}: ${proposed.venue} entry sits out (${code})`;
     this.deps.journal.recordRefusal({
       trading_date: this.tradingDate,
@@ -2310,7 +2320,7 @@ class Cycle {
   }
 
   journalSplitBlocked(book: BookSpec, proposed: SleeveDecision, why: string): void {
-    this.deps.journal.recordDecision(book.id, this.tradingDate, vetoApplied(book, proposed), 0);
+    this.deps.journal.recordDecision(book.id, this.tradingDate, bookDecision(book, proposed), 0);
     const message = `${book.id} ${proposed.instrument}: entry blocked, split sources ${why}`;
     this.deps.journal.recordRefusal({
       trading_date: this.tradingDate,
@@ -2748,11 +2758,12 @@ async function tradeSleeveBooks(
 ): Promise<BookSpec[]> {
   const books = deps.books.forSleeve(sleeve.id);
   for (const book of books) {
+    const own = decisions.map((decision) => lessonsApplied(book, decision));
     await cycle.cancelStaleEntries(book);
-    await cycle.exits(book, decisions);
+    await cycle.exits(book, own);
     await cycle.entries(
       book,
-      cycle.withoutSplitBlockedAtStart(book, cycle.withoutSittingOut(book, decisions)),
+      cycle.withoutSplitBlockedAtStart(book, cycle.withoutSittingOut(book, own)),
     );
   }
   return [...books];

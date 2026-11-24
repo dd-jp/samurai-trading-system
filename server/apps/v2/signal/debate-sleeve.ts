@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   Direction,
+  LessonsVerdict,
   MarketData,
   Sleeve,
   SleeveAction,
@@ -18,6 +19,7 @@ import type {
   MediatorAssessment,
   PersonaResponse,
   RoundContext,
+  SpendCap,
 } from '../../../shared/debate/index.js';
 import {
   runBearPersona,
@@ -26,7 +28,12 @@ import {
   runMediatorPersona,
 } from '../../../shared/debate/index.js';
 import type { Clock, DailyBar, Logger } from '../../../shared/index.js';
-import { averageTrueRange, describeThrownSafely, trailingReturn } from '../../../shared/index.js';
+import {
+  averageTrueRange,
+  describeThrownSafely,
+  digest,
+  trailingReturn,
+} from '../../../shared/index.js';
 import type { BarsSource, NewsSource, RouteChoice, VenueRouter } from '../data/index.js';
 import {
   barsBefore,
@@ -37,6 +44,7 @@ import {
   windowCovered,
 } from '../data/index.js';
 import { inputsHash } from '../journal/index.js';
+import { type LessonSource, lessonTags, pickLessons } from '../lesson-select.js';
 import { candleFeatures, candleLine } from './candle.js';
 import type { LlmPanel } from './llm-panel.js';
 import { rotateSeats, seatModels } from './llm-panel.js';
@@ -54,6 +62,7 @@ import {
 import { selectUniverse } from './universe.js';
 
 const DEBATE_MAX_ROUNDS = 1;
+const LESSONS_TRACE_SUFFIX = '-lessons';
 export const SPEND_CAP_REASON_PREFIX = 'llm_spend_cap:';
 export const SMA_LONG_WINDOW = 200;
 const TRAILING_SHORT_DAYS = 20;
@@ -73,6 +82,8 @@ export interface DebateSleeveDeps {
   readonly clock: Clock;
   readonly logger?: Logger | undefined;
   readonly lseLegRefusal?: string | undefined;
+  readonly lessons?: LessonSource | undefined;
+  readonly lessonsCap?: SpendCap | undefined;
 }
 
 export interface TechnicalRead {
@@ -170,12 +181,18 @@ export function newsView(headlines: readonly string[], traceId: string, now: Dat
   };
 }
 
+interface Sides {
+  bull?: PersonaResponse;
+  bear?: PersonaResponse;
+}
+
 function buildPersonas(
   panel: LlmPanel,
   tradingDate: string,
   traceId: string,
   debateId: string,
   clock: Clock,
+  sides: Sides,
 ): DebatePersonas {
   const rotation = rotateSeats(tradingDate);
   const bullClient = panel.debaters[rotation.bull];
@@ -193,12 +210,14 @@ function buildPersonas(
     bull: {
       async argue(context) {
         lastBull = await runBullPersona(bullClient, input(context));
+        sides.bull = lastBull;
         return { persona: 'bull', round: context.round, argument: lastBull.rationale };
       },
     },
     bear: {
       async argue(context) {
         lastBear = await runBearPersona(bearClient, input(context));
+        sides.bear = lastBear;
         return { persona: 'bear', round: context.round, argument: lastBear.rationale };
       },
     },
@@ -446,6 +465,7 @@ async function debateDecision(
 ): Promise<SleeveDecision> {
   const { symbol, venue, read, hash, traceId, tradingDate } = input;
   const debateId = randomUUID();
+  const sides: Sides = {};
   try {
     const result = await runDebate(
       {
@@ -453,10 +473,11 @@ async function debateDecision(
         instrument: symbol,
         bar: new Date(`${tradingDate}T00:00:00.000Z`),
       },
-      buildPersonas(deps.panel, tradingDate, traceId, debateId, deps.clock),
+      buildPersonas(deps.panel, tradingDate, traceId, debateId, deps.clock, sides),
       { maxRounds: DEBATE_MAX_ROUNDS },
     );
-    return decisionFrom(symbol, venue, read, hash, result, input.headlines, input.route);
+    const decision = decisionFrom(symbol, venue, read, hash, result, input.headlines, input.route);
+    return await withLessons(deps, input, { debateId, sides, result }, decision);
   } catch (error) {
     deps.logger?.log({
       trace_id: traceId,
@@ -474,6 +495,96 @@ async function debateDecision(
       hash,
       `llm_error:${describeThrownSafely(error)}`,
     );
+  }
+}
+
+function verdictOf(decision: SleeveDecision, lessons: Record<string, unknown>): LessonsVerdict {
+  return {
+    venue: decision.venue,
+    direction: decision.direction,
+    confidence: decision.confidence,
+    action: decision.action,
+    reason: decision.reason,
+    stop_price: decision.stop_price,
+    inputs_hash: decision.inputs_hash,
+    payload: { ...decision.payload, ...lessons },
+  };
+}
+
+function routeVenues(input: DebateRequest): Venue[] {
+  const venues = new Set<Venue>([input.venue]);
+  for (const side of ['long', 'short'] as const) {
+    const choice = input.route(side);
+    if ('venue' in choice) venues.add(choice.venue);
+  }
+  return [...venues];
+}
+
+interface Debated {
+  readonly debateId: string;
+  readonly sides: Sides;
+  readonly result: DebateResult;
+}
+
+function lessonsFor(deps: DebateSleeveDeps, input: DebateRequest) {
+  const stored = deps.lessons?.(input.tradingDate, input.symbol);
+  if (stored === undefined) return undefined;
+  const lessons = pickLessons(stored.candidates, lessonTags(routeVenues(input), input.headlines));
+  if (lessons.length === 0 || deps.lessonsCap?.check(input.symbol).admitted !== true) {
+    return undefined;
+  }
+  return { lessons_as_of: stored.asOf, lessons };
+}
+
+// #2148 (doc 66 G11 ruling 8): only the judge sees lessons, so the lessons book re-judges the
+// same bull and bear responses; the debaters are not called again
+async function withLessons(
+  deps: DebateSleeveDeps,
+  input: DebateRequest,
+  debated: Debated,
+  decision: SleeveDecision,
+): Promise<SleeveDecision> {
+  const { bull, bear } = debated.sides;
+  const picked = lessonsFor(deps, input);
+  if (picked === undefined || bull === undefined || bear === undefined) return decision;
+  const { symbol, venue, read } = input;
+  const hash = digest({ inputs: input.hash, ...picked });
+  try {
+    const verdict = await runMediatorPersona(deps.panel.judge, {
+      trace_id: `${input.traceId}${LESSONS_TRACE_SUFFIX}`,
+      debate_id: debated.debateId,
+      analyst_views: input.views,
+      bullResponse: bull,
+      bearResponse: bear,
+      lessons: picked.lessons,
+    });
+    const judged: DebateResult = {
+      ...debated.result,
+      direction: verdict.stance,
+      confidence: judgeConfidence(bull, bear, verdict.stance),
+      synthesis: verdict.rationale,
+      converged: verdict.converged,
+    };
+    const lessons = decisionFrom(symbol, venue, read, hash, judged, input.headlines, input.route);
+    return { ...decision, lessons: verdictOf(lessons, picked) };
+  } catch (error) {
+    deps.logger?.log({
+      trace_id: input.traceId,
+      stage: 'v2',
+      level: 'warn',
+      event: 'v2_lessons_judge_failed',
+      message: `lessons judge for ${symbol} failed: ${describeThrownSafely(error)}`,
+      payload: { symbol, debate_id: debated.debateId },
+    });
+    const failed = skipped(
+      DEBATE_SLEEVE_ID,
+      symbol,
+      venue,
+      read,
+      hash,
+      `llm_error:${describeThrownSafely(error)}`,
+    );
+    return { ...decision, lessons: verdictOf(failed, picked) };
   }
 }
 

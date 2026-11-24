@@ -46,6 +46,7 @@ import {
   budgetChanges,
   type CycleDeps,
   calendarDaysBetween,
+  lessonsApplied,
   runCycle,
   runEntryPass,
   runFlattenPass,
@@ -1184,6 +1185,38 @@ describe('runCycle', () => {
       veto: 'x',
     } as const;
     expect(vetoApplied(primary, skipped)).toBe(skipped);
+  });
+
+  it('trades the lessons verdict in the lessons book only, and the shared one where it has none (#2148)', async () => {
+    const lessons = {
+      venue: longAapl.venue,
+      direction: 'neutral',
+      confidence: 0.5,
+      action: 'none',
+      reason: 'judge neutral',
+      stop_price: undefined,
+      inputs_hash: 'lessons-hash',
+      payload: { lessons_as_of: '2026-09-20', lessons: ['all: x'] },
+    } as const;
+    const deps = harness([{ ...longAapl, lessons }], true, undefined, [2026], {
+      ...TEST_SPEC,
+      books: [
+        { variant: 'primary', instantiated: true },
+        { variant: 'lessons', instantiated: true },
+      ],
+    });
+    await runCycle(deps, '2026-09-25');
+    expect(orders(deps, 'debate/lessons')).toEqual([]);
+    expect(orders(deps, 'debate/primary')).not.toEqual([]);
+    const book = (variant: 'primary' | 'lessons') =>
+      ({ id: `debate/${variant}`, sleeve: 'debate', variant, instantiated: true }) as const;
+    expect(lessonsApplied(book('lessons'), { ...longAapl, lessons })).toEqual({
+      ...longAapl,
+      ...lessons,
+    });
+    expect(lessonsApplied(book('lessons'), longAapl)).toBe(longAapl);
+    const shared = { ...longAapl, lessons };
+    expect(lessonsApplied(book('primary'), shared)).toBe(shared);
   });
 
   it('gives a sleeve below its minimum capital no books and never asks it for a universe or decisions', async () => {
@@ -7690,6 +7723,36 @@ describe('runCycle with per-venue sessions (#1933)', () => {
       .filter((order) => order.leg === 'entry')
       .map((order) => order.client_order_id.split('-').at(-1));
   }
+
+  it('sits out the lessons book on its own verdict, not the shared one (#2148)', async () => {
+    const skippedAapl: SleeveDecision = { ...longAapl, action: 'skip', reason: 'judge neutral' };
+    const lessons = {
+      venue: longAapl.venue,
+      direction: longAapl.direction,
+      confidence: longAapl.confidence,
+      action: longAapl.action,
+      reason: longAapl.reason,
+      stop_price: longAapl.stop_price,
+      inputs_hash: 'lessons-hash',
+      payload: {},
+    };
+    const deps = {
+      ...harness([{ ...skippedAapl, lessons }], true, undefined, [2026], {
+        ...TEST_SPEC,
+        books: [
+          { variant: 'primary', instantiated: true },
+          { variant: 'lessons', instantiated: true },
+        ],
+      }),
+      clock: new SimulatedClock(new Date('2026-11-26T06:30:00.000Z')),
+      venueSessions: TABLE_VENUE_SESSIONS,
+    };
+    await runCycle(deps, '2026-11-26');
+    expect(sitOuts(deps)).toMatchObject([
+      { parameter: 'venue_closed', book_id: 'debate/lessons', instrument: 'AAPL' },
+    ]);
+    expect(orders(deps, 'debate/lessons')).toEqual([]);
+  });
 
   it('Thanksgiving: US names sit out with venue_closed while LSE names enter', async () => {
     const deps = sessioned([longAapl, longIsf], '2026-11-26T06:30:00.000Z');

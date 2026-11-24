@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { digest } from '../../../shared/index.js';
 import { SAXO_CFD_COMMISSION, SAXO_CFD_FINANCING, SAXO_CFD_SPREAD } from '../data/index.js';
+import { LESSONS_RECIPE_HASH } from '../lesson-recipe.js';
 import { CROSS_ASSET_TREND_CANDIDATE_ID } from './cross-asset-trend.js';
 import { MEAN_REVERSION_CANDIDATE_ID } from './mean-reversion.js';
 import {
@@ -7,6 +9,7 @@ import {
   DATED_JUDGE_PIN,
   DEBATER_PINS,
   JUDGE_PIN,
+  LESSON_PIN,
   PRE_DIGEST_ALL_PINS,
   pinDigest,
 } from './models.js';
@@ -322,9 +325,23 @@ describe('sleeve pin sets (#1747, David 2026-10-04 and 2026-10-10)', () => {
 
   it('pins every debate book to all three debaters, the idle rotation seat included, and the judge', () => {
     expect(DEBATER_PINS.map((pin) => pin.seat)).toEqual(['sonnet', 'gpt', 'deepseek']);
-    for (const { variant } of DEBATE_SLEEVE_SPEC.books) {
+    for (const { variant } of DEBATE_SLEEVE_SPEC.books.filter(
+      (book) => book.variant !== 'lessons',
+    )) {
       expect(bookPinDigest(DEBATE_SLEEVE_ID, variant)).toBe(pinDigest(ALL_PINS));
     }
+  });
+
+  it('adds the lesson writer and the lesson recipe to the lessons book, so either resets only it (#2148)', () => {
+    const lessons = bookPinDigest(DEBATE_SLEEVE_ID, 'lessons');
+    expect(lessons).toBe(
+      digest({ pins: pinDigest([...ALL_PINS, LESSON_PIN]), recipe: LESSONS_RECIPE_HASH }).slice(
+        0,
+        16,
+      ),
+    );
+    expect(lessons).not.toBe(pinDigest([...ALL_PINS, LESSON_PIN]));
+    expect(lessons).not.toBe(bookPinDigest(DEBATE_SLEEVE_ID, 'primary'));
   });
 
   it('pins the signals primary to the judge alone, so a debater swap leaves it alone', () => {

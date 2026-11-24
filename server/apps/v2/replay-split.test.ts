@@ -492,7 +492,7 @@ describe('replay of positions held across a 2:1 split (#1983)', () => {
         anchor_date: dateAt(SPLIT_BAR),
         scale: 2,
       },
-      ...['arm2/technical-only', 'debate/no-macro-gate'].map((book_id) => ({
+      ...['arm2/technical-only', 'debate/lessons', 'debate/no-macro-gate'].map((book_id) => ({
         trading_date: SPLIT_DAY,
         book_id,
         source: 'entry',

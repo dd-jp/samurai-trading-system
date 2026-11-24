@@ -50,9 +50,22 @@ export interface SleeveDecision {
   readonly inputs_hash: string;
   readonly debate_id: string | undefined;
   readonly veto?: string | undefined;
+  readonly lessons?: LessonsVerdict | undefined;
   readonly entry_quote?: EntryQuote | undefined;
   readonly payload: Record<string, unknown>;
 }
+
+export type LessonsVerdict = Pick<
+  SleeveDecision,
+  | 'venue'
+  | 'direction'
+  | 'confidence'
+  | 'action'
+  | 'reason'
+  | 'stop_price'
+  | 'inputs_hash'
+  | 'payload'
+>;
 
 export interface EntryQuote {
   readonly ask: number;
@@ -147,7 +160,8 @@ export type BookVariant =
   | 'no-social'
   | 'large-cap-only'
   | 'no-veto'
-  | 'technical-only';
+  | 'technical-only'
+  | 'lessons';
 
 export interface BookSpec {
   readonly id: string;

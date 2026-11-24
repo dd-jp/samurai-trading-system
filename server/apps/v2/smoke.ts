@@ -374,7 +374,7 @@ export async function runV2Smoke(): Promise<{ probes: SmokeProbe[]; passed: bool
       probe(
         'debate, arm 2 and signals each have their own paper books',
         root.books.ids().join(',') ===
-          'debate/primary,debate/no-macro-gate,arm2/technical-only,signals/primary,signals/no-veto',
+          'debate/primary,debate/lessons,debate/no-macro-gate,arm2/technical-only,signals/primary,signals/no-veto',
         root.books.ids().join(', '),
       ),
       probe(

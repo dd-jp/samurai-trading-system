@@ -28,7 +28,11 @@ export {
   MEAN_REVERSION_TO,
 } from './mean-reversion.js';
 export { ALL_PINS, LESSON_PIN, LESSONS_MAX_TOKENS, type ModelPin } from './models.js';
-export { SqliteMonthlySpendCap, utcMonthStart } from './monthly-spend-cap.js';
+export {
+  LLM_MONTHLY_BUDGET_USD,
+  SqliteMonthlySpendCap,
+  utcMonthStart,
+} from './monthly-spend-cap.js';
 export { verifyNousPins } from './nous-pin-check.js';
 export {
   ALPACA_SHORT_EQUITY_FLOOR_USD,

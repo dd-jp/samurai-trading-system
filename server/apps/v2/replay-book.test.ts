@@ -220,7 +220,7 @@ describe('replay of sizing, orders, fills and marks', () => {
 
   it('replays the exit day with its bracket exit, its fills and its re-entry', async () => {
     const result = await replayFromFiles(options);
-    expect(result).toMatchObject({ orders: 6, fills: 3, divergences: [] });
+    expect(result).toMatchObject({ orders: 8, fills: 4, divergences: [] });
     expect(formatReplay(result, (text) => text)).toMatch(/identical$/);
   });
 
@@ -342,17 +342,19 @@ describe('replay of a simulated entry whose fill-day bar is missing (#2127)', ()
         gapped.storePath,
       ),
     ).toEqual(
-      ['arm2/technical-only', 'debate/no-macro-gate', 'debate/primary'].map((book_id) => ({
-        trading_date: EXIT_DAY,
-        book_id,
-      })),
+      ['arm2/technical-only', 'debate/lessons', 'debate/no-macro-gate', 'debate/primary'].map(
+        (book_id) => ({
+          trading_date: EXIT_DAY,
+          book_id,
+        }),
+      ),
     );
     expect(
       journalRows(
         `SELECT kind, trading_date FROM v2_faults WHERE code = 'FILL_DAY_BAR'`,
         gapped.storePath,
       ),
-    ).toEqual(Array.from({ length: 3 }, () => ({ kind: 'stale_bar', trading_date: EXIT_DAY })));
+    ).toEqual(Array.from({ length: 4 }, () => ({ kind: 'stale_bar', trading_date: EXIT_DAY })));
   });
 
   it.each([FILL_DAY, EXIT_DAY])('replays %s with no divergence', async (tradingDate) => {
