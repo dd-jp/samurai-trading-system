@@ -233,6 +233,7 @@ export const DEBATE_SLEEVE_SPEC: SleeveSpec = {
   books: [
     { variant: 'primary', instantiated: true },
     { variant: 'no-macro-gate', instantiated: true },
+    { variant: 'lessons', instantiated: true },
     { variant: 'no-sentiment', instantiated: false },
     { variant: 'no-social', instantiated: false },
     { variant: 'large-cap-only', instantiated: false },

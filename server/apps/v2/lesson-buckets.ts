@@ -67,7 +67,7 @@ const COLUMNS = [
 
 const SHARED_TAG_PREFIXES = ['all', 'venue=', 'direction='];
 
-function newsBand(headlines: unknown): string {
+export function newsBand(headlines: unknown): string {
   if (typeof headlines !== 'number' || headlines === 0) return '0';
   return headlines < 5 ? '1-4' : '5+';
 }
