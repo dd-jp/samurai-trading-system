@@ -34,6 +34,7 @@ export interface LessonRun {
   readonly closedTrades: number;
   readonly buckets: readonly LessonBucket[];
   readonly written: number;
+  readonly supported: readonly string[];
   readonly killLine: boolean;
 }
 
@@ -99,7 +100,7 @@ function quantile(sorted: readonly number[], q: number): number {
   return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] as number;
 }
 
-export function bootstrapMeanCi(values: readonly number[], seed: number): [number, number] {
+function bootstrapMeans(values: readonly number[], seed: number): number[] {
   const random = seededRandom(seed);
   const means: number[] = [];
   for (let draw = 0; draw < LESSON_BOOTSTRAP_RESAMPLES; draw++) {
@@ -109,8 +110,18 @@ export function bootstrapMeanCi(values: readonly number[], seed: number): [numbe
     }
     means.push(sum / values.length);
   }
-  means.sort((a, b) => a - b);
+  return means.sort((a, b) => a - b);
+}
+
+export function bootstrapMeanCi(values: readonly number[], seed: number): [number, number] {
+  const means = bootstrapMeans(values, seed);
   return [quantile(means, 0.025), quantile(means, 0.975)];
+}
+
+// #2147 kill-line ruling (David, 2026-11-24): the run tests every bucket at once, so each two-sided
+// interval is widened to 95% family-wise over the buckets tested
+export function bonferroniLow(sortedMeans: readonly number[], tested: number): number {
+  return quantile(sortedMeans, 0.025 / tested);
 }
 
 // One trade per decision: a decision closed by several exit orders settles as one row per exit,
@@ -177,21 +188,21 @@ function bucketRow(
   tag: string,
   members: readonly SettledOutcome[],
   baseline: readonly SettledOutcome[],
-): LessonBucket {
+): { bucket: LessonBucket; means: number[] } {
   const excess = members.map((member) => member.excess_return);
   // Seeded by the members, not the tag, so two tags holding the same trades get the same interval
   const evidence = [...new Set(members.map((member) => member.decision_id))].sort();
   const seed = Number.parseInt(digest({ inputs: run.inputsHash, evidence }).slice(0, 8), 16);
-  const [ciLow, ciHigh] = bootstrapMeanCi(excess, seed);
-  return {
+  const means = bootstrapMeans(excess, seed);
+  const bucket = {
     as_of: run.asOf,
     bucket: tag,
     book_id: run.bookId,
     n: members.length,
     mean_excess: mean(excess),
     hit_rate: excess.filter((value) => value > 0).length / excess.length,
-    ci_low: ciLow,
-    ci_high: ciHigh,
+    ci_low: quantile(means, 0.025),
+    ci_high: quantile(means, 0.975),
     baseline_book_id: run.baselineBookId,
     baseline_n: baseline.length,
     baseline_mean_excess:
@@ -200,6 +211,7 @@ function bucketRow(
     inputs_hash: run.inputsHash,
     schema_version: LESSON_BUCKETS_SCHEMA_VERSION,
   };
+  return { bucket, means };
 }
 
 export function computeLessonBuckets(
@@ -207,16 +219,22 @@ export function computeLessonBuckets(
   asOf: string,
   bookId = LESSON_BOOK_ID,
   baselineBookId = LESSON_BASELINE_BOOK_ID,
-): { closedTrades: number; buckets: LessonBucket[] } {
+): { closedTrades: number; buckets: LessonBucket[]; supported: string[] } {
   const settled = readSettled(db, asOf, bookId, baselineBookId);
   const run = { asOf, bookId, baselineBookId, inputsHash: digest({ asOf, settled }) };
   const own = groupByTag(settled.filter((outcome) => outcome.book_id === bookId));
   const baseline = groupByTag(settled.filter((outcome) => outcome.book_id === baselineBookId));
-  const buckets = [...own]
+  const rows = [...own]
     .filter(([, members]) => members.length >= LESSON_MIN_BUCKET_N)
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([tag, members]) => bucketRow(run, tag, members, baselineFor(tag, baseline)));
-  return { closedTrades: own.get('all')?.length ?? 0, buckets };
+  return {
+    closedTrades: own.get('all')?.length ?? 0,
+    buckets: rows.map((row) => row.bucket),
+    supported: rows
+      .filter((row) => bonferroniLow(row.means, rows.length) > 0)
+      .map((row) => row.bucket.bucket),
+  };
 }
 
 export function storedLessonBuckets(db: StoreHandle, asOf: string, bookId: string): LessonBucket[] {
@@ -226,10 +244,6 @@ export function storedLessonBuckets(db: StoreHandle, asOf: string, bookId: strin
         ORDER BY bucket`,
     )
     .all(asOf, bookId) as LessonBucket[];
-}
-
-function excludesZero(bucket: LessonBucket): boolean {
-  return bucket.ci_low > 0 || bucket.ci_high < 0;
 }
 
 export function writeLessonBuckets(
@@ -248,7 +262,7 @@ export function writeLessonBuckets(
         'rerun after the outcome ledger settles them',
     );
   }
-  const { closedTrades, buckets } = computeLessonBuckets(db, asOf, bookId);
+  const { closedTrades, buckets, supported } = computeLessonBuckets(db, asOf, bookId);
   const stored = storedLessonBuckets(db, asOf, bookId);
   let written = 0;
   if (stored.length === 0) {
@@ -269,7 +283,8 @@ export function writeLessonBuckets(
     closedTrades,
     buckets,
     written,
-    killLine: closedTrades >= LESSON_KILL_LINE_TRADES && !buckets.some(excludesZero),
+    supported,
+    killLine: closedTrades >= LESSON_KILL_LINE_TRADES && supported.length === 0,
   };
 }
 
@@ -286,12 +301,12 @@ export function formatLessonRun(run: LessonRun): string {
         `  ${bucket.bucket}: n ${bucket.n}, mean excess ${percent(bucket.mean_excess)} ` +
         `[${percent(bucket.ci_low)}, ${percent(bucket.ci_high)}], hit ${percent(bucket.hit_rate)}, ` +
         `arm 2 ${percent(bucket.baseline_mean_excess)} (n ${bucket.baseline_n})` +
-        (excludesZero(bucket) ? ' *' : ''),
+        (run.supported.includes(bucket.bucket) ? ' *' : ''),
     ),
   ];
   if (run.killLine) {
     lines.push(
-      `kill line: ${run.closedTrades} closed trades and no bucket's interval excludes zero`,
+      `kill line: ${run.closedTrades} closed trades and no bucket's Bonferroni interval sits above zero`,
     );
   }
   return lines.join('\n');

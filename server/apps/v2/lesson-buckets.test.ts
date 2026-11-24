@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import {
+  bonferroniLow,
   bootstrapMeanCi,
   computeLessonBuckets,
   formatLessonRun,
@@ -323,6 +324,15 @@ describe('writeLessonBuckets', () => {
     expect(writeLessonBuckets(db, '2026-11-01', '2026-11-20').written).toBeGreaterThan(0);
   });
 
+  it('reaches the kill line at 100 closed trades when every bucket loses, however clearly', () => {
+    const db = store();
+    settleMany(db, 100, () => ({ excess: -0.01, settled: '2026-10-10' }));
+    const run = writeLessonBuckets(db, '2026-11-01', '2026-11-20');
+    expect(run.buckets.every((bucket) => bucket.ci_high < 0)).toBe(true);
+    expect(run.supported).toEqual([]);
+    expect(run.killLine).toBe(true);
+  });
+
   it('reaches the kill line at 100 closed trades when no interval excludes zero', () => {
     const db = store();
     settleMany(db, 100, (index) => ({
@@ -332,13 +342,16 @@ describe('writeLessonBuckets', () => {
     const run = writeLessonBuckets(db, '2026-11-01', '2026-11-20');
     expect(run.closedTrades).toBe(100);
     expect(run.killLine).toBe(true);
-    expect(formatLessonRun(run)).toContain('kill line: 100 closed trades');
+    expect(formatLessonRun(run)).toContain(
+      "kill line: 100 closed trades and no bucket's Bonferroni interval sits above zero",
+    );
   });
 
-  it('stops short of the kill line when a bucket interval excludes zero', () => {
+  it('stops short of the kill line when a bucket interval sits above zero', () => {
     const db = store();
     settleMany(db, 100, () => ({ excess: 0.01, settled: '2026-10-10' }));
     const run = writeLessonBuckets(db, '2026-11-01', '2026-11-20');
+    expect(run.supported).toContain('all');
     expect(run.killLine).toBe(false);
     expect(formatLessonRun(run)).toContain('all: n 100, mean excess 1.00% [1.00%, 1.00%]');
   });
@@ -350,6 +363,16 @@ describe('writeLessonBuckets', () => {
       settled: '2026-10-10',
     }));
     expect(writeLessonBuckets(db, '2026-11-01', '2026-11-20').killLine).toBe(false);
+  });
+});
+
+describe('bonferroniLow', () => {
+  const means = Array.from({ length: 2_000 }, (_, index) => index);
+
+  it('is the plain 2.5% quantile for one bucket and widens with each bucket tested', () => {
+    expect(bonferroniLow(means, 1)).toBe(50);
+    expect(bonferroniLow(means, 8)).toBe(6);
+    expect(bonferroniLow(means, 100)).toBe(0);
   });
 });
 
