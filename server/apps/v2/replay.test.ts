@@ -1542,6 +1542,48 @@ describe('replay of the lessons book (#2148)', () => {
   });
 });
 
+describe('replay of a failed lessons judge (#2148)', () => {
+  it('journals the lessons book a skip and replays it identical', async () => {
+    const failing = (request: AnthropicMessageRequest): string =>
+      (request.messages[0]?.content ?? '').includes(LESSONS_BLOCK_HEADER)
+        ? 'not json'
+        : answer(request);
+    const failed = await seedDay(
+      'lessons-failed',
+      (pin) => new ScriptedTransport(pin, failing),
+      FIXTURE_NEWS,
+      (seed) => {
+        seed
+          .prepare(
+            `INSERT INTO v2_lesson_buckets (as_of, bucket, book_id, n, mean_excess, hit_rate,
+                ci_low, ci_high, baseline_book_id, baseline_n, baseline_mean_excess, evidence,
+                inputs_hash, schema_version)
+              VALUES (?, 'all', ?, 25, -0.2, 0.4, -0.3, -0.1, 'arm2/technical-only', 25, 0, '[]',
+                'h', 1)`,
+          )
+          .run(dateAt(250), LESSON_BOOK_ID);
+        seed
+          .prepare(
+            `INSERT INTO v2_lessons (as_of, book_id, bucket, claim, model, prompt_hash,
+                inputs_hash, trace_id, schema_version)
+              VALUES (?, ?, 'all', 'trades lagged', 'm', 'p', 'h', 't', 1)`,
+          )
+          .run(dateAt(250), LESSON_BOOK_ID);
+      },
+    );
+    const db = new BetterSqlite3(failed.storePath, { readonly: true });
+    const row = db
+      .prepare(
+        `SELECT action, reason FROM v2_decisions WHERE book_id = 'debate/lessons' AND instrument = 'UP'`,
+      )
+      .get() as { action: string; reason: string };
+    db.close();
+    expect(row.action).toBe('skip');
+    expect(row.reason).toMatch(/^llm_error:/);
+    expect(await replayFromFiles(failed)).toMatchObject({ calls: 5, divergences: [] });
+  });
+});
+
 describe('journalledLessonsAsOf', () => {
   const row = (variant: string, instrument: string, payload: Record<string, unknown>) =>
     ({ variant, instrument, payload: JSON.stringify(payload) }) as JournalledDecision;
