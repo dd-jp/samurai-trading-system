@@ -1,7 +1,13 @@
 import { LlmMalformedResponseError } from './llm/errors.js';
 import { BARE_JSON_INSTRUCTION } from './llm/json-response.js';
 import { MockLlmClient } from './llm/mock-client.js';
-import { runBearPersona, runBullPersona, runMediatorPersona } from './personas.js';
+import {
+  LESSONS_BLOCK_HEADER,
+  MEDIATOR_LESSONS_TEMPLATE_HASH,
+  runBearPersona,
+  runBullPersona,
+  runMediatorPersona,
+} from './personas.js';
 import type { AnalystView } from './types.js';
 
 function makeView(overrides: Partial<AnalystView> = {}): AnalystView {
@@ -362,5 +368,42 @@ describe('runMediatorPersona', () => {
         bearResponse,
       }),
     ).rejects.toThrow(LlmMalformedResponseError);
+  });
+});
+
+describe('runMediatorPersona lessons (#2148)', () => {
+  const sides = {
+    trace_id: 'trace-1',
+    analyst_views: [makeView()],
+    bullResponse: { stance: 'bullish' as const, rationale: 'Up.' },
+    bearResponse: { stance: 'bearish' as const, rationale: 'Down.' },
+  };
+  const verdict = JSON.stringify({ stance: 'neutral', rationale: 'Even.', converged: true });
+
+  async function promptFor(lessons?: readonly string[]) {
+    const client = new MockLlmClient();
+    client.enqueueText(verdict);
+    await runMediatorPersona(client, { ...sides, lessons });
+    return client.requests[0];
+  }
+
+  it('leaves the prompt and template hash unchanged without lessons', async () => {
+    const none = await promptFor();
+    const empty = await promptFor([]);
+    expect(empty?.prompt).toBe(none?.prompt);
+    expect(none?.prompt).not.toContain(LESSONS_BLOCK_HEADER);
+    expect(none?.context.attribution?.prompt_template_hash).not.toBe(
+      MEDIATOR_LESSONS_TEMPLATE_HASH,
+    );
+  });
+
+  it('appends the lessons as untrusted data under their own template hash', async () => {
+    const request = await promptFor(['shorts lost against the index', 'longs held flat']);
+    const prompt = request?.prompt ?? '';
+    const block = prompt.slice(prompt.indexOf(LESSONS_BLOCK_HEADER));
+    expect(block).toMatch(
+      /<untrusted_analyst_data>[\s\S]*- shorts lost against the index\n- longs held flat[\s\S]*<\/untrusted_analyst_data>/,
+    );
+    expect(request?.context.attribution?.prompt_template_hash).toBe(MEDIATOR_LESSONS_TEMPLATE_HASH);
   });
 });
