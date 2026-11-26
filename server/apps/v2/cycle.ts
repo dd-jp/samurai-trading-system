@@ -48,7 +48,7 @@ import {
   type CfdDividendStepReport,
   type UnbookedDividend,
 } from './cfd-dividend-step.js';
-import type { CfdDividendLedger } from './cfd-dividends.js';
+import type { CfdDividendLedger, CfdFillSource } from './cfd-dividends.js';
 import { crossSleeveExposure, type ExposureJournal, newWarnings } from './cross-sleeve-exposure.js';
 import { cumulativeIncrement, type FillIncrement, wholeFill } from './cumulative-fill.js';
 import {
@@ -142,6 +142,7 @@ export interface CycleDeps {
   readonly splitFeed?: SplitFeed | undefined;
   readonly dividendFeed?: CfdDividendFeed | undefined;
   readonly dividendLedger?: CfdDividendLedger | undefined;
+  readonly dividendFills?: CfdFillSource | undefined;
   readonly exposure?:
     | { readonly journal: ExposureJournal; readonly levels: CrossSleeveWarnLevels }
     | undefined;
@@ -404,7 +405,7 @@ class Cycle {
     return earliest === undefined ? EPOCH_ISO : new Date(earliest).toISOString();
   }
 
-  ingest(fill: V2Fill): void {
+  ingest(fill: V2Fill, session?: string): void {
     const order = this.deps.journal.orderFor(fill.client_order_id);
     if (order === undefined) {
       this.log('warn', 'v2_fill_unmatched', `fill ${fill.broker_fill_id} matches no v2 order`);
@@ -435,7 +436,7 @@ class Cycle {
       fee_native: increment.fee,
       fx_quote_per_gbp: fx,
       fx_source: fillFx.source,
-      fill_date: fill.filled_at === undefined ? null : londonDateOf(fill.filled_at),
+      fill_date: session ?? (fill.filled_at === undefined ? null : londonDateOf(fill.filled_at)),
       filled_at: fill.filled_at,
       broker_mode: this.deps.brokerMode,
     });
@@ -717,7 +718,8 @@ class Cycle {
 
   async bookCfdDividendsOnce(): Promise<void> {
     const ledger = this.deps.dividendLedger;
-    if (ledger === undefined) return;
+    const fills = this.deps.dividendFills;
+    if (ledger === undefined || fills === undefined) return;
     const report = await bookCfdDividends({
       books: this.deps.books,
       bookIds: this.deps.registry
@@ -727,6 +729,7 @@ class Cycle {
       market: this.deps.market,
       feed: this.deps.dividendFeed,
       ledger,
+      fills,
       tradingDate: this.tradingDate,
       fxFor: (currency) => this.fxForCurrency(currency),
       atomically: (work) => this.atomically(work),
@@ -1217,14 +1220,17 @@ class Cycle {
     }
     const bookedUnits = opening ? 1 : units.ratio;
     this.atomically(() => {
-      this.ingest({
-        client_order_id: order.client_order_id,
-        broker_fill_id: `sim-${order.client_order_id}`,
-        leg: 'entry',
-        price: withinLimit(side, limit, quote.price) / bookedUnits,
-        qty: qty * bookedUnits,
-        fee: quote.fee,
-      });
+      this.ingest(
+        {
+          client_order_id: order.client_order_id,
+          broker_fill_id: `sim-${order.client_order_id}`,
+          leg: 'entry',
+          price: withinLimit(side, limit, quote.price) / bookedUnits,
+          qty: qty * bookedUnits,
+          fee: quote.fee,
+        },
+        outcome.bar.date,
+      );
       this.splitEntryFill(order, units, opening);
     });
     this.afterEntryFill(order, outcome, units);
@@ -1244,6 +1250,7 @@ class Cycle {
       outcome.stoppedAt / units.ratio,
       true,
       'stop_on_entry_bar',
+      outcome.bar.date,
     );
   }
 
@@ -1353,12 +1360,13 @@ class Cycle {
       this.splitFrozen(order.book_id, held)
     )
       return;
-    const price = simulateMarketExit(this.exitBars(order, held));
-    if (price === undefined) {
+    const [fillBar] = this.exitBars(order, held);
+    const price = simulateMarketExit(fillBar === undefined ? [] : [fillBar]);
+    if (fillBar === undefined || price === undefined) {
       this.fillPendingExitAtLastClose(order, held);
       return;
     }
-    this.settleExitFill(order, held, price);
+    this.settleExitFill(order, held, price, fillBar.date);
   }
 
   // A flatten frozen by a split block fills on the latest bar, the one the resume rescale is in
@@ -1378,7 +1386,7 @@ class Cycle {
       : bars;
   }
 
-  settleExitFill(order: JournalledOrder, held: Position, price: number): boolean {
+  settleExitFill(order: JournalledOrder, held: Position, price: number, session: string): boolean {
     const qty = Math.abs(held.qty);
     const quote = this.quoteOrRefuse(order.book_id, held.venue, {
       instrument: held.instrument,
@@ -1388,14 +1396,17 @@ class Cycle {
       crossesSpread: true,
     });
     if (quote === undefined) return false;
-    this.ingest({
-      client_order_id: order.client_order_id,
-      broker_fill_id: `sim-${order.client_order_id}`,
-      leg: 'exit',
-      price: quote.price,
-      qty,
-      fee: quote.fee,
-    });
+    this.ingest(
+      {
+        client_order_id: order.client_order_id,
+        broker_fill_id: `sim-${order.client_order_id}`,
+        leg: 'exit',
+        price: quote.price,
+        qty,
+        fee: quote.fee,
+      },
+      session,
+    );
     return true;
   }
 
@@ -1405,7 +1416,7 @@ class Cycle {
       this.warnIfStale(order);
       return;
     }
-    if (this.settleExitFill(order, held, bar.rawClose)) {
+    if (this.settleExitFill(order, held, bar.rawClose, bar.date)) {
       this.logEndedSeries(order.book_id, order.instrument, bar);
     }
   }
@@ -1429,7 +1440,7 @@ class Cycle {
     if (held === undefined || held.exitClientOrderId !== undefined) return;
     const bar = this.endedSeriesBar(instrument);
     if (bar === undefined) return;
-    this.simulatedExit(bookId, held, bar.rawClose, true, 'series_ended_at_last_close');
+    this.simulatedExit(bookId, held, bar.rawClose, true, 'series_ended_at_last_close', bar.date);
     if (this.deps.books.position(bookId, instrument) === undefined) {
       this.logEndedSeries(bookId, instrument, bar);
     }
@@ -1610,6 +1621,7 @@ class Cycle {
       exit.priceGbp * fx,
       exit.crossesSpread,
       'bracket_leg_on_daily_bar',
+      bar.date,
     );
   }
 
@@ -1619,6 +1631,7 @@ class Cycle {
     trigger: number,
     crossesSpread: boolean,
     detail: string,
+    session: string,
   ): void {
     const side: OrderSide = held.qty > 0 ? 'sell' : 'buy';
     const clientOrderId = this.exitOrderId(bookId, held.instrument);
@@ -1650,14 +1663,17 @@ class Cycle {
         price: trigger,
       },
     });
-    this.ingest({
-      client_order_id: clientOrderId,
-      broker_fill_id: `sim-${clientOrderId}`,
-      leg: 'exit',
-      price: quote.price,
-      qty: Math.abs(held.qty),
-      fee: quote.fee,
-    });
+    this.ingest(
+      {
+        client_order_id: clientOrderId,
+        broker_fill_id: `sim-${clientOrderId}`,
+        leg: 'exit',
+        price: quote.price,
+        qty: Math.abs(held.qty),
+        fee: quote.fee,
+      },
+      session,
+    );
   }
 
   exitOrderId(bookId: string, instrument: string): string {
@@ -2670,11 +2686,6 @@ interface SyncStep extends ThrowFailure {
 // fillSimulatedEntries is not a guarded step: a fill quote error must stop the cycle (#1849)
 const syncSteps = (): readonly SyncStep[] => [
   {
-    event: 'v2_cfd_dividend_threw',
-    what: 'CFD dividend booking',
-    run: (cycle) => cycle.bookCfdDividends(),
-  },
-  {
     event: 'v2_pending_resolve_threw',
     what: 'pending order resolve',
     run: (cycle) => cycle.resolvePendingOrders(),
@@ -2707,6 +2718,19 @@ async function syncStepThrows(cycle: Cycle): Promise<StepThrow[]> {
   return thrown;
 }
 
+const CFD_DIVIDEND_THREW: ThrowFailure = {
+  event: 'v2_cfd_dividend_threw',
+  what: 'CFD dividend booking',
+};
+
+async function bookDividendsAfterFills(cycle: Cycle, thrown: StepThrow[]): Promise<void> {
+  try {
+    await cycle.bookCfdDividends();
+  } catch (error) {
+    thrown.push({ failure: CFD_DIVIDEND_THREW, error });
+  }
+}
+
 const CASH_IN_LIEU_CORRECTION_THREW: ThrowFailure = {
   event: 'v2_cash_in_lieu_correction_threw',
   what: 'cash in lieu book-cash correction',
@@ -2721,6 +2745,7 @@ async function syncBooksThenReconcile(
   const thrown = await syncStepThrows(cycle);
   cycle.fillSimulatedEntries();
   cycle.fillSimulatedExits();
+  await bookDividendsAfterFills(cycle, thrown);
   try {
     cycle.correctCashInLieu();
   } catch (error) {

@@ -7,6 +7,7 @@ import {
   dividendWindow,
   type HeldDividendInputs,
   heldDividends,
+  type SessionFill,
   SqliteCfdDividends,
 } from './cfd-dividends.js';
 import { parseDividendsBody } from './data/eodhd-client.js';
@@ -70,21 +71,34 @@ function source(dividends: DividendsRead['dividends'], seen: string[] = []): Cfd
   };
 }
 
-function inputs(overrides: Partial<HeldDividendInputs>): HeldDividendInputs {
-  return {
+type InputOverrides = Partial<HeldDividendInputs> & { readonly held?: Position };
+
+function inputs({ held = position('saxo_cfd_gbp', 100), ...overrides }: InputOverrides) {
+  const base: HeldDividendInputs = {
     bookId: 'debate-primary',
-    held: position('saxo_cfd_gbp', 100),
+    subject: { instrument: held.instrument, venue: held.venue, position: held },
+    fills: [],
     tradingDate: '2026-06-05',
     lastMarkDate: '2026-06-04',
     market: market(),
     source: source([{ exDate: '2026-06-04', perShare: 0.02, currency: 'GBP' }]),
     fxFor: (currency) => (currency === 'USD' ? USD_PER_GBP : 1),
     booked: () => false,
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
 
-function amounts(overrides: Partial<HeldDividendInputs>): number[] {
+function fill(
+  side: 'buy' | 'sell',
+  qty: number,
+  session: string | null,
+  tradingDate: string,
+  client_order_id = `${side}-${tradingDate}`,
+): SessionFill {
+  return { client_order_id, side, qty, session, trading_date: tradingDate };
+}
+
+function amounts(overrides: InputOverrides): number[] {
   return heldDividends(inputs(overrides)).bookings.map((booking) => booking.amount_gbp);
 }
 
@@ -144,7 +158,7 @@ describe('CFD dividend booking rule', () => {
   });
 
   it('entitles a position booked by the cycle on the ex-date and not one booked the day after', () => {
-    const exDate = { tradingDate: '2026-06-05', lastMarkDate: undefined };
+    const exDate = { tradingDate: '2026-06-05', lastMarkDate: '2026-06-04' };
     expect(amounts({ ...exDate, held: position('saxo_cfd_gbp', 100, '2026-06-04') })).toEqual([2]);
     expect(amounts({ ...exDate, held: position('saxo_cfd_gbp', 100, '2026-06-05') })).toEqual([]);
   });
@@ -177,7 +191,7 @@ describe('CFD dividend booking rule', () => {
     );
   });
 
-  it('refuses every unbooked ex-date in a window of more than one session as unverifiable', () => {
+  it('books every unbooked ex-date of a window of more than one session on the holding the fills rebuild', () => {
     const dividends = [
       { exDate: '2026-06-02', perShare: 0.01, currency: 'GBP' },
       { exDate: '2026-06-03', perShare: 0.02, currency: 'GBP' },
@@ -188,17 +202,85 @@ describe('CFD dividend booking rule', () => {
         lastMarkDate: '2026-06-02',
         source: source(dividends),
         booked: (date) => date === '2026-06-03',
+        fills: [
+          fill('buy', 30, '2026-06-03', '2026-06-05'),
+          fill('buy', 20, '2026-06-04', '2026-06-05'),
+        ],
       }),
     );
-    expect(result).toEqual({
-      bookings: [],
-      refused: [],
-      implausible: [],
-      unverifiable: [
-        'ex-date 2026-06-02 falls in a window from 2026-06-01 through 2026-06-04 of more than one session',
-        'ex-date 2026-06-04 falls in a window from 2026-06-01 through 2026-06-04 of more than one session',
-      ],
-    });
+    expect(result.bookings.map(({ ex_date, qty }) => [ex_date, qty])).toEqual([
+      ['2026-06-02', 50],
+      ['2026-06-04', 80],
+    ]);
+    expect(result.unverifiable).toEqual([]);
+  });
+
+  it('rebuilds a holding closed since from the fills alone, and none opened on the ex-date', () => {
+    const closed = [
+      fill('sell', 100, '2026-06-04', '2026-06-05', 'close'),
+      fill('buy', 100, '2026-05-20', '2026-05-21', 'open'),
+    ].reverse();
+    const result = heldDividends(
+      inputs({
+        subject: { instrument: 'VOD_XLON', venue: 'saxo_cfd_gbp', position: undefined },
+        fills: closed,
+      }),
+    );
+    expect(result.bookings.map(({ qty, client_order_id }) => [qty, client_order_id])).toEqual([
+      [100, 'open'],
+    ]);
+    const opened = heldDividends(
+      inputs({
+        subject: { instrument: 'VOD_XLON', venue: 'saxo_cfd_gbp', position: undefined },
+        fills: [fill('buy', 100, '2026-06-04', '2026-06-05')],
+      }),
+    );
+    expect(opened.bookings).toEqual([]);
+  });
+
+  it('takes the cycle that opened the holding for the joining client order id', () => {
+    const result = heldDividends(
+      inputs({
+        subject: {
+          instrument: 'VOD_XLON',
+          venue: 'saxo_cfd_gbp',
+          position: { ...position('saxo_cfd_gbp', -40), clientOrderId: 'reopened' },
+        },
+        fills: [
+          fill('buy', 100, '2026-05-01', '2026-05-02', 'first'),
+          fill('sell', 100, '2026-05-10', '2026-05-11', 'flat'),
+          fill('buy', 60, '2026-05-20', '2026-05-21', 'second'),
+          fill('buy', 40, '2026-06-01', '2026-06-02', 'add'),
+          fill('sell', 140, '2026-06-04', '2026-06-05', 'flip'),
+        ],
+      }),
+    );
+    expect(result.bookings.map(({ qty, client_order_id }) => [qty, client_order_id])).toEqual([
+      [100, 'second'],
+    ]);
+  });
+
+  it('leaves a fill with no session date that may postdate the ex-date for David', () => {
+    const result = heldDividends(
+      inputs({ fills: [fill('buy', 5, null, '2026-06-05', 'undated')] }),
+    );
+    expect(result.bookings).toEqual([]);
+    expect(result.unverifiable).toEqual([
+      'ex-date 2026-06-04 has fill undated with no session date',
+    ]);
+    const settled = heldDividends(inputs({ fills: [fill('buy', 5, null, '2026-06-03', 'old')] }));
+    expect(settled.bookings.map(({ qty }) => qty)).toEqual([100]);
+  });
+
+  it('stops at a split anywhere in the window, since the fills and the qty are not in one unit', () => {
+    const result = heldDividends(
+      inputs({
+        lastMarkDate: '2026-06-02',
+        market: market('2026-06-04'),
+        source: source([{ exDate: '2026-06-03', perShare: 0.02, currency: 'GBP' }]),
+      }),
+    );
+    expect(result).toMatchObject({ bookings: [], splitBefore: '2026-06-03' });
   });
 
   it('reads a window with no bar between the last mark and the bar marked now as one session', () => {
