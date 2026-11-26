@@ -65,16 +65,22 @@ function subjectsOf(
   return [...open, ...closed];
 }
 
-function heldAtMark(held: HeldCfd): boolean {
-  return (
-    (held.subject.position?.openedDate ?? '9999') <= (held.lastMarkDate as string) ||
-    held.fills.some((fill) => fill.trading_date <= (held.lastMarkDate as string))
-  );
+function heldAtMark(deps: CfdDividendStepDeps, held: HeldCfd): boolean {
+  const lastMarkDate = held.lastMarkDate as string;
+  if ((held.subject.position?.openedDate ?? '9999') <= lastMarkDate) return true;
+  const window = dividendWindow({
+    subject: held.subject,
+    tradingDate: deps.tradingDate,
+    lastMarkDate,
+    market: deps.market,
+  });
+  const through = window?.through ?? lastMarkDate;
+  return held.fills.some((fill) => (fill.session ?? fill.trading_date) < through);
 }
 
 // A CFD closed since the last mark was held at the close of an ex-date inside the window, so it
-// is read as well as the ones still open; one first filled since the last mark was held at none
-// (a position the journal holds no fill for is read from its opening date)
+// is read as well as the ones still open; one first filled on or after the bar marked now was held
+// at none (a position the journal holds no fill for is read from its opening date)
 function heldCfds(deps: CfdDividendStepDeps): HeldCfd[] {
   return deps.bookIds.flatMap((bookId) => {
     const lastMarked = deps.books.lastDay(bookId)?.tradingDate;
@@ -85,7 +91,7 @@ function heldCfds(deps: CfdDividendStepDeps): HeldCfd[] {
         lastMarkDate: lastMarked ?? subject.position?.openedDate,
         fills: deps.fills.fillsFor(bookId, subject.instrument),
       }))
-      .filter((held) => held.lastMarkDate !== undefined && heldAtMark(held));
+      .filter((held) => held.lastMarkDate !== undefined && heldAtMark(deps, held));
   });
 }
 

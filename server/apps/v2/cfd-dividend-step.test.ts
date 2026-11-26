@@ -185,6 +185,48 @@ describe('bookCfdDividends', () => {
     expect(recorded[0]?.amount_gbp).toBe(2);
   });
 
+  it('books a CFD first filled during the outage on a session before the ex-date', async () => {
+    const { step, recorded } = deps({
+      books: {
+        ...deps().step.books,
+        positions: () =>
+          [position('VOD_XLON', 'saxo_cfd_gbp', 100)].map((held) => ({
+            ...held,
+            openedDate: '2026-06-05',
+          })),
+        lastDay: () =>
+          ({ tradingDate: '2026-06-02' }) as ReturnType<CfdDividendStepDeps['books']['lastDay']>,
+      },
+      fills: fills({ VOD_XLON: [fill('buy', 100, '2026-06-03', '2026-06-05')] }),
+    });
+    await bookCfdDividends(step);
+    expect(recorded.map(({ instrument, ex_date, qty }) => [instrument, ex_date, qty])).toEqual([
+      ['VOD_XLON', '2026-06-04', 100],
+    ]);
+  });
+
+  it('books a CFD opened and closed inside the outage on its holding at the ex-date', async () => {
+    const { step, recorded } = deps({
+      books: {
+        ...deps().step.books,
+        positions: () => [],
+        lastDay: () =>
+          ({ tradingDate: '2026-06-02' }) as ReturnType<CfdDividendStepDeps['books']['lastDay']>,
+      },
+      fills: fills(
+        {
+          VOD_XLON: [
+            fill('buy', 100, '2026-06-03', '2026-06-05'),
+            fill('sell', 100, '2026-06-04', '2026-06-05'),
+          ],
+        },
+        [{ instrument: 'VOD_XLON', venue: 'saxo_cfd_gbp' }],
+      ),
+    });
+    await bookCfdDividends(step);
+    expect(recorded.map(({ instrument, qty }) => [instrument, qty])).toEqual([['VOD_XLON', 100]]);
+  });
+
   it('books nothing on a CFD first filled on the ex-date', async () => {
     const { step, recorded } = deps({
       books: { ...deps().step.books, positions: () => [] },
