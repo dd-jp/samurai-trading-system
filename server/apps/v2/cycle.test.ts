@@ -39,7 +39,7 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { migratedMemoryStore } from '../../shared/store/migrated-template.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import { SqliteCashInLieuBooks } from './cash-in-lieu-books.js';
-import { type CfdDividendLedger, SqliteCfdDividends } from './cfd-dividends.js';
+import { type CfdDividendLedger, SqliteCfdDividends, SqliteCfdFills } from './cfd-dividends.js';
 import { type ExposureJournal, SqliteExposureJournal } from './cross-sleeve-exposure.js';
 import * as cycleModule from './cycle.js';
 import {
@@ -8443,7 +8443,13 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
 
   function withDividends(deps: Harness, feed: CfdDividendFeed | undefined) {
     const db = (deps.journal as unknown as { db: StoreHandle }).db;
-    return { ...deps, dividendFeed: feed, dividendLedger: new SqliteCfdDividends(db, clock), db };
+    return {
+      ...deps,
+      dividendFeed: feed,
+      dividendLedger: new SqliteCfdDividends(db, clock),
+      dividendFills: new SqliteCfdFills(db),
+      db,
+    };
   }
 
   function booked(db: StoreHandle) {
@@ -8829,7 +8835,7 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     expect(booked(retry.db)).toHaveLength(1);
   });
 
-  it('refuses every ex-date of an outage window as holding_unverifiable, marks the date and rebuilds to the same cash', async () => {
+  it('books every ex-date of an outage window on the holding the journal rebuilds, and rebuilds to the same cash (#2171)', async () => {
     const base = harness([shortIsf], true);
     const unread: CfdDividendFeed = {
       refresh: () => Promise.resolve(),
@@ -8841,48 +8847,34 @@ describe('CFD dividend cash on the ex-date (#2143)', () => {
     await expect(runCycle(withDividends(base, unread), '2026-09-27')).rejects.toThrow(
       'the date stays unmarked for a retry',
     );
-    const logs: LogEntry[] = [];
-    const deps = {
-      ...withDividends(
-        base,
-        dividendFeed([
-          { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
-          { exDate: '2026-09-27', perShare: 0.03, currency: 'GBP' },
-        ]),
-      ),
-      logger: { log: (entry: LogEntry) => logs.push(entry) },
-    };
+    const deps = withDividends(
+      base,
+      dividendFeed([
+        { exDate: '2026-09-26', perShare: 0.02, currency: 'GBP' },
+        { exDate: '2026-09-27', perShare: 0.03, currency: 'GBP' },
+      ]),
+    );
     const cashBefore = base.books.cash('debate/primary');
     const report = await runCycle(deps, '2026-09-28');
     expect(base.books.isMarked('2026-09-28')).toBe(true);
-    expect(booked(deps.db)).toEqual([]);
-    const messages = ['2026-09-26', '2026-09-27'].map(
-      (exDate) =>
-        `debate/primary ISF: dividend not booked, holding_unverifiable: ex-date ${exDate} falls in a window from 2026-09-25 through 2026-09-27 of more than one session, so the journal cannot vouch for the ex-date−1 holding (#2171)`,
-    );
-    for (const message of messages) expect(report.refusals).toContain(message);
+    expect(report.refusals.filter((refusal) => refusal.includes('#2171'))).toEqual([]);
+    const rows = booked(deps.db) as { qty: number; ex_date: string; amount_gbp: number }[];
+    expect(rows.map((row) => row.ex_date)).toEqual(['2026-09-26', '2026-09-27']);
+    const qty = (rows[0] as { qty: number }).qty;
+    expect(qty).toBeLessThan(0);
+    expect(rows).toMatchObject([
+      { qty, amount_gbp: qty * 0.02 },
+      { qty, amount_gbp: qty * 0.03 },
+    ]);
+    expect(base.books.cash('debate/primary')).toBeCloseTo(cashBefore + qty * 0.05, 9);
     expect(
       deps.db
-        .prepare(
-          "SELECT scope, parameter, ticket, message FROM v2_refusals WHERE book_id = 'debate/primary' AND parameter = 'CFD_DIVIDEND' ORDER BY refusal_id",
-        )
+        .prepare("SELECT fill_date FROM v2_fills WHERE leg = 'entry' AND instrument = 'ISF'")
         .all(),
-    ).toEqual(
-      messages.map((message) => ({
-        scope: 'cash',
-        parameter: 'CFD_DIVIDEND',
-        ticket: '#2143',
-        message,
-      })),
-    );
-    expect(
-      logs.filter(
-        (entry) =>
-          entry.event === 'v2_cfd_dividend_holding_unverifiable' &&
-          entry.message.startsWith('debate/primary'),
-      ),
-    ).toMatchObject(messages.map((message) => ({ level: 'error', message })));
-    expect(base.books.cash('debate/primary')).toBe(cashBefore);
+    ).toEqual([
+      { fill_date: expect.stringMatching(/^2026-09-\d\d$/) },
+      { fill_date: expect.stringMatching(/^2026-09-\d\d$/) },
+    ]);
     const copy = rewoundCopy(deps.db, '2026-09-29', '2026-09-29T07:30:00.000Z');
     const books = new PaperBooks(copy, clock, new CapitalConfigStore(copy, clock), '2026-09-01', [
       base.sleeve,

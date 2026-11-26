@@ -1,6 +1,6 @@
 import type { MarketData, Position, V2Bar, Venue } from '../../../contracts/index.js';
 import { bookCfdDividends, type CfdDividendStepDeps } from './cfd-dividend-step.js';
-import type { CfdDividendBooking } from './cfd-dividends.js';
+import type { CfdDividendBooking, CfdFillSource, SessionFill } from './cfd-dividends.js';
 import { addDays, dividendsAcross } from './data/index.js';
 import type { CfdDividendFeed, DividendRequest } from './dividend-feed.js';
 
@@ -67,6 +67,26 @@ function feed(
   };
 }
 
+function fills(
+  byInstrument: Record<string, readonly SessionFill[]> = {},
+  closed: readonly { instrument: string; venue: Venue }[] = [],
+): CfdFillSource {
+  return {
+    fillsFor: (_bookId, instrument) => byInstrument[instrument] ?? [],
+    cfdInstrumentsFilledAfter: () => closed,
+  };
+}
+
+function fill(side: 'buy' | 'sell', qty: number, session: string | null, tradingDate: string) {
+  return {
+    client_order_id: `fill-${side}-${tradingDate}`,
+    side,
+    qty,
+    session,
+    trading_date: tradingDate,
+  };
+}
+
 function deps(overrides: Partial<CfdDividendStepDeps> = {}) {
   const cash: [string, number][] = [];
   const recorded: CfdDividendBooking[] = [];
@@ -83,6 +103,7 @@ function deps(overrides: Partial<CfdDividendStepDeps> = {}) {
     market: MARKET,
     feed: feed(),
     ledger: { booked: () => false, record: (booking) => recorded.push(booking) },
+    fills: fills(),
     tradingDate: '2026-06-05',
     fxFor: (currency) => (currency === 'USD' ? USD_PER_GBP : 1),
     atomically: (work) => work(),
@@ -114,7 +135,7 @@ describe('bookCfdDividends', () => {
     expect(report.unverifiable).toEqual([]);
   });
 
-  it('reports each held CFD ex-date in a window of more than one session as unverifiable', async () => {
+  it('books a held CFD across a window of more than one session on its qty now', async () => {
     const { step, recorded } = deps({
       books: {
         ...deps().step.books,
@@ -123,15 +144,72 @@ describe('bookCfdDividends', () => {
       },
     });
     const report = await bookCfdDividends(step);
+    expect(recorded.map(({ instrument, ex_date, qty }) => [instrument, ex_date, qty])).toEqual([
+      ['VOD_XLON', '2026-06-04', 100],
+      ['AAPL', '2026-06-04', -10],
+    ]);
+    expect(report.unverifiable).toEqual([]);
+  });
+
+  it('takes the fills that executed on or after the ex-date off the qty held now', async () => {
+    const { step, recorded } = deps({
+      fills: fills({
+        VOD_XLON: [fill('buy', 40, '2026-06-04', '2026-06-05')],
+        AAPL: [fill('sell', 4, '2026-06-03', '2026-06-05')],
+      }),
+    });
+    await bookCfdDividends(step);
+    expect(recorded.map(({ instrument, qty }) => [instrument, qty])).toEqual([
+      ['VOD_XLON', 60],
+      ['AAPL', -10],
+    ]);
+  });
+
+  it('books a CFD closed since the last mark on the qty it held at the close of ex-date−1', async () => {
+    const { step, recorded } = deps({
+      books: { ...deps().step.books, positions: () => [] },
+      fills: fills(
+        {
+          VOD_XLON: [
+            fill('buy', 100, '2026-05-20', '2026-05-21'),
+            fill('sell', 100, '2026-06-04', '2026-06-05'),
+          ],
+        },
+        [{ instrument: 'VOD_XLON', venue: 'saxo_cfd_gbp' }],
+      ),
+    });
+    await bookCfdDividends(step);
+    expect(
+      recorded.map(({ instrument, qty, client_order_id }) => [instrument, qty, client_order_id]),
+    ).toEqual([['VOD_XLON', 100, 'fill-buy-2026-05-21']]);
+    expect(recorded[0]?.amount_gbp).toBe(2);
+  });
+
+  it('books nothing on a CFD first filled on the ex-date', async () => {
+    const { step, recorded } = deps({
+      books: { ...deps().step.books, positions: () => [] },
+      fills: fills({ VOD_XLON: [fill('buy', 100, '2026-06-04', '2026-06-05')] }, [
+        { instrument: 'VOD_XLON', venue: 'saxo_cfd_gbp' },
+      ]),
+    });
+    const report = await bookCfdDividends(step);
     expect(recorded).toEqual([]);
-    expect(report.unverifiable).toEqual(
-      ['VOD_XLON', 'AAPL'].map((instrument) => ({
+    expect(report.unmodelled).toEqual([]);
+  });
+
+  it('reports a fill with no session date that may postdate the ex-date as unverifiable', async () => {
+    const { step, recorded } = deps({
+      fills: fills({ VOD_XLON: [fill('buy', 40, null, '2026-06-05')] }),
+    });
+    const report = await bookCfdDividends(step);
+    expect(recorded.map(({ instrument }) => instrument)).toEqual(['AAPL']);
+    expect(report.unverifiable).toEqual([
+      {
         bookId: 'debate-primary',
-        instrument,
-        detail:
-          'ex-date 2026-06-04 falls in a window from 2026-06-02 through 2026-06-04 of more than one session',
-      })),
-    );
+        instrument: 'VOD_XLON',
+        detail: 'ex-date 2026-06-04 has fill fill-buy-2026-06-05 with no session date',
+      },
+    ]);
   });
 
   it('reports a line over the plausibility bound as implausible and books the rest', async () => {

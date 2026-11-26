@@ -1,10 +1,13 @@
-import type { BookLedger, MarketData, Position } from '../../../contracts/index.js';
+import type { BookLedger, MarketData } from '../../../contracts/index.js';
 import {
   type CfdDividendBooking,
   type CfdDividendLedger,
+  type CfdFillSource,
+  type DividendSubject,
   dividendWindow,
   type HeldDividends,
   heldDividends,
+  type SessionFill,
 } from './cfd-dividends.js';
 import { type ConvertibleCurrency, isCfdVenue } from './data/index.js';
 import type { CfdDividendFeed, DividendRequest } from './dividend-feed.js';
@@ -16,6 +19,7 @@ export interface CfdDividendStepDeps {
   readonly market: Pick<MarketData, 'lastBarBefore' | 'barsBefore'>;
   readonly feed: CfdDividendFeed | undefined;
   readonly ledger: CfdDividendLedger;
+  readonly fills: CfdFillSource;
   readonly tradingDate: string;
   readonly fxFor: (currency: ConvertibleCurrency) => number;
   readonly atomically: <T>(work: () => T) => T;
@@ -39,35 +43,67 @@ export interface CfdDividendStepReport {
 
 interface HeldCfd {
   readonly bookId: string;
-  readonly held: Position;
+  readonly subject: DividendSubject;
+  readonly fills: readonly SessionFill[];
   readonly lastMarkDate: string | undefined;
 }
 
+function subjectsOf(
+  deps: CfdDividendStepDeps,
+  bookId: string,
+  lastMarked: string | undefined,
+): DividendSubject[] {
+  const open: DividendSubject[] = deps.books
+    .positions(bookId)
+    .filter((position) => isCfdVenue(position.venue))
+    .map((position) => ({ instrument: position.instrument, venue: position.venue, position }));
+  if (lastMarked === undefined) return open;
+  const closed: DividendSubject[] = deps.fills
+    .cfdInstrumentsFilledAfter(bookId, lastMarked)
+    .filter(({ instrument }) => !open.some((subject) => subject.instrument === instrument))
+    .map(({ instrument, venue }) => ({ instrument, venue, position: undefined }));
+  return [...open, ...closed];
+}
+
+function heldAtMark(held: HeldCfd): boolean {
+  return (
+    (held.subject.position?.openedDate ?? '9999') <= (held.lastMarkDate as string) ||
+    held.fills.some((fill) => fill.trading_date <= (held.lastMarkDate as string))
+  );
+}
+
+// A CFD closed since the last mark was held at the close of an ex-date inside the window, so it
+// is read as well as the ones still open; one first filled since the last mark was held at none
+// (a position the journal holds no fill for is read from its opening date)
 function heldCfds(deps: CfdDividendStepDeps): HeldCfd[] {
   return deps.bookIds.flatMap((bookId) => {
-    const lastMarkDate = deps.books.lastDay(bookId)?.tradingDate;
-    return deps.books
-      .positions(bookId)
-      .filter((held) => isCfdVenue(held.venue))
-      .map((held) => ({ bookId, held, lastMarkDate }));
+    const lastMarked = deps.books.lastDay(bookId)?.tradingDate;
+    return subjectsOf(deps, bookId, lastMarked)
+      .map((subject) => ({
+        bookId,
+        subject,
+        lastMarkDate: lastMarked ?? subject.position?.openedDate,
+        fills: deps.fills.fillsFor(bookId, subject.instrument),
+      }))
+      .filter((held) => held.lastMarkDate !== undefined && heldAtMark(held));
   });
 }
 
 function requestsFor(deps: CfdDividendStepDeps, held: readonly HeldCfd[]): DividendRequest[] {
-  return held.flatMap(({ held: position, lastMarkDate }) => {
+  return held.flatMap(({ subject, lastMarkDate }) => {
     const window = dividendWindow({
-      held: position,
+      subject,
       tradingDate: deps.tradingDate,
       lastMarkDate,
       market: deps.market,
     });
     if (window === undefined) return [];
-    return [{ instrument: position.instrument, exchange: exchangeOf(position.venue), ...window }];
+    return [{ instrument: subject.instrument, exchange: exchangeOf(subject.venue), ...window }];
   });
 }
 
 function unbooked(position: HeldCfd, detail: string): UnbookedDividend {
-  return { bookId: position.bookId, instrument: position.held.instrument, detail };
+  return { bookId: position.bookId, instrument: position.subject.instrument, detail };
 }
 
 function book(deps: CfdDividendStepDeps, booking: CfdDividendBooking): void {
@@ -98,7 +134,7 @@ function bookPosition(
     market: deps.market,
     source: feed,
     fxFor: deps.fxFor,
-    booked: (exDate) => deps.ledger.booked(position.bookId, position.held.instrument, exDate),
+    booked: (exDate) => deps.ledger.booked(position.bookId, position.subject.instrument, exDate),
   });
   for (const booking of result.bookings) book(deps, booking);
   report.booked.push(...result.bookings);
@@ -117,7 +153,7 @@ function reportUnbooked(result: HeldDividends, position: HeldCfd, report: StepRe
   }
 }
 
-// Runs before the cycle books any fill, so each position is the holding at the last mark
+// Runs after the cycle books its fills (#2171): each ex-date's holding is rebuilt from the ledger and the journalled fills
 export async function bookCfdDividends(deps: CfdDividendStepDeps): Promise<CfdDividendStepReport> {
   const held = heldCfds(deps);
   const report: StepReport = {

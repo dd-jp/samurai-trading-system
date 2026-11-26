@@ -10,7 +10,7 @@ import type { StoreHandle } from '../../shared/store/index.js';
 import { guardedStore } from '../../shared/store/index.js';
 import { SqliteCashAnchors } from './cash-anchor.js';
 import { SqliteCashInLieuBooks } from './cash-in-lieu-books.js';
-import { SqliteCfdDividends } from './cfd-dividends.js';
+import { SqliteCfdDividends, SqliteCfdFills } from './cfd-dividends.js';
 import { SqliteExposureJournal } from './cross-sleeve-exposure.js';
 import type { CycleDeps } from './cycle.js';
 import { isCfdVenue, type VenueSessionGate } from './data/index.js';
@@ -195,6 +195,7 @@ export function composeCycle(options: CycleCompositionOptions): CycleComposition
     splitFeed: options.splitFeed,
     dividendFeed: options.dividendFeed,
     dividendLedger: new SqliteCfdDividends(v2Store, clock),
+    dividendFills: new SqliteCfdFills(v2Store),
     exposure: {
       journal: new SqliteExposureJournal(v2Store, clock),
       levels: requireSet(CROSS_SLEEVE_EXPOSURE_WARN),

@@ -1,4 +1,4 @@
-import type { MarketData, Position } from '../../../contracts/index.js';
+import type { MarketData, Position, Venue } from '../../../contracts/index.js';
 import type { Clock } from '../../shared/index.js';
 import type { StoreHandle } from '../../shared/store/index.js';
 import { toStoredTimestamp } from '../../shared/store/index.js';
@@ -77,9 +77,32 @@ export interface HeldDividends {
 
 const NONE: HeldDividends = { bookings: [] };
 
+export interface SessionFill {
+  readonly client_order_id: string;
+  readonly side: 'buy' | 'sell';
+  readonly qty: number;
+  readonly session: string | null;
+  readonly trading_date: string;
+}
+
+export interface CfdFillSource {
+  fillsFor(bookId: string, instrument: string): readonly SessionFill[];
+  cfdInstrumentsFilledAfter(
+    bookId: string,
+    tradingDate: string,
+  ): readonly { readonly instrument: string; readonly venue: Venue }[];
+}
+
+export interface DividendSubject {
+  readonly instrument: string;
+  readonly venue: Venue;
+  readonly position: Position | undefined;
+}
+
 export interface HeldDividendInputs {
   readonly bookId: string;
-  readonly held: Position;
+  readonly subject: DividendSubject;
+  readonly fills: readonly SessionFill[];
   readonly tradingDate: string;
   readonly lastMarkDate: string | undefined;
   readonly market: Pick<MarketData, 'lastBarBefore' | 'barsBefore'>;
@@ -91,25 +114,23 @@ export interface HeldDividendInputs {
 // The cycle on date T marks the last bar before T, so it reads every ex-date after the bar its
 // previous mark took, through the bar it marks now
 export function dividendWindow(
-  inputs: Pick<HeldDividendInputs, 'held' | 'tradingDate' | 'lastMarkDate' | 'market'>,
+  inputs: Pick<HeldDividendInputs, 'subject' | 'tradingDate' | 'lastMarkDate' | 'market'>,
 ): DividendWindow | undefined {
-  const { held, market } = inputs;
-  const since =
-    inputs.lastMarkDate === undefined || inputs.lastMarkDate < held.openedDate
-      ? held.openedDate
-      : inputs.lastMarkDate;
-  const after = market.lastBarBefore(held.instrument, since)?.date;
-  const through = market.lastBarBefore(held.instrument, inputs.tradingDate)?.date;
+  const { market, lastMarkDate } = inputs;
+  if (lastMarkDate === undefined) return undefined;
+  const { instrument } = inputs.subject;
+  const after = market.lastBarBefore(instrument, lastMarkDate)?.date;
+  const through = market.lastBarBefore(instrument, inputs.tradingDate)?.date;
   if (after === undefined || through === undefined || after >= through) return undefined;
   return { after, through };
 }
 
-// The ledger rescales a split only when this cycle reads its bar, after this booking, so a split
-// between the last mark and the ex-date leaves the qty in units the dividend is not paid in
-function splitBefore(inputs: HeldDividendInputs, window: DividendWindow, exDate: string): boolean {
-  const days = Math.round((Date.parse(exDate) - Date.parse(window.after)) / MS_PER_DAY) + 1;
+// The holding is rebuilt from the ledger qty after this cycle's rescale, and the journalled fills
+// are in the units they booked in, so a split anywhere in the window leaves them in different units
+function splitInWindow(inputs: HeldDividendInputs, window: DividendWindow): boolean {
+  const days = Math.round((Date.parse(window.through) - Date.parse(window.after)) / MS_PER_DAY) + 1;
   const bars = inputs.market
-    .barsBefore(inputs.held.instrument, addDays(exDate, 1), days)
+    .barsBefore(inputs.subject.instrument, addDays(window.through, 1), days)
     .filter((bar) => bar.date >= window.after);
   return splitRatioAcross(bars).steps.length > 0;
 }
@@ -174,7 +195,7 @@ interface PlausibleLines {
 }
 
 function implausibility(inputs: HeldDividendInputs, line: EodhdDividend): string | undefined {
-  const bar = inputs.market.lastBarBefore(inputs.held.instrument, addDays(line.exDate, 1));
+  const bar = inputs.market.lastBarBefore(inputs.subject.instrument, addDays(line.exDate, 1));
   if (bar === undefined) return `ex-date ${line.exDate} has no bar to bound its amount`;
   if (line.perShare <= bar.rawClose * CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE) return undefined;
   return `ex-date ${line.exDate} pays ${line.perShare} ${line.currency} a share, over ${CFD_DIVIDEND_MAX_SHARE_OF_RAW_CLOSE * 100}% of the ${bar.date} raw close ${bar.rawClose}`;
@@ -199,7 +220,7 @@ function inPositionQuote(
   inputs: HeldDividendInputs,
   dividends: readonly EodhdDividend[],
 ): QuotedLines {
-  const quote = quoteCurrencyOf(inputs.held.venue);
+  const quote = quoteCurrencyOf(inputs.subject.venue);
   const lines: QuotedLine[] = [];
   const refused: string[] = [];
   for (const line of dividends) {
@@ -217,27 +238,77 @@ function inPositionQuote(
   return { lines, refused };
 }
 
+interface Holding {
+  readonly qty: number;
+  readonly clientOrderId: string;
+}
+
+const FLAT_QTY = 1e-9;
+
+const signedQty = (fill: SessionFill): number => (fill.side === 'buy' ? fill.qty : -fill.qty);
+
+// The cycle's opening fill is the one that took the running qty off flat, as the tax log's cycle
+// does, so a dividend row joins the disposal it belongs to
+function openingOrderId(fills: readonly SessionFill[], before: (fill: SessionFill) => boolean) {
+  let running = 0;
+  let opener: string | undefined;
+  for (const fill of fills.filter(before)) {
+    if (Math.abs(running) < FLAT_QTY) opener = fill.client_order_id;
+    running += signedQty(fill);
+  }
+  return opener;
+}
+
+// #2171: the holding at the close of ex-date−1 is the qty the ledger holds now less every fill
+// that executed on the ex-date or after, so a fill journalled since, or a pair closed since, is
+// counted the way the broker's record would. A position the journal holds no fill for is the
+// holding from its opening date
+function qtyAt(inputs: HeldDividendInputs, exDate: string): number {
+  const { fills, subject } = inputs;
+  if (fills.length === 0 && (subject.position?.openedDate ?? '') > exDate) return 0;
+  const later = fills
+    .filter((fill) => (fill.session ?? '') >= exDate)
+    .reduce((total, fill) => total + signedQty(fill), 0);
+  return (subject.position?.qty ?? 0) - later;
+}
+
+function holdingAt(
+  inputs: HeldDividendInputs,
+  exDate: string,
+): Holding | { readonly undated: string } | undefined {
+  const { fills, subject } = inputs;
+  const undated = fills.find((fill) => fill.session === null && fill.trading_date >= exDate);
+  if (undated !== undefined) return { undated: undated.client_order_id };
+  const qty = qtyAt(inputs, exDate);
+  if (Math.abs(qty) < FLAT_QTY) return undefined;
+  const clientOrderId =
+    openingOrderId(fills, (fill) => (fill.session ?? fill.trading_date) < exDate) ??
+    subject.position?.clientOrderId;
+  return clientOrderId === undefined ? undefined : { qty, clientOrderId };
+}
+
 function bookingOf(
   inputs: HeldDividendInputs,
   exDate: string,
   dividend: ExDateDividend,
+  holding: Holding,
 ): CfdDividendBooking {
-  const { held } = inputs;
+  const { subject } = inputs;
   const perShareNative = dividend.perShare;
-  const withholding = cfdDividendWithholding(exchangeOf(held.venue), held.qty);
-  const fxQuotePerGbp = inputs.fxFor(quoteCurrencyOf(held.venue));
+  const withholding = cfdDividendWithholding(exchangeOf(subject.venue), holding.qty);
+  const fxQuotePerGbp = inputs.fxFor(quoteCurrencyOf(subject.venue));
   return {
     book_id: inputs.bookId,
     trading_date: inputs.tradingDate,
-    instrument: held.instrument,
-    venue: held.venue,
-    client_order_id: held.clientOrderId,
+    instrument: subject.instrument,
+    venue: subject.venue,
+    client_order_id: holding.clientOrderId,
     ex_date: exDate,
-    qty: held.qty,
+    qty: holding.qty,
     per_share_native: perShareNative,
     withholding,
     fx_quote_per_gbp: fxQuotePerGbp,
-    amount_gbp: cfdDividendCashGbp(held.qty, perShareNative, withholding, fxQuotePerGbp),
+    amount_gbp: cfdDividendCashGbp(holding.qty, perShareNative, withholding, fxQuotePerGbp),
     ...declaredColumns(dividend.declared),
   };
 }
@@ -248,26 +319,34 @@ function readDetail(across: Exclude<DividendsAcross, { kind: 'covered' }>): stri
     : `dividend reads disagree on ${across.date}`;
 }
 
-// #2171: the held position is the ex-date−1 holding only when the window is the one session after
-// the bar the last mark took; across more, a fill journalled since may postdate the ex-date or a
-// fill made before it may not be journalled yet
-function spansOneSession(inputs: HeldDividendInputs, window: DividendWindow): boolean {
-  return inputs.market.lastBarBefore(inputs.held.instrument, window.through)?.date === window.after;
-}
-
-// Ex-dates book in order up to the first one a split precedes; that one and any after it are
-// left for David, since no later cycle can place the qty in their units
+// A window with a split is left for David: no later cycle can place the qty in the units a
+// dividend is paid in
 export function heldDividends(inputs: HeldDividendInputs): HeldDividends {
-  if (!isCfdVenue(inputs.held.venue)) return NONE;
+  if (!isCfdVenue(inputs.subject.venue)) return NONE;
   const window = dividendWindow(inputs);
   if (window === undefined) return NONE;
   const across = inputs.source.across(
-    inputs.held.instrument,
-    exchangeOf(inputs.held.venue),
+    inputs.subject.instrument,
+    exchangeOf(inputs.subject.venue),
     window,
   );
   if (across.kind !== 'covered') return { bookings: [], unread: readDetail(across) };
   return bookingsAcross(inputs, window, across.dividends);
+}
+
+function bookingAt(
+  inputs: HeldDividendInputs,
+  exDate: string,
+  dividend: ExDateDividend,
+  unverifiable: string[],
+): CfdDividendBooking | undefined {
+  const holding = holdingAt(inputs, exDate);
+  if (holding === undefined) return undefined;
+  if ('undated' in holding) {
+    unverifiable.push(`ex-date ${exDate} has fill ${holding.undated} with no session date`);
+    return undefined;
+  }
+  return bookingOf(inputs, exDate, dividend, holding);
 }
 
 function bookingsAcross(
@@ -279,18 +358,12 @@ function bookingsAcross(
   const { lines, implausible } = plausible(inputs, quoted.lines);
   const unverifiable: string[] = [];
   const unbooked = { refused: quoted.refused, implausible, unverifiable };
-  const oneSession = spansOneSession(inputs, window);
   const bookings: CfdDividendBooking[] = [];
   for (const [exDate, dividend] of byExDate(lines)) {
     if (inputs.booked(exDate)) continue;
-    if (!oneSession) {
-      unverifiable.push(
-        `ex-date ${exDate} falls in a window from ${window.after} through ${window.through} of more than one session`,
-      );
-      continue;
-    }
-    if (splitBefore(inputs, window, exDate)) return { bookings, splitBefore: exDate, ...unbooked };
-    bookings.push(bookingOf(inputs, exDate, dividend));
+    if (splitInWindow(inputs, window)) return { bookings, splitBefore: exDate, ...unbooked };
+    const booking = bookingAt(inputs, exDate, dividend, unverifiable);
+    if (booking !== undefined) bookings.push(booking);
   }
   return { bookings, ...unbooked };
 }
@@ -328,5 +401,32 @@ export class SqliteCfdDividends implements CfdDividendLedger {
            @declared_per_share, @declared_currency, @fx_declared_per_gbp)`,
       )
       .run({ ...booking, recorded_at: toStoredTimestamp(this.clock.now()) });
+  }
+}
+
+export class SqliteCfdFills implements CfdFillSource {
+  constructor(private readonly db: StoreHandle) {}
+
+  fillsFor(bookId: string, instrument: string): readonly SessionFill[] {
+    return this.db
+      .prepare(
+        `SELECT client_order_id, side, qty, fill_date AS session, trading_date FROM v2_fills
+         WHERE book_id = ? AND instrument = ? ORDER BY rowid`,
+      )
+      .all(bookId, instrument) as SessionFill[];
+  }
+
+  cfdInstrumentsFilledAfter(
+    bookId: string,
+    tradingDate: string,
+  ): readonly { readonly instrument: string; readonly venue: Venue }[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT instrument, venue FROM v2_fills
+           WHERE book_id = ? AND trading_date > ? ORDER BY instrument`,
+        )
+        .all(bookId, tradingDate) as { instrument: string; venue: Venue }[]
+    ).filter(({ venue }) => isCfdVenue(venue));
   }
 }
